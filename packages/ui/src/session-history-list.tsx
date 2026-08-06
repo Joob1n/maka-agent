@@ -376,6 +376,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
     return (
       <SessionRenameRow
         session={props.session}
+        nested={props.nested}
         onCommit={(name) => {
           props.setEditingSessionId(null);
           if (!props.actions || !name || name === props.session.name) return;
@@ -468,8 +469,33 @@ function resolveActiveSessionAncestorIds(
   return ancestors;
 }
 
+/**
+ * The row's skeleton while its name is being typed.
+ *
+ * A rename replaces the name, not the row. Astryx forces the swap to be
+ * wholesale here — `SideNavItem` takes `label` as a `string` and renders the
+ * row as one `<button>`, and HTML does not allow an `<input>` inside a button —
+ * so what stands in for the row has to restate its parts, or they vanish for
+ * the length of the edit. They did: the leading icon, and the trailing column
+ * that holds the status dot and the actions menu, both disappeared and the
+ * field ran the full width of the row.
+ *
+ * The trailing column is a spacer rather than the live menu: a control there
+ * would take the focus the field needs, and blur commits.
+ */
+function RenameRowSkeleton(props: { icon?: ReactNode; children: ReactNode }) {
+  return (
+    <>
+      {props.icon ? <span className="maka-session-row--editing-icon">{props.icon}</span> : null}
+      {props.children}
+      <span className="maka-session-row-trailing" aria-hidden="true" />
+    </>
+  );
+}
+
 function SessionRenameRow(props: {
   session: SessionSummary;
+  nested?: boolean;
   onCommit(name: string): void;
   onCancel(): void;
 }) {
@@ -479,13 +505,16 @@ function SessionRenameRow(props: {
       className="maka-session-row maka-session-row--editing"
       data-maka-contract="session-row"
       data-session-id={props.session.id}
+      data-subagent={props.nested ? 'true' : undefined}
     >
-      <InlineRenameInput
-        defaultValue={props.session.name}
-        ariaLabel={copy.renameAriaLabel}
-        onCommit={props.onCommit}
-        onCancel={props.onCancel}
-      />
+      <RenameRowSkeleton icon={props.nested ? <Bot size={16} /> : undefined}>
+        <InlineRenameInput
+          defaultValue={props.session.name}
+          ariaLabel={copy.renameAriaLabel}
+          onCommit={props.onCommit}
+          onCancel={props.onCancel}
+        />
+      </RenameRowSkeleton>
     </div>
   );
 }
@@ -502,12 +531,14 @@ function ProjectRenameRow(props: {
       data-project-id={props.groupKey}
       className="maka-session-row maka-session-row--editing"
     >
-      <InlineRenameInput
-        defaultValue={props.label}
-        ariaLabel={copy.projectRename}
-        onCommit={props.onCommit}
-        onCancel={props.onCancel}
-      />
+      <RenameRowSkeleton>
+        <InlineRenameInput
+          defaultValue={props.label}
+          ariaLabel={copy.projectRename}
+          onCommit={props.onCommit}
+          onCancel={props.onCancel}
+        />
+      </RenameRowSkeleton>
     </div>
   );
 }

@@ -270,11 +270,23 @@
 .maka-session-row--editing {
   display: flex;
   align-items: center;
+  /* SideNavItem's own icon-to-label gap, so the field starts where the label
+     it replaced started. */
+  gap: var(--space-2);
   min-height: var(--h-control-lg);
   padding-inline: var(--space-2);
   padding-block: 0;
   font: var(--maka-text-body);
   font-weight: var(--font-weight-medium);
+}
+
+/* Subagent rows carry a leading Bot icon. Without it here the row loses its
+   one mark of nesting for the length of the edit, and the name slides left. */
+.maka-session-row--editing-icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--muted-foreground);
 }
 
 /* #1879: an Astryx `Badge variant="yellow"` now. Box, radius, padding and

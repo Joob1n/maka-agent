@@ -207,15 +207,23 @@ test('scheduled-task hub restores the last selected child module', async ({ wind
 });
 
 /**
- * The same invariant one column to the left: the row being renamed keeps its
- * height, and the rows under it keep their places.
+ * A rename replaces the name, not the row — the same invariant the titlebar's
+ * breadcrumb holds one column to the right.
  *
- * The editing row used to build its own box — 4px of block padding against the
- * SideNavItem's 32px, and the heading-4 role against the row label's 500 — so
- * an edit shrank the row to 31px, stepped every row below it up a pixel, and
- * re-weighted the text under the cursor.
+ * The editing row is a wholesale swap here and cannot be anything else:
+ * `SideNavItem` takes `label` as a `string` and renders the row as one
+ * `<button>`, and an `<input>` may not live inside a button. So the stand-in
+ * has to restate the row's parts itself, and it did not: it built its own box
+ * — 4px of block padding against SideNavItem's 32px, the heading-4 role
+ * against the row label's 500 — and dropped the leading icon and the trailing
+ * column outright, so the row shrank to 31px, every row below it stepped up a
+ * pixel, the text re-weighted under the cursor, and the field ran the full
+ * width where the label had stopped short of the actions menu.
+ *
+ * Compared as one object: each measurement is a way the row could move, and
+ * the whole set is the invariant.
  */
-test('starting a rename does not resize the row or shift the list', async ({
+test('starting a rename leaves the row exactly where it was', async ({
   sidebarLongSessionsWindow: page,
 }) => {
   const sidebar = page.getByRole('navigation', { name: '对话列表' });
@@ -223,6 +231,15 @@ test('starting a rename does not resize the row or shift the list', async ({
   const read = () =>
     page.evaluate(() => {
       const first = document.querySelector('[data-maka-contract="session-row"]') as HTMLElement;
+      const box = (el: Element | null) =>
+        el
+          ? {
+              x: Math.round(el.getBoundingClientRect().x),
+              width: Math.round(el.getBoundingClientRect().width),
+            }
+          : null;
+      // The name, whichever form it currently takes.
+      const name = first.querySelector('input') ?? first.querySelector('.astryx-side-nav-item > span');
       const inner = (first.querySelector('input') ??
         first.querySelector('.astryx-side-nav-item')) as HTMLElement;
       const next = first.parentElement?.children[1] as HTMLElement | undefined;
@@ -233,6 +250,8 @@ test('starting a rename does not resize the row or shift the list', async ({
         // absent neighbour should read as a changed measurement, not a crash
         // inside the page.
         nextRowY: next ? Math.round(next.getBoundingClientRect().y) : null,
+        name: box(name),
+        trailing: box(first.querySelector('.maka-session-row-trailing')),
         type: `${style.fontSize}/${style.fontWeight}`,
       };
     });
