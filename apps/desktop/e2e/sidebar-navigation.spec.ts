@@ -225,12 +225,14 @@ test('starting a rename does not resize the row or shift the list', async ({
       const first = document.querySelector('[data-maka-contract="session-row"]') as HTMLElement;
       const inner = (first.querySelector('input') ??
         first.querySelector('.astryx-side-nav-item')) as HTMLElement;
+      const next = first.parentElement?.children[1] as HTMLElement | undefined;
       const style = getComputedStyle(inner);
       return {
         rowHeight: Math.round(first.getBoundingClientRect().height),
-        nextRowY: Math.round(
-          (first.parentElement?.children[1] as HTMLElement).getBoundingClientRect().y,
-        ),
+        // Null rather than a throw: the shift is what this measures, so an
+        // absent neighbour should read as a changed measurement, not a crash
+        // inside the page.
+        nextRowY: next ? Math.round(next.getBoundingClientRect().y) : null,
         type: `${style.fontSize}/${style.fontWeight}`,
       };
     });
