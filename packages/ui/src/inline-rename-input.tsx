@@ -4,10 +4,11 @@ import { useEffect, useRef } from 'react';
  * The rename-in-place text field: focus-and-select on mount, Enter commits,
  * Escape cancels, blur commits.
  *
- * It exists because three surfaces need exactly this field — the sidebar's
- * session row, the sidebar's project group row, and the titlebar's session
- * breadcrumb — and the first two carried the same twenty lines twice over,
- * including both non-obvious parts:
+ * Its one caller is the titlebar breadcrumb — renaming from the sidebar goes
+ * through a dialog instead, because a `SideNavItem` row is a single `<button>`
+ * that no text field may live inside. It stays a component of its own for the
+ * two non-obvious parts, which are the whole reason this is not four lines of
+ * JSX at the call site:
  *
  * - `escapeCancelledRef` — Escape moves focus off the field, so the blur
  *   handler would fire right behind the cancel and commit the very edit that
@@ -24,8 +25,8 @@ import { useEffect, useRef } from 'react';
 export function InlineRenameInput(props: {
   defaultValue: string;
   ariaLabel: string;
-  /** Surface-specific sizing only. The field's own chrome is `maka-inline-rename`. */
-  className?: string;
+  /** The field's whole appearance: it draws nothing of its own. */
+  className: string;
   onCommit(name: string): void;
   onCancel(): void;
 }) {
@@ -40,7 +41,7 @@ export function InlineRenameInput(props: {
   return (
     <input
       ref={inputRef}
-      className={props.className ? `maka-inline-rename ${props.className}` : 'maka-inline-rename'}
+      className={props.className}
       defaultValue={props.defaultValue}
       maxLength={80}
       aria-label={props.ariaLabel}

@@ -5,13 +5,10 @@ import {
   useMemo,
   useRef,
   useState,
-  type Dispatch,
   type KeyboardEvent,
   type ReactNode,
-  type SetStateAction,
 } from 'react';
 import { useMountedRef } from './use-mounted-ref.js';
-import { InlineRenameInput } from './inline-rename-input.js';
 import type { ProjectRecord, SessionSummary, UiLocale } from '@maka/core';
 import { formatCompactTimestamp } from '@maka/core';
 import {
@@ -38,6 +35,7 @@ import {
 import { VStack } from '@astryxdesign/core/Stack';
 import { StatusDot, type StatusDotVariant } from '@astryxdesign/core/StatusDot';
 import { describeBlockedReason, presentSessionStatus } from './session-status-presentation.js';
+import { SessionRenameDialog, type SessionRenameTarget } from './session-rename-dialog.js';
 import { useUiLocale } from './locale-context.js';
 import { getConversationCopy } from './conversation-copy.js';
 
@@ -167,19 +165,21 @@ function SessionListGroups(props: {
   projectActions?: ProjectRowActions;
 }) {
   const copy = getConversationCopy(useUiLocale()).sessions;
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<SessionRenameTarget | null>(null);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
   const activeAncestorIds = useMemo(
     () => resolveActiveSessionAncestorIds(props.activeId, props.childSessionsByParentId),
     [props.activeId, props.childSessionsByParentId],
   );
 
-  function commitProjectRename(project: ProjectRecord, name: string) {
-    setEditingProjectId(null);
-    if (!props.projectActions || !name || name === project.name) return;
-    void Promise.resolve(props.projectActions.onRename(project.id, name)).catch(() => {
-      // AppShell owns visible project-action failure feedback.
+  const startRename = useCallback((target: SessionRenameTarget) => setRenameTarget(target), []);
+
+  function commitRename(target: SessionRenameTarget, name: string) {
+    const rename =
+      target.kind === 'project' ? props.projectActions?.onRename : props.rowActions?.onRename;
+    if (!rename) return;
+    void Promise.resolve(rename(target.id, name)).catch(() => {
+      // AppShell owns visible rename failure feedback.
     });
   }
 
@@ -195,10 +195,9 @@ function SessionListGroups(props: {
           streaming={props.streamingSessionIds?.has(session.id) ?? false}
           stale={props.staleSessionIds?.has(session.id) ?? false}
           worktree={props.worktreeSessionIds?.has(session.id) ?? false}
-          editing={editingSessionId === session.id}
           onSelectSession={props.onSelectSession}
           actions={props.rowActions}
-          setEditingSessionId={setEditingSessionId}
+          onStartRename={startRename}
           childSessions={childSessions}
           expandedForActiveDescendant={activeAncestorIds.has(session.id)}
           renderSessionTree={childSessions?.length ? renderSessionTree : undefined}
@@ -207,7 +206,7 @@ function SessionListGroups(props: {
     },
     [
       activeAncestorIds,
-      editingSessionId,
+      startRename,
       props.activeId,
       props.childSessionsByParentId,
       props.onSelectSession,
@@ -218,6 +217,19 @@ function SessionListGroups(props: {
     ],
   );
 
+  // Remounted per target so the field seeds from the name as it was when the
+  // menu item was chosen, with nothing to synchronise while the dialog is open.
+  const renameDialog = (
+    <SessionRenameDialog
+      key={renameTarget?.id ?? 'none'}
+      target={renameTarget}
+      onOpenChange={(open) => {
+        if (!open) setRenameTarget(null);
+      }}
+      onRename={commitRename}
+    />
+  );
+
   if (props.groupVariant === 'project') {
     const activeGroups = props.groups.filter((group) => group.project?.archivedAt === undefined);
     const archivedGroups = props.groups.filter((group) => group.project?.archivedAt !== undefined);
@@ -226,18 +238,6 @@ function SessionListGroups(props: {
       group: (typeof props.groups)[number],
     ): ReactNode {
       const project = group.project;
-      const isEditing = Boolean(project && editingProjectId === project.id);
-      if (isEditing && project) {
-        return (
-          <ProjectRenameRow
-            key={group.key}
-            groupKey={group.key}
-            label={group.label}
-            onCommit={(name) => commitProjectRename(project, name)}
-            onCancel={() => setEditingProjectId(null)}
-          />
-        );
-      }
       return (
         <ProjectNavRow
           key={group.key}
@@ -247,7 +247,7 @@ function SessionListGroups(props: {
           sessions={group.sessions}
           projectActions={props.projectActions}
           onStartRename={() => {
-            if (project) setEditingProjectId(project.id);
+            if (project) startRename({ kind: 'project', id: project.id, name: project.name });
           }}
           renderSession={(session) => renderSessionTree(session, false)}
         />
@@ -256,6 +256,7 @@ function SessionListGroups(props: {
 
     return (
       <>
+        {renameDialog}
         {activeGroups.map(renderProjectGroup)}
         {archivedGroups.length > 0 && (
           <SideNavItem
@@ -277,6 +278,7 @@ function SessionListGroups(props: {
 
   return (
     <>
+      {renameDialog}
       {props.groups.map((group) => {
         const items = group.sessions.map((session) => renderSessionTree(session, false));
         if (!group.label) {
@@ -353,10 +355,9 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   streaming: boolean;
   stale: boolean;
   worktree: boolean;
-  editing: boolean;
   onSelectSession(sessionId: string): void;
   actions?: SessionRowActions;
-  setEditingSessionId: Dispatch<SetStateAction<string | null>>;
+  onStartRename(target: SessionRenameTarget): void;
   childSessions?: readonly SessionSummary[];
   expandedForActiveDescendant: boolean;
   renderSessionTree?(session: SessionSummary, nested: boolean): ReactNode;
@@ -371,43 +372,6 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   const isCollapsed = props.expandedForActiveDescendant
     ? false
     : (userCollapsed ?? true);
-
-  if (props.editing) {
-    const renameRow = (
-      <SessionRenameRow
-        session={props.session}
-        nested={props.nested}
-        onCommit={(name) => {
-          props.setEditingSessionId(null);
-          if (!props.actions || !name || name === props.session.name) return;
-          void Promise.resolve(props.actions.onRename(props.session.id, name)).catch(() => {
-            // AppShell owns visible session-action failure feedback.
-          });
-        }}
-        onCancel={() => props.setEditingSessionId(null)}
-      />
-    );
-    // A leaf row is one element in the list, exactly as its static form is;
-    // only a branch needs the wrapper, because SideNavItem keeps its head and
-    // its subtree inside one element and a bare pair here would take the
-    // list's gap twice, pushing every row below it down.
-    if (!hasChildren || isCollapsed) return renameRow;
-    return (
-      <div className="maka-session-branch">
-        {renameRow}
-        {/* The subagents keep running while their parent is being renamed, so
-            they keep their rows. SideNavItem owns the subtree in the static
-            row, and the stand-in row cannot host it — so the stand-in restates
-            the one thing SideNavItem's subtree wrapper does, which is a
-            `--spacing-6` inset (its `childrenInner`). Without this the whole
-            branch unmounted for the length of the edit: the list lost every
-            descendant row and the parent collapsed from 64px to 32px. */}
-        <div className="maka-session-subtree" role="group" aria-label={props.session.name}>
-          {props.childSessions?.map((child) => props.renderSessionTree?.(child, true))}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -435,7 +399,11 @@ const SessionNavRow = memo(function SessionNavRow(props: {
         }
         onClick={(event) => {
           if (event.detail > 1 && props.actions) {
-            props.setEditingSessionId(props.session.id);
+            props.onStartRename({
+              kind: 'session',
+              id: props.session.id,
+              name: props.session.name,
+            });
             return;
           }
           props.onSelectSession(props.session.id);
@@ -448,7 +416,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
             stale={props.stale}
             worktree={props.worktree}
             actions={props.actions}
-            setEditingSessionId={props.setEditingSessionId}
+            onStartRename={props.onStartRename}
           />
         }
       >
@@ -487,80 +455,6 @@ function resolveActiveSessionAncestorIds(
     parentId = parentByChildId.get(parentId);
   }
   return ancestors;
-}
-
-/**
- * The row's skeleton while its name is being typed.
- *
- * A rename replaces the name, not the row. Astryx forces the swap to be
- * wholesale here — `SideNavItem` takes `label` as a `string` and renders the
- * row as one `<button>`, and HTML does not allow a text field inside a button —
- * so what stands in for the row has to restate its parts, or they vanish for
- * the length of the edit. They did: the leading icon, and the trailing column
- * that holds the status dot and the actions menu, both disappeared and the
- * field ran the full width of the row.
- *
- * The trailing column is a spacer rather than the live menu: a control there
- * would take the focus the field needs, and blur commits.
- */
-function RenameRowSkeleton(props: { icon?: ReactNode; children: ReactNode }) {
-  return (
-    <>
-      {props.icon ? <span className="maka-session-row--editing-icon">{props.icon}</span> : null}
-      {props.children}
-      <span className="maka-session-row-trailing" aria-hidden="true" />
-    </>
-  );
-}
-
-function SessionRenameRow(props: {
-  session: SessionSummary;
-  nested?: boolean;
-  onCommit(name: string): void;
-  onCancel(): void;
-}) {
-  const copy = getConversationCopy(useUiLocale()).sessions;
-  return (
-    <div
-      className="maka-session-row maka-session-row--editing"
-      data-maka-contract="session-row"
-      data-session-id={props.session.id}
-      data-subagent={props.nested ? 'true' : undefined}
-    >
-      <RenameRowSkeleton icon={props.nested ? <Bot size={16} /> : undefined}>
-        <InlineRenameInput
-          defaultValue={props.session.name}
-          ariaLabel={copy.renameAriaLabel}
-          onCommit={props.onCommit}
-          onCancel={props.onCancel}
-        />
-      </RenameRowSkeleton>
-    </div>
-  );
-}
-
-function ProjectRenameRow(props: {
-  groupKey: string;
-  label: string;
-  onCommit(name: string): void;
-  onCancel(): void;
-}) {
-  const copy = getConversationCopy(useUiLocale()).sessions;
-  return (
-    <div
-      data-project-id={props.groupKey}
-      className="maka-session-row maka-session-row--editing"
-    >
-      <RenameRowSkeleton>
-        <InlineRenameInput
-          defaultValue={props.label}
-          ariaLabel={copy.projectRename}
-          onCommit={props.onCommit}
-          onCancel={props.onCancel}
-        />
-      </RenameRowSkeleton>
-    </div>
-  );
 }
 
 function ProjectItemEndContent(props: {
@@ -676,7 +570,7 @@ const SessionItemEndContent = memo(function SessionItemEndContent(props: {
   stale: boolean;
   worktree: boolean;
   actions?: SessionRowActions;
-  setEditingSessionId: Dispatch<SetStateAction<string | null>>;
+  onStartRename(target: SessionRenameTarget): void;
 }) {
   const locale = useUiLocale();
   const copy = getConversationCopy(locale).sessions;
@@ -788,7 +682,11 @@ const SessionItemEndContent = memo(function SessionItemEndContent(props: {
                 icon: Pencil,
                 onClick: () => {
                   pendingMenuIntentRef.current = () =>
-                    props.setEditingSessionId(props.session.id);
+                    props.onStartRename({
+                      kind: 'session',
+                      id: props.session.id,
+                      name: props.session.name,
+                    });
                 },
               },
               {

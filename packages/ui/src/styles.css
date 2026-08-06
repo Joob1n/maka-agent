@@ -678,28 +678,3 @@
   font: var(--maka-text-supporting);
  }
 
-/* The rename-in-place field, wherever it appears.
- *
- * An edit must not move the thing being edited. Both surfaces used to swap a
- * label for a field with a box of its own — its own padding, its own bottom
- * border, and in the sidebar its own heavier type role — so starting a rename
- * shrank the row by a pixel, pushed every row below it up, and re-weighted the
- * text under the cursor. The field therefore claims no box: it inherits the
- * type of whatever it replaced, carries no padding or border, and draws its
- * focus line with a `box-shadow`, which paints outside layout instead of
- * stealing a pixel from the row. */
-.maka-inline-rename {
-  font: inherit;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--foreground);
-  box-shadow: 0 1px 0 oklch(from var(--focus-ring) l c h / 0.4);
-}
-
-.maka-inline-rename:focus {
-  box-shadow: 0 1px 0 var(--focus-ring);
-}

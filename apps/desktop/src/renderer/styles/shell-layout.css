@@ -457,15 +457,22 @@ dialog:modal {
    from the other direction. `min-width` keeps an empty field clickable; the
    `max-width` is the truncation ceiling the label itself has.
 
-   Everything else — no padding, no border, the focus line as a `box-shadow`
-   that paints outside layout — comes from `maka-inline-rename`. The bottom
-   border it used to carry was 1px the crumb did not have, so the trail lost a
-   pixel of height the moment the field appeared. */
+   The field claims no box of its own beyond that: no border, and a focus line
+   drawn with `box-shadow`, which paints outside layout. The bottom border it
+   used to carry was 1px the crumb did not have, so the trail lost a pixel of
+   height the moment the field appeared. */
 .maka-titlebar-identity__rename-input {
   font: var(--maka-text-body);
   font-weight: var(--font-weight-medium);
+  color: var(--foreground);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  box-shadow: 0 1px 0 oklch(from var(--focus-ring) l c h / 0.4);
   field-sizing: content;
   width: auto;
+  min-width: 0;
+  padding-block: 0;
   /* The crumb button's own inline padding, so the first glyph does not step
      4px left the moment the label becomes a field. */
   padding-inline: var(--space-1);
@@ -475,6 +482,10 @@ dialog:modal {
   /* Bounded by the column, not by a guess: `20rem` alone overflowed the same
      way the segments did once the window was narrow enough. */
   max-width: min(20rem, 100%);
+}
+
+.maka-titlebar-identity__rename-input:focus {
+  box-shadow: 0 1px 0 var(--focus-ring);
 }
 
 .mainColumn {

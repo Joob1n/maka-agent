@@ -259,44 +259,6 @@
   color: var(--muted-foreground);
 }
 
-/* The static row is an Astryx SideNavItem: 32px tall, 8px of inline padding,
- * its label 14px/500. This box stands in for it while the name is being typed,
- * so it restates all three — with its own `4px` block padding it came out 31px
- * and every row below it stepped up a pixel the moment an edit began, and with
- * the heading-4 role the text under the cursor jumped from 500 to 600.
- *
- * The field itself contributes nothing: `maka-inline-rename` inherits this
- * type and paints its focus line outside layout. */
-.maka-session-row--editing {
-  display: flex;
-  align-items: center;
-  /* SideNavItem's own icon-to-label gap, so the field starts where the label
-     it replaced started. */
-  gap: var(--space-2);
-  min-height: var(--h-control-lg);
-  padding-inline: var(--space-2);
-  padding-block: 0;
-  font: var(--maka-text-body);
-  font-weight: var(--font-weight-medium);
-}
-
-/* The subtree of a row being renamed. It stands in for SideNavItem's own
-   `childrenInner` wrapper, whose entire contribution to layout is this inset —
-   so descendant rows land exactly where they were before the edit began, at
-   every depth, since each level adds its own. */
-.maka-session-subtree {
-  padding-inline-start: var(--space-6);
-}
-
-/* Subagent rows carry a leading Bot icon. Without it here the row loses its
-   one mark of nesting for the length of the edit, and the name slides left. */
-.maka-session-row--editing-icon {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: var(--muted-foreground);
-}
-
 /* #1879: an Astryx `Badge variant="yellow"` now. Box, radius, padding and
    caption type all come from the component (20px off `--spacing-5`), so the
    only thing product CSS still owns is that it must not be squeezed by the
