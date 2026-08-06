@@ -259,25 +259,22 @@
   color: var(--muted-foreground);
 }
 
+/* The static row is an Astryx SideNavItem: 32px tall, 8px of inline padding,
+ * its label 14px/500. This box stands in for it while the name is being typed,
+ * so it restates all three — with its own `4px` block padding it came out 31px
+ * and every row below it stepped up a pixel the moment an edit began, and with
+ * the heading-4 role the text under the cursor jumped from 500 to 600.
+ *
+ * The field itself contributes nothing: `maka-inline-rename` inherits this
+ * type and paints its focus line outside layout. */
 .maka-session-row--editing {
+  display: flex;
+  align-items: center;
+  min-height: var(--h-control-lg);
   padding-inline: var(--space-2);
-  padding-block: var(--space-1);
-}
-
-.maka-session-rename-input {
-  font: var(--maka-text-heading-4);
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  border-bottom: var(--border-width-hairline) solid oklch(from var(--focus-ring) l c h / 0.4);
-  background: transparent;
-  color: var(--foreground);
-  outline: 0;
-  padding: 1px 0;
-}
-
-.maka-session-rename-input:focus {
-  border-bottom-color: var(--focus-ring);
+  padding-block: 0;
+  font: var(--maka-text-body);
+  font-weight: var(--font-weight-medium);
 }
 
 /* #1879: an Astryx `Badge variant="yellow"` now. Box, radius, padding and

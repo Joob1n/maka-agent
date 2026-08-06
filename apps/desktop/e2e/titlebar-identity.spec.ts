@@ -255,3 +255,41 @@ test('clicking away commits a titlebar rename', async ({ sidebarLongSessionsWind
   const sidebar = page.getByRole('navigation', { name: '对话列表' });
   await expect(sidebar.getByText('点击别处也要保存')).toBeVisible();
 });
+
+/**
+ * Editing a name must not move it.
+ *
+ * The field used to bring a box of its own — a bottom border and its own
+ * padding the crumb did not have — so the trail lost a pixel of height and the
+ * first glyph stepped 4px left the moment the label became editable. The field
+ * now inherits the crumb's type and draws its focus line with a `box-shadow`,
+ * which paints outside layout.
+ */
+test('starting a rename leaves the trail exactly where it was', async ({
+  sidebarLongSessionsWindow: page,
+}) => {
+  const identity = page.locator(IDENTITY);
+  const read = () =>
+    page.evaluate(() => {
+      const root = document.querySelector('[data-maka-contract="titlebar-identity"]')!;
+      const field = root.querySelector('input');
+      const label = root.querySelector('.maka-titlebar-identity__segment--session');
+      const text = (field ?? label)!.getBoundingClientRect();
+      const pad = field ? Number.parseFloat(getComputedStyle(field).paddingLeft) : 0;
+      const project = root.querySelector('.maka-titlebar-identity__segment')!.getBoundingClientRect();
+      return {
+        stripHeight: Math.round(root.getBoundingClientRect().height),
+        projectX: Math.round(project.x),
+        projectWidth: Math.round(project.width),
+        // Where the first glyph lands, which is what the eye tracks.
+        textLeft: Math.round(text.x + pad),
+        textMiddle: Math.round(text.y + text.height / 2),
+      };
+    });
+
+  const before = await read();
+  await identity.getByRole('button', { name: /会话 00/ }).click();
+  await expect(identity.getByRole('textbox', { name: '重命名对话' })).toBeFocused();
+
+  expect(await read()).toEqual(before);
+});

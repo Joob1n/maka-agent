@@ -205,3 +205,41 @@ test('scheduled-task hub restores the last selected child module', async ({ wind
   await scheduledTasks.click();
   await expect(selector).toHaveAccessibleName('定时任务内容：每日回顾');
 });
+
+/**
+ * The same invariant one column to the left: the row being renamed keeps its
+ * height, and the rows under it keep their places.
+ *
+ * The editing row used to build its own box — 4px of block padding against the
+ * SideNavItem's 32px, and the heading-4 role against the row label's 500 — so
+ * an edit shrank the row to 31px, stepped every row below it up a pixel, and
+ * re-weighted the text under the cursor.
+ */
+test('starting a rename does not resize the row or shift the list', async ({
+  sidebarLongSessionsWindow: page,
+}) => {
+  const sidebar = page.getByRole('navigation', { name: '对话列表' });
+  const row = sidebar.locator('[data-maka-contract="session-row"]').first();
+  const read = () =>
+    page.evaluate(() => {
+      const first = document.querySelector('[data-maka-contract="session-row"]') as HTMLElement;
+      const inner = (first.querySelector('input') ??
+        first.querySelector('.astryx-side-nav-item')) as HTMLElement;
+      const style = getComputedStyle(inner);
+      return {
+        rowHeight: Math.round(first.getBoundingClientRect().height),
+        nextRowY: Math.round(
+          (first.parentElement?.children[1] as HTMLElement).getBoundingClientRect().y,
+        ),
+        type: `${style.fontSize}/${style.fontWeight}`,
+      };
+    });
+
+  const before = await read();
+  await row.locator('.maka-session-row-end').getByRole('button').first().focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('menuitem', { name: '重命名', exact: true }).click();
+  await expect(sidebar.getByRole('textbox', { name: '重命名对话' })).toBeFocused();
+
+  expect(await read()).toEqual(before);
+});

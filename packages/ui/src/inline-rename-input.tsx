@@ -24,7 +24,8 @@ import { useEffect, useRef } from 'react';
 export function InlineRenameInput(props: {
   defaultValue: string;
   ariaLabel: string;
-  className: string;
+  /** Surface-specific sizing only. The field's own chrome is `maka-inline-rename`. */
+  className?: string;
   onCommit(name: string): void;
   onCancel(): void;
 }) {
@@ -39,7 +40,7 @@ export function InlineRenameInput(props: {
   return (
     <input
       ref={inputRef}
-      className={props.className}
+      className={props.className ? `maka-inline-rename ${props.className}` : 'maka-inline-rename'}
       defaultValue={props.defaultValue}
       maxLength={80}
       aria-label={props.ariaLabel}

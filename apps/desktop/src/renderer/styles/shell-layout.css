@@ -457,27 +457,24 @@ dialog:modal {
    from the other direction. `min-width` keeps an empty field clickable; the
    `max-width` is the truncation ceiling the label itself has.
 
-   Chrome and focus treatment are the sidebar's (`.maka-session-rename-input`):
-   a hairline underline that firms up on focus, since a full outline inside a
-   36px strip reads as a modal. */
+   Everything else — no padding, no border, the focus line as a `box-shadow`
+   that paints outside layout — comes from `maka-inline-rename`. The bottom
+   border it used to carry was 1px the crumb did not have, so the trail lost a
+   pixel of height the moment the field appeared. */
 .maka-titlebar-identity__rename-input {
   font: var(--maka-text-body);
   font-weight: var(--font-weight-medium);
   field-sizing: content;
-  min-width: 4rem;
+  width: auto;
+  /* The crumb button's own inline padding, so the first glyph does not step
+     4px left the moment the label becomes a field. */
+  padding-inline: var(--space-1);
+  /* Small enough that a real name is always the binding measure — at `4rem`
+     the field opened wider than the word it replaced and nudged the trail. */
+  min-width: 2rem;
   /* Bounded by the column, not by a guess: `20rem` alone overflowed the same
      way the segments did once the window was narrow enough. */
   max-width: min(20rem, 100%);
-  border: 0;
-  border-bottom: var(--border-width-hairline) solid oklch(from var(--focus-ring) l c h / 0.4);
-  background: transparent;
-  color: var(--foreground);
-  outline: 0;
-  padding: 1px 0;
-}
-
-.maka-titlebar-identity__rename-input:focus {
-  border-bottom-color: var(--focus-ring);
 }
 
 .mainColumn {

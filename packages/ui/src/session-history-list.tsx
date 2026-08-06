@@ -481,7 +481,6 @@ function SessionRenameRow(props: {
       data-session-id={props.session.id}
     >
       <InlineRenameInput
-        className="maka-session-rename-input"
         defaultValue={props.session.name}
         ariaLabel={copy.renameAriaLabel}
         onCommit={props.onCommit}
@@ -504,7 +503,6 @@ function ProjectRenameRow(props: {
       className="maka-session-row maka-session-row--editing"
     >
       <InlineRenameInput
-        className="maka-session-rename-input"
         defaultValue={props.label}
         ariaLabel={copy.projectRename}
         onCommit={props.onCommit}
