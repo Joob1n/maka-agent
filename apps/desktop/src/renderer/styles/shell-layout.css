@@ -381,13 +381,29 @@ dialog:modal {
   white-space: nowrap;
 }
 
-/* The rename field stands in for the breadcrumb, so it takes the breadcrumb's
-   supporting type rather than the browser's default input font — the label must
-   not change size when it becomes editable. Chrome and focus treatment are the
-   sidebar's (`.maka-session-rename-input`): a hairline underline that firms up
-   on focus, since a full outline inside a 36px strip reads as a modal. */
+/* The session name carries the weight of the pair: it is what the window is
+   showing, and the project is the context it sits in. Astryx gives every
+   non-current crumb the same secondary ink, and this one has to be non-current
+   to stay clickable (see the `isCurrent={false}` note in the component), so the
+   emphasis is restored here rather than inherited.
+
+   The target is the sidebar's own selected row — same size, same weight, same
+   ink. One session should not have two different weights depending on which
+   surface is naming it, and the titlebar has no business being the lighter of
+   the two. */
+.maka-titlebar-identity__segment--session {
+  font-weight: var(--font-weight-medium);
+  color: var(--foreground);
+}
+
+/* The rename field stands in for the session crumb, so it matches it exactly —
+   size, weight and ink — because the label must not shift when it becomes
+   editable. Chrome and focus treatment are the sidebar's
+   (`.maka-session-rename-input`): a hairline underline that firms up on focus,
+   since a full outline inside a 36px strip reads as a modal. */
 .maka-titlebar-identity__rename-input {
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
+  font-weight: var(--font-weight-medium);
   min-width: 12rem;
   max-width: 20rem;
   border: 0;

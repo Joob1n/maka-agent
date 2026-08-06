@@ -65,6 +65,53 @@ test('titlebar identity opens at the content plate edge, clearing the icon rail'
   expect(collapsed.left).toBeGreaterThan(collapsed.plateLeft);
 });
 
+/**
+ * The session name must not read lighter in the titlebar than in the sidebar.
+ *
+ * Astryx's `supporting` breadcrumb variant — the obvious pick for a 36px strip,
+ * and what this shipped as first — renders 12px/400/secondary. That made the
+ * window's own statement of which session is open smaller, lighter and greyer
+ * than the SAME session's row in the sidebar, and left the project and the
+ * session typographically identical, with only the `›` separating them.
+ *
+ * Computed styles rather than a screenshot: this is a cascade fact, and the
+ * regression is a one-word prop change that a pixel baseline would not name.
+ */
+test('the session name carries the sidebar row’s weight, and the project defers to it', async ({
+  sidebarLongSessionsWindow: page,
+}) => {
+  const type = await page.evaluate(() => {
+    const read = (el: Element | null) => {
+      if (!el) return null;
+      const style = getComputedStyle(el);
+      return { size: style.fontSize, weight: style.fontWeight, color: style.color };
+    };
+    const identity = document.querySelector('[data-maka-contract="titlebar-identity"]');
+    return {
+      project: read(identity?.querySelector('.maka-titlebar-identity__segment') ?? null),
+      session: read(
+        identity?.querySelector('.maka-titlebar-identity__segment--session') ?? null,
+      ),
+      sidebarRow: read(document.querySelector('.astryx-side-nav-item[aria-current="page"]')),
+    };
+  });
+
+  expect(type.session, JSON.stringify(type)).not.toBeNull();
+  expect(type.sidebarRow, JSON.stringify(type)).not.toBeNull();
+
+  // One session, one weight — whichever surface is naming it.
+  expect(type.session?.size, JSON.stringify(type)).toBe(type.sidebarRow?.size);
+  expect(type.session?.weight, JSON.stringify(type)).toBe(type.sidebarRow?.weight);
+
+  // The pair has an internal hierarchy: the project is the context, not the
+  // subject. Same size, lighter weight, quieter ink.
+  expect(type.project?.size, JSON.stringify(type)).toBe(type.session?.size);
+  expect(Number(type.project?.weight), JSON.stringify(type)).toBeLessThan(
+    Number(type.session?.weight),
+  );
+  expect(type.project?.color, JSON.stringify(type)).not.toBe(type.session?.color);
+});
+
 test('titlebar names the open session and its project, in both sidebar states', async ({
   sidebarLongSessionsWindow: page,
 }) => {

@@ -63,10 +63,24 @@ describe('TitlebarSessionIdentity', () => {
 
   it('truncates each segment on its own rather than wrapping the strip', () => {
     const html = render({ sessionName: 'A'.repeat(200), projectName: 'B'.repeat(200) });
+    // Word-boundary match: the session segment also carries the `--session`
+    // modifier, and a bare substring count reads that one twice.
     assert.equal(
-      html.match(/maka-titlebar-identity__segment/g)?.length,
+      html.match(/maka-titlebar-identity__segment(?![\w-])/g)?.length,
       2,
       'both segments carry the ellipsis class',
+    );
+  });
+
+  it('gives the session segment the weight, and the project only the base class', () => {
+    // The pair's hierarchy is carried by the modifier: `supporting` breadcrumb
+    // type rendered both segments identically, leaving the `›` to do all the
+    // work of saying which one is the subject.
+    const html = render({ sessionName: 'Rerun head-to-head', projectName: 'maka-agent' });
+    assert.equal(html.match(/maka-titlebar-identity__segment--session/g)?.length, 1);
+    assert.ok(
+      html.indexOf('maka-titlebar-identity__segment--session') > html.indexOf('maka-agent'),
+      'the emphasis belongs to the trailing session crumb, not the project',
     );
   });
 });

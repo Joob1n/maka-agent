@@ -88,9 +88,14 @@ export function TitlebarSessionIdentity(props: {
 
   return (
     <div className="maka-titlebar-identity" data-maka-contract="titlebar-identity">
+      {/* `default`, not `supporting`. Astryx documents supporting as the variant
+          for dense UIs "where the breadcrumb should be subtle", which this is
+          the opposite of: it is the window's statement of which session is
+          open. On supporting it rendered 12px/400/secondary — smaller, lighter
+          and greyer than the SAME session's row in the sidebar (14px/500/
+          primary), so the highest-level label in the window was the weakest. */}
       <Breadcrumbs
         label={copy.chat.titlebarIdentityAriaLabel}
-        variant="supporting"
         className="maka-titlebar-identity__breadcrumbs"
         separator={<Icon icon="chevronRight" size="xsm" />}
       >
@@ -112,7 +117,7 @@ export function TitlebarSessionIdentity(props: {
             this crumb is an action, not a location. */}
         <BreadcrumbItem isCurrent={false} onClick={() => setRenaming(true)}>
           <span
-            className="maka-titlebar-identity__segment"
+            className="maka-titlebar-identity__segment maka-titlebar-identity__segment--session"
             title={copy.sessions.renameAriaLabel}
           >
             {props.sessionName}
