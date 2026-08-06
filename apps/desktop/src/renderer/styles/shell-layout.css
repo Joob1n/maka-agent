@@ -72,7 +72,8 @@
    two that nothing could align to. The titlebar's breadcrumb opens at that
    edge, which is what made the phantom pixel measurable. */
 .maka-shell-astryx .astryx-app-shell-sidenav {
-  border-inline-end: 0;
+  border-inline-end-color: transparent;
+  border-inline-end-width: 0;
 }
 
 

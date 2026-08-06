@@ -290,6 +290,7 @@ interface RailMaterial {
   rail: string;
   column: string;
   railEdge: string;
+  railEdgeWidth: string;
 }
 
 async function readRailMaterial(page: Page): Promise<RailMaterial | null> {
@@ -312,6 +313,7 @@ async function readRailMaterial(page: Page): Promise<RailMaterial | null> {
       rail: bytes(getComputedStyle(rail).backgroundColor),
       column: bytes(getComputedStyle(column).backgroundColor),
       railEdge: bytes(getComputedStyle(rail).borderInlineEndColor),
+      railEdgeWidth: getComputedStyle(rail).borderInlineEndWidth,
     };
   });
 }
@@ -339,6 +341,7 @@ async function settledRailMaterial(page: Page): Promise<RailMaterial | null> {
 }
 
 const TRANSPARENT = '0,0,0,0';
+const NO_EDGE = '0px';
 
 test('the rail wears its column material in both collapse states', async ({
   sidebarLongSessionsWindow: page,
@@ -350,8 +353,12 @@ test('the rail wears its column material in both collapse states', async ({
   expect(expanded, 'expanded').not.toBeNull();
   expect(expanded?.rail, JSON.stringify(expanded)).toBe(expanded?.column);
   // The plate's edge is the one boundary on this seam; the theme's own
-  // full-height sidenav hairline stays dropped in both states.
+  // full-height sidenav hairline stays dropped in both states — in color, and
+  // in the 1px of layout it used to occupy while invisible. That phantom pixel
+  // started the content column 1px right of where the sidebar column ended, so
+  // the titlebar breadcrumb could not align to the seam it opens at.
   expect(expanded?.railEdge, JSON.stringify(expanded)).toBe(TRANSPARENT);
+  expect(expanded?.railEdgeWidth, JSON.stringify(expanded)).toBe(NO_EDGE);
 
   await page.getByRole('button', { name: '收起侧边栏' }).click();
   await expect(shell).toHaveAttribute('data-sidebar-state', 'collapsed');
@@ -362,5 +369,6 @@ test('the rail wears its column material in both collapse states', async ({
     rail: expanded?.column,
     column: expanded?.column,
     railEdge: TRANSPARENT,
+    railEdgeWidth: NO_EDGE,
   });
 });
