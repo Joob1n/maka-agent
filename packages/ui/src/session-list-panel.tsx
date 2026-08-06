@@ -15,7 +15,7 @@ import { SessionSidebarFooter, SessionSidebarNav, type SidebarUpdateReminder } f
 import { Clock, FolderOpen } from './icons.js';
 import { useUiLocale } from './locale-context.js';
 import { getConversationCopy } from './conversation-copy.js';
-import type { CSSProperties, Ref } from 'react';
+import type { Ref } from 'react';
 
 export type SessionViewMode = 'conversation' | 'project';
 
@@ -105,10 +105,14 @@ export function SessionListPanel(props: {
     // the rail snaps. This wrapper is outside SideNav, so it is the same element
     // before and after; shell-layout.css eases ITS width and stretches whatever
     // SideNav mounted inside to match.
-    <div
-      className="maka-sidenav-motion"
-      style={{ '--maka-sidenav-width': `${width}px` } as CSSProperties}
-    >
+    //
+    // The width itself comes from `--maka-sidenav-width`, which AppShell
+    // publishes on `.appFrame` rather than this element writing it inline. The
+    // frame is the only node that is an ancestor of both this column and the
+    // window titlebar, and the titlebar has to know where this column ends: its
+    // session breadcrumb starts at that edge so it lines up with the content
+    // plate instead of straddling the seam between the two.
+    <div className="maka-sidenav-motion">
       <SideNav
         handleRef={props.collapseHandleRef}
         className="maka-session-panel agents-sidebar"

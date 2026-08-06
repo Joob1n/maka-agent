@@ -64,9 +64,15 @@
    the rail became a THIRD tone (measured L 0.205 against the canvas's 0.18),
    painting a 49px slab that ran to the window top past the plate's 4px gutter
    and under the light cluster. The rail now wears its column's material in both
-   states, which is what "one surface" meant in the first place. */
+   states, which is what "one surface" meant in the first place.
+
+   The width goes with the color. Transparent alone left the border occupying
+   its 1px of layout, so the content column started 1px right of where the
+   sidebar column ended — invisible on its own, but it put a seam between the
+   two that nothing could align to. The titlebar's breadcrumb opens at that
+   edge, which is what made the phantom pixel measurable. */
 .maka-shell-astryx .astryx-app-shell-sidenav {
-  border-inline-end-color: transparent;
+  border-inline-end: 0;
 }
 
 
@@ -184,9 +190,14 @@
 /* Same source as Astryx's own `rootCollapsed` width, so the rail cannot drift
    from the value SideNav lands on when the ease finishes. Keyed off the shell's
    own collapsed flag — the wrapper carried a second copy of it until this rule
-   read the one `.appFrame` already publishes and the hairlines already use. */
-.appFrame[data-sidebar-state='collapsed'] .maka-sidenav-motion {
-  width: var(--spacing-12);
+   read the one `.appFrame` already publishes and the hairlines already use.
+
+   It overrides the VARIABLE, not the wrapper's width, because the wrapper is no
+   longer the only reader: the titlebar starts its session breadcrumb at this
+   column's right edge. Setting the width here instead would leave the titlebar
+   reading the expanded value while the column sat collapsed. */
+.appFrame[data-sidebar-state='collapsed'] {
+  --maka-sidenav-width: var(--spacing-12);
 }
 
 .maka-shell-astryx .maka-sidenav-motion:has([data-resizing]) {
@@ -242,9 +253,8 @@
   height: calc(var(--h-titlebar) - var(--maka-window-resize-edge));
   min-height: calc(var(--h-titlebar) - var(--maka-window-resize-edge));
   box-sizing: border-box;
-  display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--maka-titlebar-gap);
   /* No paint: column surfaces under this strip own the color (canvas left,
      --background right). Windows titleBarOverlay still samples --background
      for the OS caption strip on the content side. */
@@ -254,9 +264,44 @@
      which platform it is on or how wide any control is — `max()` picks whichever
      the OS reports (macOS: traffic lights on the left; Windows: caption buttons
      on the right; Linux: neither, so the design floor stands). */
-  padding-left: max(var(--space-6), var(--maka-titlebar-area-x));
+  padding-left: var(--maka-titlebar-gutter-left);
   padding-right: calc(var(--space-6) + var(--maka-titlebar-overlay-right-width));
   -webkit-app-region: drag;
+
+  /* Three columns, not a flex row, because the middle one has to line up with
+     something OUTSIDE this strip. The strip spans the whole window while the
+     shell below it is two columns, and the session breadcrumb belongs to the
+     content column — laid out in flow it landed wherever the icon rail happened
+     to end, which was mid-sidebar, straddling the seam between the columns and
+     aligned with neither.
+
+     Column 1 stands in for the sidebar column, so its floor is that column's
+     width less everything already between it and the window's left edge: this
+     strip's resize inset, its left gutter, and the `gap` that follows the
+     column. Subtracting the gap is what makes column 2 OPEN at the seam — left
+     in, it pushed the breadcrumb a gap past the plate edge, which measured 7px
+     of overhang instead of the intended flush start.
+
+     `minmax(..., auto)` rather than a fixed width for the collapsed state,
+     where the two icons are wider than the 48px rail: the column grows to the
+     icons and the gap then holds the breadcrumb off them, which is the same
+     clearance by a different measure.
+
+     Every child names its own column. Two of the three are conditional — the
+     breadcrumb only in a session, the workspace actions only in views that have
+     them — and with implicit placement the survivors slide into the empty slots,
+     which would park the workbar toggle in the middle of the window. */
+  display: grid;
+  grid-template-columns:
+    minmax(
+      calc(
+        var(--maka-sidenav-width) - var(--maka-window-resize-edge) -
+          var(--maka-titlebar-gutter-left) - var(--maka-titlebar-gap)
+      ),
+      auto
+    )
+    minmax(0, 1fr)
+    auto;
 }
 
 /* Drag regions are hit-tested from element rects, and the top layer is invisible
@@ -267,6 +312,8 @@ dialog:modal {
 }
 
 .maka-shell-topbar-rail {
+  grid-column: 1;
+  justify-self: start;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -281,30 +328,36 @@ dialog:modal {
   color: var(--foreground-secondary);
 }
 
-/* The session's identity, left-aligned right after the icon rail.
+/* The session's identity: left-aligned at the content column's left edge.
 
-   It is the next flex item in the titlebar row, not a centered third column:
-   the anchor is the rail, so the gap between the last icon and the project name
-   is the same whether the sidebar is expanded or collapsed, and the text never
-   shifts when the columns resize. Its own margin adds to the row's `--space-2`
-   gap, which reads as one cluster of icons plus a separate label rather than a
-   third icon.
+   It sits in the titlebar's second grid column, which opens exactly where the
+   sidebar column ends, so the breadcrumb reads as the heading of the
+   conversation plate beneath it. Laid out in flow instead, it anchored to the
+   icon rail and landed mid-sidebar — straddling the seam, aligned to neither
+   column. Collapsing the sidebar narrows column 1 and the breadcrumb follows it
+   left, still flush with the plate.
+
+   `padding-left` keeps the text off the seam itself. It matches the inset the
+   sidebar's own rows carry, so the two columns' text starts read as a pair
+   rather than one label welded to the divider.
 
    Both plates below reserve the full `--h-titlebar` (`.mainColumn` via
    `--maka-plate-titlebar-clearance`, `.maka-session-panel` directly), so this
-   strip is empty for its whole width — the label collides with nothing whether
-   it lands over the sidebar column or the conversation column.
+   strip is empty for its whole width and the label collides with nothing.
 
-   `flex: 0 1 auto` + `min-width: 0`: on a narrow window this is what gives way,
-   truncating its own segments instead of squeezing the two action clusters that
-   flank it. `no-drag` covers only this box — the strip stays draggable on both
-   sides of the text, exactly as it already is around the icon clusters. */
+   `min-width: 0` + `justify-self: start`: the column is `minmax(0, 1fr)`, so on
+   a narrow window this is what gives way, truncating its own segments instead
+   of squeezing the two action clusters that flank it. `no-drag` covers only
+   this box — the strip stays draggable on both sides of the text, exactly as it
+   already is around the icon clusters. */
 .maka-titlebar-identity {
+  grid-column: 2;
+  justify-self: start;
   min-width: 0;
-  flex: 0 1 auto;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
-  margin-left: var(--space-2);
+  padding-left: var(--space-3);
   -webkit-app-region: no-drag;
 }
 
@@ -363,14 +416,17 @@ dialog:modal {
   padding-bottom: 0;
 }
 
-/* Right-hand cluster of the titlebar row. `margin-left: auto` is the whole
-   positioning rule — it used to be absolutely positioned against the detail
-   panel, which is why the chat header had to reserve its width by hand. Which
-   views render it at all is decided in app-shell.tsx, not by a `display: none`
-   override reaching in from `[data-agents-view]`. */
+/* Right-hand cluster of the titlebar row. It is the strip's last grid column —
+   it used to be absolutely positioned against the detail panel, which is why
+   the chat header had to reserve its width by hand, and then a `margin-left:
+   auto` flex item, which only reached the right edge as long as it was the last
+   child. Naming the column keeps it there when the breadcrumb beside it is
+   absent. Which views render it at all is decided in app-shell.tsx, not by a
+   `display: none` override reaching in from `[data-agents-view]`. */
 .maka-workspace-top-actions {
+  grid-column: 3;
+  justify-self: end;
   -webkit-app-region: no-drag;
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: var(--space-1-5);

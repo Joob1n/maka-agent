@@ -673,6 +673,13 @@
     0px,
     calc(100vw - var(--maka-titlebar-area-x) - var(--maka-titlebar-area-width))
   );
+  /* The strip's own left gutter and inter-column gap. Named because each is now
+     read twice: once as the declaration itself, and once by the titlebar's first
+     grid column, which measures from the window edge and so has to subtract
+     everything already standing between it and that edge. Two literals would be
+     two chances to change one of them. */
+  --maka-titlebar-gutter-left: max(var(--space-6), var(--maka-titlebar-area-x));
+  --maka-titlebar-gap: var(--space-2);
 
   /* session list geometry */
 

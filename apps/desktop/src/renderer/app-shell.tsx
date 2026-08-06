@@ -2067,6 +2067,23 @@ function AppShellContent({
          readers at all — and three writers of the same value is three chances
          for them to disagree. */
       data-sidebar-state={sessionListCollapsed ? 'collapsed' : 'expanded'}
+      /* Published here for the same reason `data-sidebar-state` is: the frame is
+         the only ancestor shared by the sidebar column and the titlebar strip,
+         and both need this number. The column is this wide; the titlebar's
+         session breadcrumb opens at that edge rather than straddling the seam
+         between the columns.
+
+         Only the EXPANDED width, and only as an inline style, because that is
+         the half of the answer this component owns — the user's dragged width.
+         The collapsed width is a constant, so shell-layout.css states it off
+         `data-sidebar-state`. Writing both here would duplicate the constant;
+         writing this one unconditionally would bury the other, since an inline
+         custom property outranks any rule that redefines it. */
+      style={
+        sessionListCollapsed
+          ? undefined
+          : ({ '--maka-sidenav-width': `${sessionListWidth}px` } as CSSProperties)
+      }
     >
       <LiveTurnReconciler
         controller={sessionUiController}

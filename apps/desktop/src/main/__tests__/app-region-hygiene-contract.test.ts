@@ -66,14 +66,29 @@ describe('app-region hygiene', () => {
       shell,
       '.maka-titlebar-identity',
       [
-        /-webkit-app-region:\s*no-drag/,
         // Both segments are buttons; without the carve-out their clicks reach
         // the OS as window drags, the same failure the third titlebar button
         // once had.
-        /flex:\s*0\s+1\s+auto/,
+        /-webkit-app-region:\s*no-drag/,
+        // Named column, not implicit placement: the breadcrumb and the
+        // workspace actions are each conditional, and an unnamed survivor
+        // slides into the empty slot — which parks the workbar toggle in the
+        // middle of the window.
+        /grid-column:\s*2/,
+        // The middle column is the one that gives way on a narrow window,
+        // truncating its own text instead of squeezing either action cluster.
         /min-width:\s*0/,
       ],
-      'session identity must carve no-drag and yield its own width before the action clusters',
+      'session identity must carve no-drag, hold its column, and yield its own width',
+    );
+    // The strip is a grid precisely so the breadcrumb can line up with a column
+    // that lives OUTSIDE it; laid out in flow it straddled the seam between the
+    // two columns and aligned with neither.
+    assertCssRuleDecls(
+      shell,
+      '.maka-window-titlebar',
+      [/display:\s*grid/, /grid-template-columns:/],
+      'titlebar must lay its three clusters out as named columns',
     );
 
     const ui = stripCssComments(await readFile(UI_STYLES, 'utf8'));
