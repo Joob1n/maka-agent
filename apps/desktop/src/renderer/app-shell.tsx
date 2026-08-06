@@ -2113,6 +2113,11 @@ function AppShellContent({
             takes over, when the first message creates the session. */}
         {navSelection.section === 'sessions' && activeSession && (
           <TitlebarSessionIdentity
+            /* Keyed by session: the open rename is local state and the field is
+               uncontrolled, so a switch that left the instance mounted would
+               carry one session's half-typed name — and its commit — onto the
+               next one. A remount ties the edit to the session it belongs to. */
+            key={activeSession.id}
             sessionName={activeSession.name}
             onRenameSession={(name) => {
               void sessionRowActionHandlers.renameSession(activeSession.id, name);

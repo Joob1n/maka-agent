@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import type { ComponentProps } from 'react';
 import { projectRevisionLinkedSessionTree } from '@maka/core';
 import type { ProjectRecord, SessionSummary, StoredMessage } from '@maka/core';
@@ -239,7 +239,21 @@ function ShellFrame(props: {
          Storybook while the app dropped it — and these stories are the pixel
          review surface, so the drift lands exactly where it is trusted. */
       data-sidebar-state={props.sidebarCollapsed ? 'collapsed' : 'expanded'}
-      style={{ height: '100%', minHeight: 640 }}
+      style={
+        {
+          height: '100%',
+          minHeight: 640,
+          /* Same publication point as production, for the same reason as
+             `data-sidebar-state` above: the titlebar's first grid track is a
+             `calc()` on this variable, and an unset variable makes the whole
+             track list invalid — the breadcrumb then parks against the icon
+             rail instead of the plate seam, so the seam and truncation stories
+             would be reviewing a layout the app never renders. Collapsed is
+             left to the CSS rule, exactly as in the app.
+             `SessionListPanel`'s own default width. */
+          ...(props.sidebarCollapsed ? null : { '--maka-sidenav-width': '260px' }),
+        } as CSSProperties
+      }
     >
       {props.children}
     </div>

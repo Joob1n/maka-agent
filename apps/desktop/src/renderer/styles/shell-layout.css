@@ -303,6 +303,14 @@
     )
     minmax(0, 1fr)
     auto;
+  /* Known, and deliberately not papered over: while the sidebar eases its width
+     over `--duration-large`, this track resolves to its final size on the first
+     frame, so the breadcrumb arrives before the column it is aligned to. Both
+     ways of easing it were measured in Electron's Chromium and neither
+     interpolates — `transition: grid-template-columns` and an `@property`
+     `<length>` on the width variable both jump on frame one. Closing it means
+     moving the sidebar's ease onto a property that does interpolate, which is a
+     change to the sidebar's motion, not to this strip. */
 }
 
 /* Drag regions are hit-tested from element rects, and the top layer is invisible
@@ -336,7 +344,10 @@ dialog:modal {
    conversation plate beneath it. Laid out in flow instead, it anchored to the
    icon rail and landed mid-sidebar — straddling the seam, aligned to neither
    column. Collapsing the sidebar narrows column 1 and the breadcrumb follows it
-   left, still flush with the plate.
+   left — flush with the plate while the sidebar is wide enough to be the
+   binding measure, and held off the icon rail by the strip's own gap once the
+   icons are wider than the collapsed column. Both readings are one rule: the
+   column's floor is the sidebar, its ceiling the icons.
 
    `padding-left` keeps the text off the seam itself. It matches the inset the
    sidebar's own rows carry, so the two columns' text starts read as a pair
@@ -362,6 +373,24 @@ dialog:modal {
   -webkit-app-region: no-drag;
 }
 
+/* Every box between the strip's column and the text has to agree to shrink, or
+   none of them do. `min-width: 0` on the outer box alone clamped only that box:
+   the nav, the crumb buttons and the segments kept `min-width: auto`, so with a
+   long name the text ran on past the clamp — measured 2408px inside a 1320px
+   window — painting over the workspace actions and, worse, spilling the visible
+   tail into the strip's DRAG region, where a click on the session name reaches
+   the OS as a window drag. The ellipsis never engaged, because nothing upstream
+   ever handed these elements a smaller size to ellipsize into. */
+.maka-titlebar-identity__breadcrumbs {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.maka-titlebar-identity__breadcrumbs > ol > li > button {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .maka-titlebar-identity__breadcrumbs > ol {
   min-width: 0;
   flex-wrap: nowrap;
@@ -381,6 +410,27 @@ dialog:modal {
   white-space: nowrap;
 }
 
+/* Astryx styles every non-current crumb as a link, and its hover is an
+   underline. In this app an underline means "this leaves for the open web"
+   (`.maka-web-search-preview a` is its only other use); these two crumbs open a
+   folder and start a rename. Both are in-app actions, so they take the hover
+   the rest of the app's controls take — the `--state-hover-bg` wash — and the
+   underline is declined.
+
+   Keyed on the button rather than the segment span so the wash covers the whole
+   hit target, and specificity (0-2-1) clears the StyleX atom (0-2-0) that
+   declares the underline. */
+.maka-titlebar-identity__breadcrumbs button {
+  border-radius: var(--radius-control);
+  padding-inline: var(--space-1);
+  transition: background-color var(--duration-quick) var(--ease-out-strong);
+}
+
+.maka-titlebar-identity__breadcrumbs button:hover {
+  text-decoration: none;
+  background: var(--state-hover-bg);
+}
+
 /* The session name carries the weight of the pair: it is what the window is
    showing, and the project is the context it sits in. Astryx gives every
    non-current crumb the same secondary ink, and this one has to be non-current
@@ -396,16 +446,28 @@ dialog:modal {
   color: var(--foreground);
 }
 
-/* The rename field stands in for the session crumb, so it matches it exactly —
-   size, weight and ink — because the label must not shift when it becomes
-   editable. Chrome and focus treatment are the sidebar's
-   (`.maka-session-rename-input`): a hairline underline that firms up on focus,
-   since a full outline inside a 36px strip reads as a modal. */
+/* The rename field stands in for the session crumb ALONE — it renders inside
+   that crumb, so the project crumb and the separator keep their places — and it
+   matches the label it replaces exactly in size, weight and ink, because the
+   name must not shift when it becomes editable.
+
+   `field-sizing: content` is what keeps the row still: the field opens at the
+   width of the text it is editing and grows with what is typed. A fixed width
+   made starting a rename shove everything beside it, which is the same jump
+   from the other direction. `min-width` keeps an empty field clickable; the
+   `max-width` is the truncation ceiling the label itself has.
+
+   Chrome and focus treatment are the sidebar's (`.maka-session-rename-input`):
+   a hairline underline that firms up on focus, since a full outline inside a
+   36px strip reads as a modal. */
 .maka-titlebar-identity__rename-input {
   font: var(--maka-text-body);
   font-weight: var(--font-weight-medium);
-  min-width: 12rem;
-  max-width: 20rem;
+  field-sizing: content;
+  min-width: 4rem;
+  /* Bounded by the column, not by a guess: `20rem` alone overflowed the same
+     way the segments did once the window was narrow enough. */
+  max-width: min(20rem, 100%);
   border: 0;
   border-bottom: var(--border-width-hairline) solid oklch(from var(--focus-ring) l c h / 0.4);
   background: transparent;

@@ -67,25 +67,6 @@ export function TitlebarSessionIdentity(props: {
   const copy = getConversationCopy(useUiLocale());
   const [renaming, setRenaming] = useState(false);
 
-  if (renaming) {
-    return (
-      <div className="maka-titlebar-identity" data-maka-contract="titlebar-identity">
-        <InlineRenameInput
-          className="maka-titlebar-identity__rename-input"
-          defaultValue={props.sessionName}
-          ariaLabel={copy.sessions.renameAriaLabel}
-          onCommit={(name) => {
-            setRenaming(false);
-            // An empty field is an abandoned edit, not a request for a session
-            // with no name — the sidebar's rename reads it the same way.
-            if (name && name !== props.sessionName) props.onRenameSession(name);
-          }}
-          onCancel={() => setRenaming(false)}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="maka-titlebar-identity" data-maka-contract="titlebar-identity">
       {/* `default`, not `supporting`. Astryx documents supporting as the variant
@@ -99,6 +80,12 @@ export function TitlebarSessionIdentity(props: {
         className="maka-titlebar-identity__breadcrumbs"
         separator={<Icon icon="chevronRight" size="xsm" />}
       >
+        {/* The action is named inside the button, not on the <li>: BreadcrumbItem
+            spreads unknown props onto the list item, so an `aria-label` there
+            would leave the control itself still announced as the bare
+            "示例项目, button" — a name that says where it points but not that
+            pressing it does anything. The hidden phrase joins the visible text
+            in the name computation; `title` stays for the mouse. */}
         {props.project ? (
           <BreadcrumbItem onClick={props.project.onOpenFolder}>
             <span
@@ -107,22 +94,50 @@ export function TitlebarSessionIdentity(props: {
             >
               {props.project.name}
             </span>
+            <span className="maka-visually-hidden">
+              {copy.chat.openProjectFolderAction}
+            </span>
           </BreadcrumbItem>
         ) : null}
-        {/* `isCurrent={false}`, not the default: a current crumb renders as a
-            plain <span aria-current="page"> and DROPS onClick, so the rename
-            affordance would be dead and keyboard-unreachable. Passing false
-            also opts out of the auto-last-item detection, which would put it
-            back. What is left is a link-styled <button> — correct here, since
-            this crumb is an action, not a location. */}
-        <BreadcrumbItem isCurrent={false} onClick={() => setRenaming(true)}>
-          <span
-            className="maka-titlebar-identity__segment maka-titlebar-identity__segment--session"
-            title={copy.sessions.renameAriaLabel}
-          >
-            {props.sessionName}
-          </span>
-        </BreadcrumbItem>
+        {/* The rename happens INSIDE this crumb, not in place of the whole
+            trail. Swapping the trail wholesale unmounted the project crumb and
+            the separator, so starting a rename made the two things beside the
+            field disappear and the row re-lay out around a fixed-width input.
+            The edit is to one segment; only that segment should change. */}
+        {renaming ? (
+          <BreadcrumbItem isCurrent={false}>
+            <InlineRenameInput
+              className="maka-titlebar-identity__rename-input"
+              defaultValue={props.sessionName}
+              ariaLabel={copy.sessions.renameAriaLabel}
+              onCommit={(name) => {
+                setRenaming(false);
+                // An empty field is an abandoned edit, not a request for a
+                // session with no name — the sidebar's rename reads it the
+                // same way.
+                if (name && name !== props.sessionName) props.onRenameSession(name);
+              }}
+              onCancel={() => setRenaming(false)}
+            />
+          </BreadcrumbItem>
+        ) : (
+          /* `isCurrent={false}`, not the default: a current crumb renders as a
+             plain <span aria-current="page"> and DROPS onClick, so the rename
+             affordance would be dead and keyboard-unreachable. Passing false
+             also opts out of the auto-last-item detection — which would not
+             take the button away, but would mark an ACTION as the current
+             page. What is left is a link-styled <button>, correct here since
+             this crumb is something you do, not somewhere you are. */
+          <BreadcrumbItem isCurrent={false} onClick={() => setRenaming(true)}>
+            <span
+              className="maka-titlebar-identity__segment maka-titlebar-identity__segment--session"
+              title={copy.sessions.renameAriaLabel}
+            >
+              {props.sessionName}
+            </span>
+            <span className="maka-visually-hidden">{copy.sessions.renameAriaLabel}</span>
+          </BreadcrumbItem>
+        )}
       </Breadcrumbs>
     </div>
   );

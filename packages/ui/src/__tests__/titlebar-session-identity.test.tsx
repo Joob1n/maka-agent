@@ -49,9 +49,12 @@ describe('TitlebarSessionIdentity', () => {
   });
 
   it('makes both segments real controls, not decorated text', () => {
-    // Regression: BreadcrumbItem renders `isCurrent` items as a plain
-    // <span aria-current="page"> and DISCARDS onClick. Rendered that way the
-    // rename affordance is dead and unreachable by keyboard.
+    // Regression: BreadcrumbItem renders an `isCurrent` item as a plain
+    // <span aria-current="page"> and DISCARDS onClick, so the rename
+    // affordance would be dead and unreachable by keyboard. What this pins is
+    // the explicit-true form; omitting the prop keeps the button and only
+    // adds `aria-current` from a post-mount effect, which static markup
+    // cannot see either way.
     const html = render({ sessionName: 'Rerun head-to-head', projectName: 'maka-agent' });
     assert.equal(
       html.match(/<button[^>]*type="button"/g)?.length,
