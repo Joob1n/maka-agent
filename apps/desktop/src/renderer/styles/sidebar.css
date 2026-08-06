@@ -280,6 +280,14 @@
   font-weight: var(--font-weight-medium);
 }
 
+/* The subtree of a row being renamed. It stands in for SideNavItem's own
+   `childrenInner` wrapper, whose entire contribution to layout is this inset —
+   so descendant rows land exactly where they were before the edit began, at
+   every depth, since each level adds its own. */
+.maka-session-subtree {
+  padding-inline-start: var(--space-6);
+}
+
 /* Subagent rows carry a leading Bot icon. Without it here the row loses its
    one mark of nesting for the length of the edit, and the name slides left. */
 .maka-session-row--editing-icon {

@@ -373,7 +373,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
     : (userCollapsed ?? true);
 
   if (props.editing) {
-    return (
+    const renameRow = (
       <SessionRenameRow
         session={props.session}
         nested={props.nested}
@@ -386,6 +386,26 @@ const SessionNavRow = memo(function SessionNavRow(props: {
         }}
         onCancel={() => props.setEditingSessionId(null)}
       />
+    );
+    // A leaf row is one element in the list, exactly as its static form is;
+    // only a branch needs the wrapper, because SideNavItem keeps its head and
+    // its subtree inside one element and a bare pair here would take the
+    // list's gap twice, pushing every row below it down.
+    if (!hasChildren || isCollapsed) return renameRow;
+    return (
+      <div className="maka-session-branch">
+        {renameRow}
+        {/* The subagents keep running while their parent is being renamed, so
+            they keep their rows. SideNavItem owns the subtree in the static
+            row, and the stand-in row cannot host it — so the stand-in restates
+            the one thing SideNavItem's subtree wrapper does, which is a
+            `--spacing-6` inset (its `childrenInner`). Without this the whole
+            branch unmounted for the length of the edit: the list lost every
+            descendant row and the parent collapsed from 64px to 32px. */}
+        <div className="maka-session-subtree" role="group" aria-label={props.session.name}>
+          {props.childSessions?.map((child) => props.renderSessionTree?.(child, true))}
+        </div>
+      </div>
     );
   }
 
@@ -474,7 +494,7 @@ function resolveActiveSessionAncestorIds(
  *
  * A rename replaces the name, not the row. Astryx forces the swap to be
  * wholesale here — `SideNavItem` takes `label` as a `string` and renders the
- * row as one `<button>`, and HTML does not allow an `<input>` inside a button —
+ * row as one `<button>`, and HTML does not allow a text field inside a button —
  * so what stands in for the row has to restate its parts, or they vanish for
  * the length of the edit. They did: the leading icon, and the trailing column
  * that holds the status dot and the actions menu, both disappeared and the

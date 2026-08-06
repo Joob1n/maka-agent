@@ -242,7 +242,12 @@ test('starting a rename leaves the row exactly where it was', async ({
       const name = first.querySelector('input') ?? first.querySelector('.astryx-side-nav-item > span');
       const inner = (first.querySelector('input') ??
         first.querySelector('.astryx-side-nav-item')) as HTMLElement;
-      const next = first.parentElement?.children[1] as HTMLElement | undefined;
+      // The row after this one, found by contract rather than by position in a
+      // parent: a branch row wraps its head and subtree together while a leaf
+      // row does not, so "the next sibling" is not the same node in both.
+      const next = document.querySelectorAll('[data-maka-contract="session-row"]')[1] as
+        | HTMLElement
+        | undefined;
       const style = getComputedStyle(inner);
       return {
         rowHeight: Math.round(first.getBoundingClientRect().height),
