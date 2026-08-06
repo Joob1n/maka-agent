@@ -281,6 +281,73 @@ dialog:modal {
   color: var(--foreground-secondary);
 }
 
+/* The session's identity, left-aligned right after the icon rail.
+
+   It is the next flex item in the titlebar row, not a centered third column:
+   the anchor is the rail, so the gap between the last icon and the project name
+   is the same whether the sidebar is expanded or collapsed, and the text never
+   shifts when the columns resize. Its own margin adds to the row's `--space-2`
+   gap, which reads as one cluster of icons plus a separate label rather than a
+   third icon.
+
+   Both plates below reserve the full `--h-titlebar` (`.mainColumn` via
+   `--maka-plate-titlebar-clearance`, `.maka-session-panel` directly), so this
+   strip is empty for its whole width — the label collides with nothing whether
+   it lands over the sidebar column or the conversation column.
+
+   `flex: 0 1 auto` + `min-width: 0`: on a narrow window this is what gives way,
+   truncating its own segments instead of squeezing the two action clusters that
+   flank it. `no-drag` covers only this box — the strip stays draggable on both
+   sides of the text, exactly as it already is around the icon clusters. */
+.maka-titlebar-identity {
+  min-width: 0;
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-2);
+  -webkit-app-region: no-drag;
+}
+
+.maka-titlebar-identity__breadcrumbs > ol {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.maka-titlebar-identity__breadcrumbs > ol > li {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.maka-titlebar-identity__segment {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The rename field stands in for the breadcrumb, so it takes the breadcrumb's
+   supporting type rather than the browser's default input font — the label must
+   not change size when it becomes editable. Chrome and focus treatment are the
+   sidebar's (`.maka-session-rename-input`): a hairline underline that firms up
+   on focus, since a full outline inside a 36px strip reads as a modal. */
+.maka-titlebar-identity__rename-input {
+  font: var(--maka-text-supporting);
+  min-width: 12rem;
+  max-width: 20rem;
+  border: 0;
+  border-bottom: var(--border-width-hairline) solid oklch(from var(--focus-ring) l c h / 0.4);
+  background: transparent;
+  color: var(--foreground);
+  outline: 0;
+  padding: 1px 0;
+}
+
+.maka-titlebar-identity__rename-input:focus {
+  border-bottom-color: var(--focus-ring);
+}
+
 .mainColumn {
   min-width: 0;
   min-height: 0;

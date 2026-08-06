@@ -228,6 +228,11 @@ export function SessionContextLayer(props: {
       data-session-context-layer="true"
     >
       <div className="maka-session-context__inner">
+        {/* Lineage only. The session's own name moved to the window titlebar
+            (TitlebarSessionIdentity), which shows it in every view and survives
+            a collapsed sidebar; repeating it one row below was the same string
+            twice. What stays is what the titlebar cannot answer: which session
+            this one branched FROM. */}
         <div className="maka-session-context__lineage">
           {props.branch ? (
             <Breadcrumbs
@@ -253,9 +258,7 @@ export function SessionContextLayer(props: {
                 </span>
               </BreadcrumbItem>
             </Breadcrumbs>
-          ) : (
-            <Text type="supporting" maxLines={1}>{props.sessionName}</Text>
-          )}
+          ) : null}
         </div>
         {contextItems.length > 0 && (
           <div className="maka-session-context__cluster">

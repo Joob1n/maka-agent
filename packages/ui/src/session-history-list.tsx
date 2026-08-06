@@ -11,6 +11,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { useMountedRef } from './use-mounted-ref.js';
+import { InlineRenameInput } from './inline-rename-input.js';
 import type { ProjectRecord, SessionSummary, UiLocale } from '@maka/core';
 import { formatCompactTimestamp } from '@maka/core';
 import {
@@ -473,47 +474,18 @@ function SessionRenameRow(props: {
   onCancel(): void;
 }) {
   const copy = getConversationCopy(useUiLocale()).sessions;
-  const inputRef = useRef<HTMLInputElement>(null);
-  const escapeCancelledRef = useRef(false);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-
   return (
     <div
       className="maka-session-row maka-session-row--editing"
       data-maka-contract="session-row"
       data-session-id={props.session.id}
     >
-      <input
-        ref={inputRef}
+      <InlineRenameInput
         className="maka-session-rename-input"
         defaultValue={props.session.name}
-        maxLength={80}
-        aria-label={copy.renameAriaLabel}
-        onBlur={(event) => {
-          if (escapeCancelledRef.current) {
-            escapeCancelledRef.current = false;
-            return;
-          }
-          props.onCommit(event.currentTarget.value.trim());
-        }}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.nativeEvent.isComposing || event.key === 'Process') return;
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            props.onCommit(event.currentTarget.value.trim());
-          } else if (event.key === 'Escape') {
-            event.preventDefault();
-            escapeCancelledRef.current = true;
-            props.onCancel();
-          }
-        }}
-        autoComplete="off"
-        spellCheck={false}
+        ariaLabel={copy.renameAriaLabel}
+        onCommit={props.onCommit}
+        onCancel={props.onCancel}
       />
     </div>
   );
@@ -526,46 +498,17 @@ function ProjectRenameRow(props: {
   onCancel(): void;
 }) {
   const copy = getConversationCopy(useUiLocale()).sessions;
-  const inputRef = useRef<HTMLInputElement>(null);
-  const escapeCancelledRef = useRef(false);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-
   return (
     <div
       data-project-id={props.groupKey}
       className="maka-session-row maka-session-row--editing"
     >
-      <input
-        ref={inputRef}
+      <InlineRenameInput
         className="maka-session-rename-input"
         defaultValue={props.label}
-        maxLength={80}
-        aria-label={copy.projectRename}
-        onBlur={(event) => {
-          if (escapeCancelledRef.current) {
-            escapeCancelledRef.current = false;
-            return;
-          }
-          props.onCommit(event.currentTarget.value.trim());
-        }}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.nativeEvent.isComposing || event.key === 'Process') return;
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            props.onCommit(event.currentTarget.value.trim());
-          } else if (event.key === 'Escape') {
-            event.preventDefault();
-            escapeCancelledRef.current = true;
-            props.onCancel();
-          }
-        }}
-        autoComplete="off"
-        spellCheck={false}
+        ariaLabel={copy.projectRename}
+        onCommit={props.onCommit}
+        onCancel={props.onCancel}
       />
     </div>
   );

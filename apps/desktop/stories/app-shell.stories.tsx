@@ -3,7 +3,14 @@ import { useState, type ReactNode } from 'react';
 import type { ComponentProps } from 'react';
 import { projectRevisionLinkedSessionTree } from '@maka/core';
 import type { ProjectRecord, SessionSummary, StoredMessage } from '@maka/core';
-import { ChatSurfaceLayout, ChatView, Composer, SessionListPanel } from '@maka/ui';
+import {
+  ChatSurfaceLayout,
+  ChatView,
+  Composer,
+  deriveTitlebarProjectName,
+  SessionListPanel,
+  TitlebarSessionIdentity,
+} from '@maka/ui';
 import type { ChatModelChoice, SessionViewMode, TurnViewModel } from '@maka/ui';
 import { AppShellTopbarActions, AppShellWorkspaceTopActions } from '../src/renderer/app-shell-chrome-actions';
 import { AppShellDetailPanel } from '../src/renderer/app-shell-detail-panel';
@@ -325,6 +332,23 @@ function ComposedShell(props: {
           onToggleSidebar={() => setCollapsed((current) => !current)}
           onOpenSearchModal={noop}
         />
+        {/* Derived from the same session and project catalog the sidebar reads,
+            not hand-passed: a story cannot show a project the session does not
+            belong to. Absent for the 新任务 state, where production has no
+            session to name. */}
+        {active && (
+          <TitlebarSessionIdentity
+            sessionName={active.name}
+            onRenameSession={noop}
+            project={(() => {
+              const name = deriveTitlebarProjectName({
+                projectName: catalogProjects.find((item) => item.id === active.projectId)?.name,
+                projectPath: active.cwd,
+              });
+              return name ? { name, onOpenFolder: noop } : undefined;
+            })()}
+          />
+        )}
         <AppShellWorkspaceTopActions
           workbarAvailable
           workbarCollapsed={false}
@@ -790,6 +814,32 @@ export const SessionContextLayer: Story = {
         },
         onBranchBannerClick: noop,
         onRevisionNavigate: noop,
+      }}
+    />
+  ),
+};
+
+// The titlebar states the session's identity in every session view, so the
+// stories above already show its ordinary state. These two cover what they
+// cannot: a session with no directory to name, and a name long enough to reach
+// the action cluster.
+
+// Real path: a session started before any project was picked. The breadcrumb
+// collapses to the session name — a leading empty crumb would read as a project
+// whose name failed to load.
+export const TitlebarIdentityWithoutProject: Story = {
+  render: () => <ComposedShell session={{ projectId: null, cwd: undefined }} />,
+};
+
+// Real path: a long auto-generated session name, sidebar collapsed so the
+// identity sits closest to the conversation column. It must truncate itself
+// rather than push the workbar toggle off the strip.
+export const TitlebarIdentityTruncated: Story = {
+  render: () => (
+    <ComposedShell
+      sidebarCollapsed
+      session={{
+        name: 'Chat Surface 会话上下文在极窄窗口中的响应式收敛与信息优先级验证',
       }}
     />
   ),

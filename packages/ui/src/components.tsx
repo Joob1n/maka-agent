@@ -22,6 +22,8 @@ export type { ChatSurfaceLayoutProps } from './chat-surface-layout.js';
 export { ChatView } from './chat-view.js';
 export { WorkspacePicker } from './workspace-picker.js';
 export type { WorkspacePickerModel } from './workspace-picker.js';
+export { deriveTitlebarProjectName, TitlebarSessionIdentity } from './titlebar-session-identity.js';
+export type { TitlebarProject } from './titlebar-session-identity.js';
 export type {
   TurnFooterActionMeta,
   TurnLineageBadge,

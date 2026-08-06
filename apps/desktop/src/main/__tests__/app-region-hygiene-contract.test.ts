@@ -62,6 +62,19 @@ describe('app-region hygiene', () => {
       [/-webkit-app-region:\s*no-drag/],
       'workspace action cluster must carve no-drag',
     );
+    assertCssRuleDecls(
+      shell,
+      '.maka-titlebar-identity',
+      [
+        /-webkit-app-region:\s*no-drag/,
+        // Both segments are buttons; without the carve-out their clicks reach
+        // the OS as window drags, the same failure the third titlebar button
+        // once had.
+        /flex:\s*0\s+1\s+auto/,
+        /min-width:\s*0/,
+      ],
+      'session identity must carve no-drag and yield its own width before the action clusters',
+    );
 
     const ui = stripCssComments(await readFile(UI_STYLES, 'utf8'));
     assertCssRuleDecls(

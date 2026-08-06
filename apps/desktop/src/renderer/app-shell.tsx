@@ -41,10 +41,12 @@ import {
   SessionListPanel,
   SkillsPage,
   type SessionViewMode,
+  TitlebarSessionIdentity,
   type TurnFooterActionMeta,
   type WorkspacePickerModel,
   useToast,
   activeInteractionFor,
+  deriveTitlebarProjectName,
   enqueueInteraction,
   getConversationCopy,
   getSharedUiCopy,
@@ -1310,6 +1312,13 @@ function AppShellContent({
     },
     onSelectNoProject: selectNoProject,
   };
+  // The titlebar names the directory the ACTIVE session runs in, so it reads
+  // the same projected project state the picker does — `projectInfo` already
+  // resolves to the session's own cwd once a session owns it.
+  const titlebarProjectName = deriveTitlebarProjectName({
+    projectName: currentProject?.name,
+    projectPath: projectInfo?.projectPath,
+  });
   const sessionProjectGroups = useMemo(
     () => deriveProjectGroups(visibleSessions, projects, uiLocale),
     [visibleSessions, projects, uiLocale],
@@ -2080,6 +2089,24 @@ function AppShellContent({
           sidebarToggleHidden={settingsOpen}
           onOpenSearchModal={() => setSearchModalOpen(true)}
         />
+        {/* Only a session has an identity to state. The other views name
+            themselves in the nav column they are selected from, and the
+            new-task surface still shows its project in the composer's
+            WorkspacePicker — which stops rendering at the exact moment this
+            takes over, when the first message creates the session. */}
+        {navSelection.section === 'sessions' && activeSession && (
+          <TitlebarSessionIdentity
+            sessionName={activeSession.name}
+            onRenameSession={(name) => {
+              void sessionRowActionHandlers.renameSession(activeSession.id, name);
+            }}
+            project={
+              titlebarProjectName
+                ? { name: titlebarProjectName, onOpenFolder: () => void openProjectFolder() }
+                : undefined
+            }
+          />
+        )}
         {!VIEWS_WITHOUT_WORKSPACE_ACTIONS.has(agentsView) && (
           <AppShellWorkspaceTopActions
             workbarAvailable={navSelection.section === 'sessions' && Boolean(activeId)}
