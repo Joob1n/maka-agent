@@ -207,6 +207,12 @@ test('each crumb announces its action, not just its label', async ({
 test('a long session name truncates inside the no-drag rect', async ({
   sidebarLongSessionsWindow: page,
 }) => {
+  // 480px is the app's own window floor (SAFE_MIN_WIDTH in window-state.ts).
+  // Pinning it is what makes the overflow certain: the field caps a name at 80
+  // characters, so on a wide enough window — CI's is wider than this machine's
+  // — the longest name a user can type still fits and the assertion passes for
+  // the wrong reason.
+  await page.setViewportSize({ width: 480, height: 800 });
   const identity = page.locator(IDENTITY);
   await identity.getByRole('button', { name: /会话 00/ }).click();
   const field = identity.getByRole('textbox', { name: '重命名对话' });
@@ -233,7 +239,7 @@ test('a long session name truncates inside the no-drag rect', async ({
   expect(overflow, 'titlebar identity not laid out').not.toBeNull();
   expect(overflow!.navRight).toBeLessThanOrEqual(overflow!.boxRight + 1);
   expect(overflow!.boxRight).toBeLessThanOrEqual(overflow!.actionsLeft + 1);
-  expect(overflow!.clipped).toBe(true);
+  expect(overflow!.clipped, JSON.stringify(overflow)).toBe(true);
 });
 
 /**
