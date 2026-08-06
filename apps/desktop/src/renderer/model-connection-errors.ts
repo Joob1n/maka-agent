@@ -57,8 +57,10 @@ export function cleanErrorMessage(error: unknown): string {
 }
 
 export function cleanEventMessage(message: string): string {
+  // Electron serializes a rejected handler as `${error.name}: ${error.message}`,
+  // so custom classes arrive as e.g. "ConnectionModelDiscoveryPreconditionError: …".
   return message
-    .replace(/^Error invoking remote method '[^']+': Error: /, '')
+    .replace(/^Error invoking remote method '[^']+': (?:[A-Za-z_$][\w$]*)?Error: /, '')
     .replace(NO_REAL_CONNECTION_REASON_RE, '')
     .replace(`${NO_REAL_CONNECTION_CODE}: `, '');
 }
