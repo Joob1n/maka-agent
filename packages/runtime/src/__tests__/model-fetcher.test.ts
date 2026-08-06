@@ -343,6 +343,34 @@ describe('fetchProviderModels', () => {
     );
   });
 
+  test('Anthropic model fetch accepts a stored /v1 base URL without doubling it', async () => {
+    let observedPath = '';
+    let observedApiKey = '';
+    const server = await startJsonServer((request, response) => {
+      observedPath = request.url ?? '';
+      observedApiKey = (request.headers['x-api-key'] as string | undefined) ?? '';
+      respondJson(response, 200, { data: [{ id: 'claude-sonnet-4-5-20250929' }] });
+    });
+
+    const models = await fetchProviderModels(
+      {
+        slug: 'anthropic-main',
+        name: 'Anthropic',
+        providerType: 'anthropic',
+        baseUrl: `${server.url}/v1`,
+        defaultModel: 'claude-sonnet-4-5-20250929',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      'anthropic-api-key',
+    );
+
+    assert.equal(observedPath, '/v1/models');
+    assert.equal(observedApiKey, 'anthropic-api-key');
+    assert.deepEqual(models, [{ id: 'claude-sonnet-4-5-20250929' }]);
+  });
+
   test('Codex OAuth discovers models from the chatgpt.com/backend-api/codex/models endpoint', async () => {
     const requests: Array<{ url: string; authorization: string | undefined }> = [];
     const server = await startJsonServer((request, response) => {
