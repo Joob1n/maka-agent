@@ -272,6 +272,7 @@ Before submitting code, run typecheck, build, and focused tests proportionate to
 - [Documentation index and authority map](./docs/README.md)
 - [Backend architecture](./ARCHITECTURE.md)
 - [Product design](./DESIGN.md)
+- [Contributing guide](./CONTRIBUTING.md)
 - [Security policy](./SECURITY.md)
 
 ## License
