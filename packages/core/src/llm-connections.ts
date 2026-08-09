@@ -220,6 +220,22 @@ export function reconcileConnectionAfterEnabledModelsChange(
  * non-empty inventory, fetched or a cached fallback catalog, means the user
  * has had a list in front of them.
  */
+/**
+ * Resolve a stored id against one inventory. Whether an id is superseded is a
+ * property of the inventory as well as of the caller, so this rewrites only when
+ * a caller supplied a table, the stored id is absent, AND its alias is present —
+ * the exact case where a literal comparison misreads a rename as a removal.
+ */
+function supersededModelId(
+  modelId: string,
+  live: ReadonlySet<string>,
+  aliases: Readonly<Record<string, string>> | undefined,
+): string {
+  if (aliases === undefined || live.has(modelId)) return modelId;
+  const alias = aliases[modelId];
+  return alias !== undefined && live.has(alias) ? alias : modelId;
+}
+
 export function reconcileConnectionAfterModelFetch(
   connection: {
     defaultModel?: unknown;
@@ -228,6 +244,14 @@ export function reconcileConnectionAfterModelFetch(
     hasModelInventory?: boolean;
   },
   models: readonly { id?: unknown }[],
+  options?: {
+    /**
+     * Ids this provider has renamed, mapped to their current form. Omitted by
+     * default: model ids are opaque here, so nothing is rewritten unless a
+     * caller that knows the provider's naming supplies the table.
+     */
+    readonly aliases?: Readonly<Record<string, string>>;
+  },
 ): {
   defaultModel: string;
   enabledModelIds: string[];
@@ -242,9 +266,23 @@ export function reconcileConnectionAfterModelFetch(
     liveIds.push(id);
   }
 
-  const previousDefault =
-    typeof connection.defaultModel === 'string' ? connection.defaultModel.trim() : '';
-  const previousEnabled = connectionEnabledModelIds(connection);
+  // Migrate before matching: a renamed id names a model the inventory still
+  // offers, so comparing it literally classifies a live model as retired.
+  const previousDefault = supersededModelId(
+    typeof connection.defaultModel === 'string' ? connection.defaultModel.trim() : '',
+    live,
+    options?.aliases,
+  );
+  // Dedupe after mapping: a connection holding both forms collapses onto one id
+  // here, and one of the returns below hands this list back without passing it
+  // through connectionEnabledModelIds.
+  const previousEnabled = [
+    ...new Set(
+      connectionEnabledModelIds(connection).map((id) =>
+        supersededModelId(id, live, options?.aliases),
+      ),
+    ),
+  ];
 
   if (liveIds.length === 0) {
     const defaultModel = previousDefault;

@@ -280,6 +280,43 @@ describe('runtime policy stores', () => {
     });
   });
 
+  // The migrating half of this behaviour is covered in @maka/core: seeding an
+  // OAuth credential for the provider that declares aliases is refused here,
+  // since the vault only accepts client-supplied OAuth for GitHub Copilot.
+  test('a relay keeps its own ids opaque through a model refresh', async () => {
+    await withInteractiveOwner(async ({ stores }) => {
+      // Same ids, different provider. A relay may serve `claude-*` names as its
+      // own identifiers, so nothing here may be rewritten on Anthropic's behalf.
+      const connection = await createConnection(stores, 0, {
+        ...connectionDraft('alias-relay', 'openai-compatible', 'Alias Relay'),
+        baseUrl: 'https://relay.example/v1',
+        enabledModelIds: ['claude-haiku-4-5-20251001'],
+        relayModelProfiles: { 'claude-haiku-4-5-20251001': { vision: true } },
+      });
+
+      const credential = await stores.credentialVault.set({
+        locator: connectionCredential(connection, 'api_key'),
+        expected: null,
+        secret: 'sk-relay',
+      });
+      assert.equal(credential.kind, 'committed');
+
+      const fetch = await stores.operations.beginModelFetch(connection.connectionId);
+      assert.equal(fetch.kind, 'ready');
+      if (fetch.kind !== 'ready') return;
+
+      const discovered = await stores.operations.completeModelFetch(fetch.ticket, {
+        models: [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }],
+        source: 'fetched',
+        fetchedAt: 1_800_000_000_000,
+      });
+      assert.equal(discovered.kind, 'committed');
+      if (discovered.kind !== 'committed') return;
+      // Repaired against the live list like any other id, not migrated.
+      assert.deepEqual(discovered.snapshot.connections[0]?.enabledModelIds, ['claude-opus-5']);
+    });
+  });
+
   test('a model refresh prunes profiles for models the inventory retired', async () => {
     await withInteractiveOwner(async ({ stores }) => {
       const connection = await createConnection(stores, 0, {

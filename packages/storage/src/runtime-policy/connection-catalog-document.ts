@@ -31,6 +31,7 @@ import {
   PROVIDER_DEFAULTS,
   reconcileConnectionAfterModelFetch,
 } from '@maka/core/llm-connections';
+import { modelIdAliasesForProvider } from '@maka/core/model-metadata';
 import { pruneRelayModelProfiles } from '@maka/core/model-thinking';
 import { deepFreeze, nextRevision, record, revision, unique } from './codec.js';
 import {
@@ -309,6 +310,7 @@ export class ConnectionCatalogDocumentOwner {
               hasModelInventory: previous.models.length > 0,
             },
             result.models,
+            { aliases: modelIdAliasesForProvider(previous.providerType) },
           )
         : {
             defaultModel: currentDefaultTarget?.modelId ?? previous.enabledModelIds[0] ?? '',
