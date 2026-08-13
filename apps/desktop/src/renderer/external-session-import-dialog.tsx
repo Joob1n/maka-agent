@@ -14,7 +14,10 @@ import { type ExternalSessionSummary } from '@maka/core/external-session';
 import { type SessionSummary } from '@maka/core/session';
 import { Spinner, useUiLocale } from '@maka/ui';
 import { ICON_SIZE, Upload } from '@maka/ui/icons';
-import { getExternalSessionImportCopy } from './locales/external-session-import-copy.js';
+import {
+  type ExternalSessionImportCopy,
+  getExternalSessionImportCopy,
+} from './locales/external-session-import-copy.js';
 import { localizedShellErrorMessage } from './locales/shell-copy.js';
 import { ExternalSessionImportLifecycle } from './external-session-import-lifecycle.js';
 
@@ -240,7 +243,7 @@ export function ExternalSessionImportDialog(props: {
                       <SegmentedControlItem
                         key={id}
                         value={id}
-                        label={sourceLabel(id, copy.codex)}
+                        label={sourceLabel(id, copy)}
                       />
                     ))}
                   </SegmentedControl>
@@ -393,6 +396,8 @@ export function ExternalSessionImportDialog(props: {
   );
 }
 
-function sourceLabel(adapterId: string, codexLabel: string): string {
-  return adapterId === 'codex' ? codexLabel : adapterId;
+function sourceLabel(adapterId: string, copy: ExternalSessionImportCopy): string {
+  if (adapterId === 'codex') return copy.codex;
+  if (adapterId === 'claude-code') return copy.claudeCode;
+  return adapterId;
 }

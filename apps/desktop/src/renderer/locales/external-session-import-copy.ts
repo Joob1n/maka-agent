@@ -1,10 +1,11 @@
 import type { UiCatalog, UiLocale } from '@maka/core/ui-locale';
 
-type ExternalSessionImportCopy = {
+export type ExternalSessionImportCopy = {
   title: string;
   description: string;
   sourceLabel: string;
   codex: string;
+  claudeCode: string;
   includeArchived: string;
   loading: string;
   emptyTitle: string;
@@ -33,12 +34,13 @@ const COPY = {
     description: '选择一个本机 Agent 会话，将原始对话记录转换为 Maka 会话。',
     sourceLabel: '来源',
     codex: 'Codex',
+    claudeCode: 'Claude Code',
     includeArchived: '包含已归档会话',
     loading: '正在读取外部会话…',
     emptyTitle: '没有可导入的会话',
     emptyDescription: '当前来源中没有找到符合条件的根会话。',
     unavailableTitle: '没有检测到支持的 Agent',
-    unavailableDescription: 'Maka 会在本机读取 Codex 的会话目录，不会修改其中的文件。',
+    unavailableDescription: 'Maka 会在本机读取 Codex 与 Claude Code 的会话目录，不会修改其中的文件。',
     loadFailedTitle: '无法读取外部会话',
     loadFailedFallback: '外部会话目录暂时无法读取，请重试。',
     retry: '重试',
@@ -60,12 +62,14 @@ const COPY = {
     description: 'Choose a local Agent conversation and convert its raw history into a Maka Session.',
     sourceLabel: 'Source',
     codex: 'Codex',
+    claudeCode: 'Claude Code',
     includeArchived: 'Include archived conversations',
     loading: 'Reading external conversations…',
     emptyTitle: 'No conversations to import',
     emptyDescription: 'No matching root conversations were found in this source.',
     unavailableTitle: 'No supported Agent detected',
-    unavailableDescription: "Maka reads Codex's local Session directory without modifying its files.",
+    unavailableDescription:
+      'Maka reads the local Session directories of Codex and Claude Code without modifying their files.',
     loadFailedTitle: 'Could not read external conversations',
     loadFailedFallback: 'The external Session directory is temporarily unavailable. Try again.',
     retry: 'Retry',
