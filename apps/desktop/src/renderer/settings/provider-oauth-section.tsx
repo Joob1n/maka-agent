@@ -62,6 +62,10 @@ export function useOAuthCards(props: { query?: string }) {
     xai: null,
   });
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  // The retired row is a notice for people who already signed in. It was never
+  // shown to anyone else — the card sat behind an experimental gate — so it is
+  // rendered only when the catalog actually holds one of those connections.
+  const [hasRetiredConnection, setHasRetiredConnection] = useState(false);
   const normalizedQuery = props.query?.trim().toLocaleLowerCase() ?? '';
 
   function matchesQuery(card: { id: string; name: string; description: string }): boolean {
@@ -79,6 +83,10 @@ export function useOAuthCards(props: { query?: string }) {
     // state: clearing the search then revealed signed-in accounts rendering as
     // "可用". The retired row has no account state to read.
     const cardsToRefresh = cards.filter((card) => card.id !== 'claude');
+    const retired = await window.maka.connections
+      .list()
+      .then((list) => list.some((item) => item.providerType === 'claude-subscription'))
+      .catch(() => false);
     const results = await Promise.all(
       cardsToRefresh.map(async (card) => {
         try {
@@ -90,6 +98,7 @@ export function useOAuthCards(props: { query?: string }) {
       }),
     );
     if (!mountedRef.current || refreshTicketRef.current !== ticket) return false;
+    setHasRetiredConnection(retired);
     const failures = results.filter((result) => 'error' in result);
     setCardStates((prev) => {
       const next = { ...prev };
@@ -122,6 +131,7 @@ export function useOAuthCards(props: { query?: string }) {
   }, []);
 
   const visibleCards: OAuthCard[] = cards
+    .filter((card) => card.id !== 'claude' || hasRetiredConnection)
     .filter(matchesQuery)
     .map((card) => {
       const snapshot = cardStates[card.id];
@@ -170,7 +180,7 @@ function modelOAuthCards(copy: ProviderSettingsCopy['oauthSection']): ReadonlyAr
   description: string;
 }> {
   return [
-    { id: 'claude', providerType: 'claude-subscription', name: 'Claude Code', description: copy.claudeDescription },
+    { id: 'claude', providerType: 'claude-subscription', name: 'Claude Code', description: copy.claudeSubtitle },
     { id: 'codex', providerType: 'openai-codex', name: 'OpenAI Codex', description: copy.codexDescription },
     { id: 'github-copilot', providerType: 'github-copilot', name: 'GitHub Copilot', description: copy.copilotDescription },
     { id: 'xai', providerType: 'xai-oauth', name: 'xAI Grok', description: copy.xaiDescription },

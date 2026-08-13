@@ -1,4 +1,4 @@
-import { Banner, Text, VStack, useUiLocale } from '@maka/ui';
+import { Banner, useUiLocale } from '@maka/ui';
 import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 
 /**
@@ -13,13 +13,6 @@ export function ClaudeSubscriptionCard() {
   const locale = useUiLocale();
   const copy = getProviderSettingsCopy(locale).oauthSection;
   return (
-    <VStack gap={3}>
-      <Banner
-        status="info"
-        title={copy.claudeRetiredTitle}
-        description={copy.claudeRetiredBody}
-      />
-      <Text>{copy.claudeRetiredAction}</Text>
-    </VStack>
+    <Banner status="info" title={copy.claudeRetiredTitle} description={copy.claudeRetiredBody} />
   );
 }

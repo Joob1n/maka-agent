@@ -698,7 +698,7 @@ export interface MakaBridge {
       | { ok: false; reason: SearchErrorReason; message: string }
     >;
   };
-    openAiCodex: {
+  openAiCodex: {
     isExperimentalEnabled(): Promise<boolean>;
     getAuthUrl(): Promise<AuthorizationUrlPayload | SubscriptionActionResult>;
     openAuthUrl(authRequestId: string): Promise<SubscriptionActionResult>;

@@ -117,7 +117,7 @@ export async function pollXaiDeviceAuthorization(
       timeoutMs: input.timeoutMs,
     });
     if (response.ok) {
-      return decodeOAuthInitialTokenPayload('xai-oauth', response.payload, now());
+      return decodeOAuthInitialTokenPayload(response.payload, now());
     }
     const code = providerErrorCode(response.payload);
     if (code === 'authorization_pending') {

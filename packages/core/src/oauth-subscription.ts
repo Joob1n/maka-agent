@@ -1,7 +1,11 @@
 /**
  * OAuth subscription contract — core types + pure helpers.
  *
- * Scope: Claude subscription types and pure helpers.
+ * Scope: the wire shapes shared by every subscription provider, plus a
+ * provider-neutral `base64urlEncode`. The Claude authorization builder this
+ * module was written for is gone; the `claude-subscription` provider stays in
+ * the enum only so a workspace that enrolled before can still decode its
+ * stored connection.
  *
  * This module is `@maka/core` so it is consumable from both main
  * and renderer. The types here MUST NOT include any token-shaped
@@ -11,10 +15,8 @@
  */
 
 /**
- * Subscription provider kind. This contract currently contains
- * `claude-subscription` only. The discriminated union keeps provider nuances
- * (Anthropic PKCE vs Codex potentially loopback vs Copilot
- * device-flow) typed separately.
+ * Subscription provider kind. Retired: no login path produces one any
+ * more. It stays so stored connections and older Clients keep decoding.
  */
 export type OAuthSubscriptionProvider = 'claude-subscription';
 
@@ -158,9 +160,6 @@ export interface AuthorizationUrlPayload {
   authRequestId: string;
 }
 
-/** 32 random bytes encode to the RFC 7636 minimum 43-character verifier. */
-export const PKCE_VERIFIER_LENGTH_BYTES = 32;
-
 /** Base64url-encode bytes per RFC 4648 §5. */
 export function base64urlEncode(bytes: Uint8Array): string {
   let binary = '';
@@ -177,98 +176,6 @@ export function base64urlEncode(bytes: Uint8Array): string {
   return standard.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** Injected digest keeps PKCE derivation platform-independent. */
-export interface Sha256Digest {
-  digest(input: string): Uint8Array;
-}
-
-export function pkceCodeChallenge(verifier: string, sha256: Sha256Digest): string {
-  return base64urlEncode(sha256.digest(verifier));
-}
-
-/** Build a Claude subscription authorization URL, rejecting incomplete inputs. */
-export interface ClaudeAuthorizationConfig {
-  /** Anthropic-registered OAuth client_id. */
-  clientId: string;
-  /** Authorization endpoint (e.g. https://claude.com/cai/oauth/authorize). */
-  authorizeEndpoint: string;
-  /** Redirect URI registered with the client_id. */
-  redirectUri: string;
-  /** Space-separated scope string. */
-  scope: string;
-}
-
-export function buildClaudeAuthorizationUrl(
-  config: ClaudeAuthorizationConfig,
-  verifier: string,
-  state: string,
-  sha256: Sha256Digest,
-): string {
-  if (!config.clientId) throw new Error('OAuth config missing clientId');
-  if (!config.authorizeEndpoint) throw new Error('OAuth config missing authorizeEndpoint');
-  if (!config.redirectUri) throw new Error('OAuth config missing redirectUri');
-  if (!verifier) throw new Error('PKCE verifier must be non-empty');
-  if (!state) throw new Error('OAuth state must be non-empty');
-
-  const challenge = pkceCodeChallenge(verifier, sha256);
-  const url = new URL(config.authorizeEndpoint);
-  url.searchParams.set('code', 'true');
-  url.searchParams.set('client_id', config.clientId);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('redirect_uri', config.redirectUri);
-  url.searchParams.set('scope', config.scope);
-  url.searchParams.set('code_challenge', challenge);
-  url.searchParams.set('code_challenge_method', 'S256');
-  url.searchParams.set('state', state);
-  return url.toString();
-}
-
-/** Parse the strict base64url-safe `<code>#<state>` callback payload. */
-export interface PastedAuthorization {
-  code: string;
-  state: string;
-}
-
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
-
-export function parsePastedAuthorization(raw: unknown): PastedAuthorization | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const hashIdx = trimmed.indexOf('#');
-  if (hashIdx <= 0 || hashIdx === trimmed.length - 1) return null;
-  const code = trimmed.slice(0, hashIdx);
-  const state = trimmed.slice(hashIdx + 1);
-  if (!BASE64URL_RE.test(code)) return null;
-  if (!BASE64URL_RE.test(state)) return null;
-  return { code, state };
-}
-
-/** Constant-time comparison for equal-length OAuth state values. */
-export function constantTimeStringEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
-/**
- * Default TTL for a pending PKCE authorization (10 minutes). The
- * user has to:
- *   1. Click `登录订阅`.
- *   2. Sign in on claude.ai.
- *   3. Copy the redirect code.
- *   4. Paste it back into Maka.
- * 10 minutes is generous but not so long that an abandoned attempt
- * stays valid forever.
- *
- * Tests pin this; if a future PR adjusts it, the change should be
- * explicit in PR description.
- */
-export const PENDING_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
-
 /**
  * Token-refresh skew. We refresh when `expires_at - now <= 5min`
  * so an in-flight request doesn't race a token expiry.
@@ -278,10 +185,3 @@ export const PENDING_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
  * to refresh.
  */
 export const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
-
-/**
- * Quota cache TTL. We refetch /api/oauth/usage every 5 minutes
- * when the renderer is reading the state, but never block a send
- * on the quota fetch.
- */
-export const QUOTA_CACHE_TTL_MS = 5 * 60 * 1000;

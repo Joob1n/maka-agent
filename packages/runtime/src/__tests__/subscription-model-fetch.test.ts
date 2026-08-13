@@ -446,18 +446,6 @@ function eventLoopTurn(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-function claudeSubscriptionConnection(): LlmConnection {
-  return {
-    slug: 'claude-subscription',
-    name: 'Claude OAuth',
-    providerType: 'claude-subscription',
-    defaultModel: 'claude-sonnet-4-5',
-    enabled: true,
-    createdAt: 1,
-    updatedAt: 1,
-  };
-}
-
 function openAiCodexConnection(): LlmConnection {
   return {
     slug: 'openai-codex',

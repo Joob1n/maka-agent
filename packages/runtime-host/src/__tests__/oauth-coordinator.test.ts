@@ -764,7 +764,7 @@ function operationContext(connectionId: string, acquireResidency: () => { releas
 }
 
 async function withFixture(
-  providerType: 'claude-subscription' | 'openai-codex' | 'xai-oauth',
+  providerType: 'openai-codex' | 'xai-oauth',
   run: (fixture: {
     stores: RuntimePolicyStoresWriter;
     connection: ConnectionCatalogEntry;

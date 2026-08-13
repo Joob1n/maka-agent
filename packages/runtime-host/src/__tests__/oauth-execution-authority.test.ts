@@ -4,7 +4,6 @@ import { open, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
 import {
   serializeOAuthSubscriptionTokens,
   type OAuthSubscriptionTokens,
@@ -102,7 +101,6 @@ test('request abort stops waiting for shared OAuth resolution without dispatchin
         return pending.promise;
       },
     },
-    initialTokens: tokens,
     connection: {
       slug: CONNECTION_SLUG,
       providerType: 'openai-codex',
@@ -110,7 +108,6 @@ test('request abort stops waiting for shared OAuth resolution without dispatchin
     },
     sessionId: 'abort-session',
     modelId: 'gpt-5.6-sol',
-    claudeDeviceId: 'unused',
     fetchFn: async () => {
       modelCalls += 1;
       return Response.json({ ok: true });
@@ -248,7 +245,6 @@ test('Codex request auth and account identity advance from the same token snapsh
   };
   const modelFetch = createHostOAuthModelFetch({
     binding,
-    initialTokens: tokens,
     connection: {
       slug: CONNECTION_SLUG,
       providerType: 'openai-codex',
@@ -256,7 +252,6 @@ test('Codex request auth and account identity advance from the same token snapsh
     },
     sessionId: 'codex-session',
     modelId: 'gpt-5.6-sol',
-    claudeDeviceId: 'unused',
     fetchFn: async (_url, init) => {
       observed.push(new Headers(init?.headers));
       return Response.json({ ok: true });
@@ -308,10 +303,8 @@ test('a Codex 401 force-refreshes canonical credentials and replays once', async
       material: fixture.material,
       createRefreshTransport: () => testRefreshTransport(providerFetch),
     });
-    const initialTokens = await binding.resolve();
     const modelFetch = createHostOAuthModelFetch({
       binding,
-      initialTokens,
       connection: {
         slug: CONNECTION_SLUG,
         providerType: 'openai-codex',
@@ -319,7 +312,6 @@ test('a Codex 401 force-refreshes canonical credentials and replays once', async
       },
       sessionId: 'codex-401-session',
       modelId: 'gpt-5.6-sol',
-      claudeDeviceId: 'unused',
       fetchFn: providerFetch,
     });
 
@@ -436,7 +428,7 @@ async function withCopilotCredential(
 }
 
 async function withSeededOAuthCredential(
-  providerType: 'claude-subscription' | 'openai-codex',
+  providerType: 'openai-codex',
   tokens: OAuthSubscriptionTokens,
   run: (fixture: CopilotCredentialFixture) => Promise<void>,
 ): Promise<void> {
@@ -528,29 +520,6 @@ function currentTokens(accessToken: string, accountUuid?: string): OAuthSubscrip
     refresh_token: `${accessToken}-refresh`,
     expires_at: Number.MAX_SAFE_INTEGER,
     ...(accountUuid ? { account_uuid: accountUuid } : {}),
-  };
-}
-
-function claudeConnection(): RuntimeExecutionConnection {
-  return {
-    slug: CONNECTION_SLUG,
-    providerType: 'claude-subscription',
-    defaultModel: 'claude-sonnet-4-5',
-  };
-}
-
-function claudeRequest(): RequestInit {
-  return {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer stale-sdk-token',
-      'x-api-key': 'stale-sdk-token',
-    },
-    body: JSON.stringify({
-      stream: false,
-      system: 'Use the Host prompt.',
-      messages: [{ role: 'user', content: 'hello' }],
-    }),
   };
 }
 

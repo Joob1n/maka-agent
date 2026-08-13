@@ -199,7 +199,7 @@ export async function exchangeCodexDeviceAuthorizationCode(
     timeoutMs: input.timeoutMs,
   });
   try {
-    return decodeOAuthInitialTokenPayload('openai-codex', payload, input.now?.() ?? Date.now());
+    return decodeOAuthInitialTokenPayload(payload, input.now?.() ?? Date.now());
   } catch (error) {
     const category = error instanceof OAuthTokenEndpointError ? error.category : 'invalid_response';
     throw new OAuthTokenEndpointError(category, status);

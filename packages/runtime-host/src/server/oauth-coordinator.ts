@@ -1,9 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import {
-  buildOAuthLoginAuthorization,
-  exchangeOAuthAuthorizationCode,
-  OAuthTokenEndpointError,
-} from '@maka/runtime/oauth-login';
+import { OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
 import { createProxiedFetchTransport } from '@maka/runtime/network/scoped-fetch-transport';
 import {
   exchangeCodexDeviceAuthorizationCode,
@@ -26,7 +22,6 @@ import {
   OAUTH_PRESENTATION_SERVICE_VERSION,
   type OAuthLoginFailureCode,
   type OAuthLoginProjection,
-  OAUTH_LOGIN_PROVIDERS,
   type OAuthLoginProvider,
   type OAuthPresentationRequest,
   type OAuthPresentationResult,
@@ -34,10 +29,7 @@ import {
   type OperationOutcome,
 } from '../protocol/index.js';
 import type { RuntimeHostResidency } from './host-kernel.js';
-import {
-  HostOAuthExecutionAuthority,
-  OAuthExecutionCredentialError,
-} from './oauth-execution-authority.js';
+import { HostOAuthExecutionAuthority } from './oauth-execution-authority.js';
 import {
   ClientCapabilityInvocationError,
   type HostClientCapabilityCoordinator,
@@ -114,7 +106,7 @@ export class HostOAuthCoordinator {
     'oauth.login.start': (input, context) => this.#start(input, context.connectionId),
     'oauth.login.query': (input) => this.#query(input.attemptId),
     'oauth.login.cancel': (input) => this.#cancel(input.attemptId),
-    'oauth.account.usage.fetch': (input) => this.#fetchAccountUsage(input.connectionId),
+    'oauth.account.usage.fetch': () => this.#fetchAccountUsage(),
   };
 
   readonly #runtimePolicy: RuntimePolicyStoresWriter;
@@ -179,17 +171,11 @@ export class HostOAuthCoordinator {
     return this.#closeTask;
   }
 
-  async #fetchAccountUsage(
-    connectionId: string,
-  ): Promise<OperationOutcome<'oauth.account.usage.fetch'>> {
+  async #fetchAccountUsage(): Promise<OperationOutcome<'oauth.account.usage.fetch'>> {
     // Account usage was only ever reported for the retired subscription
-    // provider, and reading it required that vendor's own client identity.
-    // The operation stays on the wire so older clients keep a defined answer.
-    const catalog = await this.#runtimePolicy.connectionCatalog.getSnapshot();
-    const connection = catalog.connections.find(
-      (candidate) => candidate.connectionId === connectionId,
-    );
-    if (!connection) return notFound('OAuth account Connection was not found');
+    // provider, and reading it required that vendor's own client identity. The
+    // operation stays on the wire so an older Client keeps a defined answer;
+    // it reads nothing, because the answer no longer depends on any state.
     return { ok: true, result: { kind: 'unavailable', reason: 'unsupported_provider' } };
   }
 
@@ -276,13 +262,10 @@ export class HostOAuthCoordinator {
       return invalidRequest('Connection cannot start an interactive OAuth login');
     }
     if (this.#admissionClosed) return hostDraining();
-    // A retired provider keeps its persisted connections readable, but it can
-    // no longer be signed into.
-    const provider = admitted.connection.providerType;
-    if (!OAUTH_LOGIN_PROVIDERS.includes(provider as OAuthLoginProvider)) {
-      return operationUnavailable('OAuth enrollment is retired for this provider');
-    }
-    if (!this.#isProviderEnabled(provider as OAuthLoginProvider)) {
+    // Storage already refuses to admit a retired provider, so the ticket above
+    // cannot belong to one by the time it reaches here.
+    const provider = admitted.connection.providerType as OAuthLoginProvider;
+    if (!this.#isProviderEnabled(provider)) {
       return operationUnavailable('OAuth enrollment is disabled for this provider');
     }
     if (
@@ -305,7 +288,7 @@ export class HostOAuthCoordinator {
       attemptId: input.attemptId,
       connectionId: input.connectionId,
       initiatingConnectionId,
-      provider: provider as OAuthLoginProvider,
+      provider,
       ticket: admitted,
       abort: new AbortController(),
       residency: this.#acquireResidency(),

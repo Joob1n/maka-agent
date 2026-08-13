@@ -3,17 +3,13 @@ import { describe, it } from 'node:test';
 import {
   OAUTH_LOGIN_MAX_RESPONSE_BYTES,
   OAUTH_LOGIN_MAX_TOKEN_CHARS,
-  OAUTH_LOGIN_PROVIDER_CONFIG,
   OAuthTokenEndpointError,
-  buildOAuthLoginAuthorization,
   decodeOAuthInitialTokenPayload,
-  exchangeOAuthAuthorizationCode,
   isDeterministicOAuthCredentialRejection,
+  requestOAuthTokenEndpointJson,
 } from '../oauth-login.js';
 import { isOAuthEnrollmentProviderEnabled } from '../oauth-provider-contracts.js';
 
-const VERIFIER = 'v'.repeat(43);
-const STATE = 's'.repeat(43);
 const NOW = 1_800_000_000_000;
 
 function assertEndpointError(
@@ -28,61 +24,17 @@ function assertEndpointError(
   return true;
 }
 
-describe('OAuth login authorization', () => {
-  it('pins xAI PKCE authorization to the allowlisted Grok CLI redirect', () => {
-    const redirectUri = 'http://127.0.0.1:56121/callback';
-    const result = buildOAuthLoginAuthorization({
-      provider: 'xai-oauth',
-      verifier: VERIFIER,
-      state: STATE,
-      redirectUri,
-    });
-    const url = new URL(result.authorizationUrl);
-    assert.equal(result.presentation, 'loopback');
-    assert.equal(url.origin + url.pathname, 'https://auth.x.ai/oauth2/authorize');
-    assert.equal(url.searchParams.get('redirect_uri'), redirectUri);
-    assert.equal(url.searchParams.get('plan'), 'generic');
-    assert.equal(
-      url.searchParams.get('scope'),
-      'openid profile email offline_access grok-cli:access api:access',
-    );
-    assert.throws(
-      () =>
-        buildOAuthLoginAuthorization({
-          provider: 'xai-oauth',
-          verifier: VERIFIER,
-          state: STATE,
-          redirectUri: 'http://127.0.0.1:56122/callback',
-        }),
-      (error) => assertEndpointError(error, 'invalid_response'),
-    );
-  });
-
-  it('rejects low-entropy state and non-loopback redirects', () => {
-    assert.throws(
-      () =>
-        buildOAuthLoginAuthorization({
-          provider: 'xai-oauth',
-          verifier: VERIFIER,
-          state: 'short',
-        }),
-      (error) => assertEndpointError(error, 'invalid_response'),
-    );
-  });
-});
-
 describe('OAuth initial token decoder', () => {
   it('accepts a closed token record and computes a finite expiry', () => {
     assert.deepEqual(
       decodeOAuthInitialTokenPayload(
-        'claude-subscription',
         {
           access_token: 'access',
           refresh_token: 'refresh',
           expires_in: 3600,
+          id_token: 'id',
           token_type: 'Bearer',
-          scope: 'user:sessions:claude_code',
-          account: { uuid: 'account-1' },
+          scope: 'openid profile email',
         },
         NOW,
       ),
@@ -90,9 +42,9 @@ describe('OAuth initial token decoder', () => {
         access_token: 'access',
         refresh_token: 'refresh',
         expires_at: NOW + 3_600_000,
+        id_token: 'id',
         token_type: 'Bearer',
-        scope: 'user:sessions:claude_code',
-        account_uuid: 'account-1',
+        scope: 'openid profile email',
       },
     );
   });
@@ -100,11 +52,7 @@ describe('OAuth initial token decoder', () => {
   it('ignores additive provider fields while validating bounded token fields', () => {
     const base = { access_token: 'access', refresh_token: 'refresh', expires_in: 3600 };
     assert.deepEqual(
-      decodeOAuthInitialTokenPayload(
-        'openai-codex',
-        { ...base, provider_extension: { rollout: 'next' } },
-        NOW,
-      ),
+      decodeOAuthInitialTokenPayload({ ...base, provider_extension: { rollout: 'next' } }, NOW),
       {
         access_token: 'access',
         refresh_token: 'refresh',
@@ -118,7 +66,7 @@ describe('OAuth initial token decoder', () => {
       { ...base, expires_in: Number.POSITIVE_INFINITY },
     ]) {
       assert.throws(
-        () => decodeOAuthInitialTokenPayload('openai-codex', payload, NOW),
+        () => decodeOAuthInitialTokenPayload(payload, NOW),
         (error) => assertEndpointError(error, 'invalid_response'),
       );
     }
@@ -137,9 +85,7 @@ describe('OAuth enrollment policy', () => {
   });
 });
 
-const XAI_REDIRECT_URI = 'http://127.0.0.1:56121/callback';
-
-describe('OAuth initial code exchange', () => {
+describe('OAuth token endpoint request', () => {
   it('bounds a streamed response even without content-length', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -149,13 +95,9 @@ describe('OAuth initial code exchange', () => {
       },
     });
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () => new Response(stream),
       }),
       (error) => assertEndpointError(error, 'response_too_large', 200),
@@ -175,13 +117,9 @@ describe('OAuth initial code exchange', () => {
       },
     });
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () => new Response(stream),
       }),
       (error) => assertEndpointError(error, 'outcome_unknown', 200),
@@ -190,13 +128,9 @@ describe('OAuth initial code exchange', () => {
 
   it('classifies invalid JSON received through EOF as an invalid response', async () => {
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () => new Response('{not-json'),
       }),
       (error) => assertEndpointError(error, 'invalid_response', 200),
@@ -222,13 +156,9 @@ describe('OAuth initial code exchange', () => {
       },
     });
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () => new Response(stream),
       }),
       (error) => assertEndpointError(error, 'response_too_large', 200),
@@ -239,13 +169,9 @@ describe('OAuth initial code exchange', () => {
 
   it('classifies invalid_grant without retaining provider response text', async () => {
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () =>
           new Response(
             JSON.stringify({
@@ -266,13 +192,9 @@ describe('OAuth initial code exchange', () => {
 
   it('marks reply loss after dispatch as outcome unknown', async () => {
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () => {
           throw new TypeError('socket closed after write');
         },
@@ -297,13 +219,9 @@ describe('OAuth initial code exchange', () => {
       },
     });
     await assert.rejects(
-      exchangeOAuthAuthorizationCode({
-        provider: 'xai-oauth',
-        redirectUri: XAI_REDIRECT_URI,
-        code: 'authorization-code',
-        verifier: VERIFIER,
-        state: STATE,
-        signal: new AbortController().signal,
+      requestOAuthTokenEndpointJson({
+        endpoint: 'https://auth.example/token',
+        init: { method: 'POST' },
         fetchFn: async () => new Response(stream),
         timeoutMs: 5,
       }),

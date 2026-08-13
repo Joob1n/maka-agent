@@ -13,11 +13,6 @@ export interface SubscriptionModelFetchInput {
   fetchFn?: typeof fetch;
   /** Force-refreshes a remotely invalidated OAuth token for one safe 401 replay. */
   refreshOAuthAccessToken?: () => Promise<string | null>;
-  claude?: {
-    cloakEnabled?: boolean;
-    deviceId: string;
-    accountUuid: string;
-  };
 }
 
 export function buildSubscriptionModelFetch(

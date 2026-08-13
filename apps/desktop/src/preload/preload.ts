@@ -1158,19 +1158,14 @@ const makaBridge = {
       return invokeActiveRuntimeHost('search:thread', request);
     },
   },
-  // PR-OAUTH-SUBSCRIPTION-0: Claude subscription OAuth bridge.
-  // NEVER returns raw OAuth credentials; renderer only sees account
-  // state + quota + action results (xuan G-X3 + the
-  // claude-subscription-ipc-boundary contract test enforces this).
+  // Subscription OAuth bridges. NEVER return raw OAuth credentials;
+  // the renderer sees account state + quota + action results only.
   //
-  // kenji `1da909d5`/`45b31e16` hardening: `openAuthUrl` takes
-  // ONLY an `authRequestId`; the URL is held by main from the
-  // earlier `getAuthUrl` call. Renderer can never hand
-  // `shell.openExternal` an arbitrary URL.
-  // PR-MODEL-OAUTH-ALL-0: Codex / Antigravity subscription
-  // bridges. Same shape as `claudeSubscription` (no token-shaped
-  // fields, opaque authRequestId, action-result envelopes). Each
-  // service's state snapshot is provider-specific because the
+  // `openAuthUrl` takes ONLY an `authRequestId`; the URL is held by main
+  // from the earlier `getAuthUrl` call, so a compromised renderer can
+  // never hand `shell.openExternal` an arbitrary URL.
+  //
+  // Each service's state snapshot is provider-specific because the
   // upstream auth claims differ (Codex carries JWT account_id /
   // plan; Antigravity is preview-only).
   openAiCodex: {

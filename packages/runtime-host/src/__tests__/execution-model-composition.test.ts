@@ -326,7 +326,6 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
           policy.operations.resolveExecutionConnection('backend-creation-connection'),
         runtimePolicy: policy,
         oauthCredentials: authority,
-        claudeDeviceId: capability.rootId,
         readPricing: async () => ({ revision: 0, overrides: [] }),
         createFetchTransport: transports.create,
       }),
@@ -351,7 +350,6 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
           policy.operations.resolveExecutionConnection('backend-creation-connection'),
         runtimePolicy: policy,
         oauthCredentials: authority,
-        claudeDeviceId: capability.rootId,
         readPricing: async () => ({ revision: 0, overrides: [] }),
         createFetchTransport: transports.create,
       }),
@@ -1730,7 +1728,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const evaluatorInput = {
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Goal evaluator telemetry must not drain the Host'),
       readSessionHeader: (sessionId: string) =>
@@ -1756,7 +1753,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const sessionEffects = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Session effect telemetry must not drain the Host'),
       newId: () => 'effect-call-1',
@@ -1801,7 +1797,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const dailyReview = createHostDailyReviewModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Daily Review telemetry must not drain the Host'),
       newId: () => 'daily-review-call-1',
@@ -1827,7 +1822,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const memoryModel = createHostMemoryExtractionModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Memory extraction telemetry must not drain the Host'),
       newId: () => 'memory-call-1',
@@ -1902,7 +1896,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const failingPreflightEffects = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage: {
         pricing: {
           snapshot: async () => {
@@ -1976,7 +1969,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
           },
         }),
       } as unknown as HostOAuthExecutionAuthority,
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => {
         oauthDrainRequests += 1;
@@ -2009,7 +2001,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const accountingFailure = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage: {
         pricing: usage.pricing,
         telemetry: {
@@ -2046,7 +2037,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const stalledEffect = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('A provider timeout must not drain the Host'),
       createFetchTransport: () => ({
@@ -2505,7 +2495,6 @@ function backendCreationFixture(input: {
   readPricing: () => Promise<unknown>;
   runtimePolicy?: RuntimePolicyStoresWriter;
   oauthCredentials?: HostOAuthExecutionAuthority;
-  claudeDeviceId?: string;
   tools?: readonly MakaTool[];
   modelId?: string;
   snapshotClientCapabilities?: () => unknown;
@@ -2579,7 +2568,6 @@ function backendCreationFixture(input: {
     } as unknown as BackendFactoryContext,
     runtimePolicy,
     ...(input.oauthCredentials ? { oauthCredentials: input.oauthCredentials } : {}),
-    ...(input.claudeDeviceId ? { claudeDeviceId: input.claudeDeviceId } : {}),
     createRunComposer,
     artifacts: {},
     executionArtifacts: {

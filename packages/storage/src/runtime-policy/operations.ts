@@ -122,7 +122,7 @@ export interface InteractiveOAuthLoginTicket {
 
 export type InteractiveOAuthLoginProvider = Extract<
   ConnectionCatalogEntry['providerType'],
-  'claude-subscription' | 'openai-codex' | 'xai-oauth'
+  'openai-codex' | 'xai-oauth'
 >;
 
 export type BeginInteractiveOAuthLoginResult =

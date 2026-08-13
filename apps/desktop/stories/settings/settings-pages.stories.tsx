@@ -573,16 +573,8 @@ const makaBridge = {
   // The OAuth cards on 模型 read their live state off window.maka rather than
   // through the connections bridge, so the page needs these channels to render
   // the state a user actually sees: without them the gate call rejects on
-  // mount, the Claude card never appears, and every other card stays at its
-  // static 可用 label. Each card's login modal has its own fixture in
-  // Product/Settings/Providers.
-  claudeSubscription: {
-    isExperimentalEnabled: async () => true,
-    getAccountState: async () => ({
-      runtimeState: 'authenticated',
-      profile: { email: 'claude@example.com' },
-    }),
-  },
+  // mount and every card stays at its static 可用 label. Each card's login
+  // modal has its own fixture in Product/Settings/Providers.
   openAiCodex: {
     getAccountState: async () => ({
       runtimeState: 'authenticated',
