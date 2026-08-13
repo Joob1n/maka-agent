@@ -15,7 +15,7 @@ import {
 export { OAuthTokenEndpointError } from './oauth-provider-contracts.js';
 export type { OAuthTokenEndpointErrorCategory } from './oauth-provider-contracts.js';
 
-export type OAuthLoginProvider = 'claude-subscription' | 'xai-oauth';
+export type OAuthLoginProvider = 'xai-oauth';
 export type OAuthInitialTokenProvider = 'claude-subscription' | 'xai-oauth' | 'openai-codex';
 export type OAuthLoginPresentationKind = 'paste-code' | 'loopback';
 
@@ -23,19 +23,9 @@ export const OAUTH_LOGIN_MAX_RESPONSE_BYTES = 64 * 1024;
 export const OAUTH_LOGIN_MAX_TOKEN_CHARS = OAUTH_MAX_TOKEN_CHARS;
 export const OAUTH_LOGIN_DEFAULT_TIMEOUT_MS = 15_000;
 
-const CLAUDE = OAUTH_PROVIDER_CONTRACTS['claude-subscription'];
 const XAI = OAUTH_PROVIDER_CONTRACTS['xai-oauth'];
 
 export const OAUTH_LOGIN_PROVIDER_CONFIG = {
-  'claude-subscription': {
-    clientId: CLAUDE.clientId,
-    authorizationEndpoint: CLAUDE.authorizationEndpoint,
-    tokenEndpoint: CLAUDE.tokenEndpoint,
-    redirectUri: CLAUDE.redirectUri,
-    scope: CLAUDE.scope,
-    tokenUserAgent: CLAUDE.tokenUserAgent,
-    presentation: CLAUDE.presentation,
-  },
   'xai-oauth': {
     clientId: XAI.clientId,
     authorizationEndpoint: XAI.authorizationEndpoint,
@@ -102,7 +92,7 @@ export function buildOAuthLoginAuthorization(
   assertOAuthState(input.state);
   const config = OAUTH_LOGIN_PROVIDER_CONFIG[input.provider];
   const redirectUri = resolveRedirectUri(input.provider, input.redirectUri);
-  if (input.provider !== 'claude-subscription') {
+  {
     const loopbackConfig = OAUTH_LOGIN_PROVIDER_CONFIG[input.provider];
     return {
       authorizationUrl: buildLoopbackAuthorizationUrl({
@@ -291,19 +281,8 @@ function buildTokenRequest(
     redirect_uri: redirectUri,
   };
   const tokenHeaders: Record<string, string> = {
-    'Content-Type':
-      input.provider === 'claude-subscription'
-        ? 'application/json'
-        : 'application/x-www-form-urlencoded',
+    'Content-Type': 'application/x-www-form-urlencoded',
   };
-  if ('tokenUserAgent' in config) tokenHeaders['User-Agent'] = config.tokenUserAgent;
-  if (input.provider === 'claude-subscription') {
-    return {
-      method: 'POST',
-      headers: tokenHeaders,
-      body: JSON.stringify({ ...common, state: input.state }),
-    };
-  }
   return {
     method: 'POST',
     headers: tokenHeaders,
@@ -312,15 +291,6 @@ function buildTokenRequest(
 }
 
 function resolveRedirectUri(provider: OAuthLoginProvider, redirectUri?: string): string {
-  if (provider === 'claude-subscription') {
-    if (
-      redirectUri !== undefined &&
-      redirectUri !== OAUTH_LOGIN_PROVIDER_CONFIG[provider].redirectUri
-    ) {
-      throw new OAuthTokenEndpointError('invalid_response');
-    }
-    return OAUTH_LOGIN_PROVIDER_CONFIG[provider].redirectUri;
-  }
   if (!redirectUri) throw new OAuthTokenEndpointError('invalid_response');
   let parsed: URL;
   try {

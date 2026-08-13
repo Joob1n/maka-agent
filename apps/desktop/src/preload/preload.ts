@@ -1167,41 +1167,6 @@ const makaBridge = {
   // ONLY an `authRequestId`; the URL is held by main from the
   // earlier `getAuthUrl` call. Renderer can never hand
   // `shell.openExternal` an arbitrary URL.
-  //
-  // Whole feature is gated behind `MAKA_CLAUDE_SUBSCRIPTION_EXPERIMENTAL=1`
-  // until product/legal sign-off. `isExperimentalEnabled()` lets the
-  // Settings UI hide the card; even without that hide, all auth-flow
-  // handlers re-check the flag main-side (fail-closed via the
-  // `experimental_disabled` reason).
-  claudeSubscription: {
-    isExperimentalEnabled(): Promise<boolean> {
-      return invokeActiveRuntimeHost('claude-subscription:is-experimental-enabled');
-    },
-    getAuthUrl(): Promise<AuthorizationUrlPayload | SubscriptionActionResult> {
-      return invokeActiveRuntimeHost('claude-subscription:get-auth-url');
-    },
-    openAuthUrl(authRequestId: string): Promise<SubscriptionActionResult> {
-      return invokeActiveRuntimeHost('claude-subscription:open-auth-url', authRequestId);
-    },
-    completeAuthorization(authRequestId: string, pasted: string): Promise<SubscriptionActionResult> {
-      return invokeActiveRuntimeHost('claude-subscription:complete-authorization', authRequestId, pasted);
-    },
-    cancelAuthorization(authRequestId?: string): Promise<{ ok: true }> {
-      return invokeActiveRuntimeHost('claude-subscription:cancel-authorization', authRequestId);
-    },
-    getAccountState(): Promise<SubscriptionAccountState> {
-      return invokeActiveRuntimeHost('claude-subscription:get-account-state');
-    },
-    refreshQuota(): Promise<SubscriptionActionResult> {
-      return invokeActiveRuntimeHost('claude-subscription:refresh-quota');
-    },
-    refreshTokens(): Promise<SubscriptionActionResult> {
-      return invokeActiveRuntimeHost('claude-subscription:refresh-tokens');
-    },
-    logout(): Promise<SubscriptionActionResult> {
-      return invokeActiveRuntimeHost('claude-subscription:logout');
-    },
-  },
   // PR-MODEL-OAUTH-ALL-0: Codex / Antigravity subscription
   // bridges. Same shape as `claudeSubscription` (no token-shaped
   // fields, opaque authRequestId, action-result envelopes). Each

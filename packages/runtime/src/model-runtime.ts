@@ -123,7 +123,6 @@ function resolveModelRuntimeWire(
 ): ModelRuntimeWire {
   switch (adapter.kind) {
     case 'anthropic':
-    case 'claude-subscription':
       return 'anthropic-messages';
     case 'openai-codex':
       return 'openai-responses';

@@ -107,8 +107,8 @@ describe('deriveOnboardingState', () => {
   it('accepts wired OAuth providers and ignores validation telemetry', () => {
     for (const connection of [
       realConnection({
-        slug: 'claude-subscription',
-        providerType: 'claude-subscription',
+        slug: 'codex-subscription',
+        providerType: 'openai-codex',
         lastTestStatus: 'error',
       }),
       realConnection({

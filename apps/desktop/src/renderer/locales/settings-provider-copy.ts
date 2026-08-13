@@ -157,7 +157,11 @@ const zhCopy = {
     logoutTitle: (name: string) => `退出 ${name} 登录？`,
   },
   oauthSection: {
-    signedIn: '已登录', claudeDescription: 'Claude Pro / Max 订阅账号登录。', codexDescription: 'ChatGPT Plus / Pro 订阅账号登录。', xaiDescription: 'SuperGrok / X Premium 账号登录。',
+    signedIn: '已登录', claudeDescription: '此登录方式已停用。',
+    claudeRetiredTitle: 'Claude 订阅登录已停用',
+    claudeRetiredBody:
+      '此登录方式已从 Maka 移除。已保存的连接会保留在列表中，但无法再登录或用于对话。改用 Anthropic API Key 连接即可继续使用 Claude 模型。',
+    claudeRetiredAction: '前往添加 API Key 连接', codexDescription: 'ChatGPT Plus / Pro 订阅账号登录。', xaiDescription: 'SuperGrok / X Premium 账号登录。',
     copilotDescription: '导入兼容 GitHub 凭据连接 Copilot 订阅。', serviceUnavailable: '登录服务暂时不可用，请检查网络后重试。',
     aria: 'OAuth 登录',
     staleState: 'OAuth 登录状态暂时没刷新成功，已保留上一次状态。', claudeSubtitle: '登录 Claude Pro / Max 后，会同步成模型连接。',
@@ -307,7 +311,11 @@ const enCopy: ProviderSettingsCopy = {
     logoutTitle: (name: string) => `Sign out of ${name}?`,
   },
   oauthSection: {
-    signedIn: 'Signed in', claudeDescription: 'Sign in with a Claude Pro / Max subscription.', codexDescription: 'Sign in with a ChatGPT Plus / Pro subscription.', xaiDescription: 'Sign in with SuperGrok or X Premium.',
+    signedIn: 'Signed in', claudeDescription: 'This sign-in path is retired.',
+    claudeRetiredTitle: 'Claude subscription sign-in is retired',
+    claudeRetiredBody:
+      'This sign-in path has been removed from Maka. An existing connection stays listed but can no longer be signed into or used for a conversation. Add an Anthropic API key connection to keep using Claude models.',
+    claudeRetiredAction: 'Add an API key connection', codexDescription: 'Sign in with a ChatGPT Plus / Pro subscription.', xaiDescription: 'Sign in with SuperGrok or X Premium.',
     copilotDescription: 'Import compatible GitHub credentials to connect a Copilot subscription.', serviceUnavailable: 'The sign-in service is temporarily unavailable. Check the network and try again.',
     aria: 'OAuth sign-in',
     staleState: 'OAuth sign-in status could not be refreshed. The last known state is preserved. ', claudeSubtitle: 'After Claude Pro / Max sign-in, the account is synchronized as a model connection.',

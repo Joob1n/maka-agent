@@ -698,21 +698,7 @@ export interface MakaBridge {
       | { ok: false; reason: SearchErrorReason; message: string }
     >;
   };
-  claudeSubscription: {
-    isExperimentalEnabled(): Promise<boolean>;
-    getAuthUrl(): Promise<AuthorizationUrlPayload | SubscriptionActionResult>;
-    openAuthUrl(authRequestId: string): Promise<SubscriptionActionResult>;
-    completeAuthorization(
-      authRequestId: string,
-      pasted: string,
-    ): Promise<SubscriptionActionResult>;
-    cancelAuthorization(authRequestId?: string): Promise<{ ok: true }>;
-    getAccountState(): Promise<SubscriptionAccountState>;
-    refreshQuota(): Promise<SubscriptionActionResult>;
-    refreshTokens(): Promise<SubscriptionActionResult>;
-    logout(): Promise<SubscriptionActionResult>;
-  };
-  openAiCodex: {
+    openAiCodex: {
     isExperimentalEnabled(): Promise<boolean>;
     getAuthUrl(): Promise<AuthorizationUrlPayload | SubscriptionActionResult>;
     openAuthUrl(authRequestId: string): Promise<SubscriptionActionResult>;

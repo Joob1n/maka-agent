@@ -47,7 +47,6 @@ export function useOAuthCards(props: { query?: string }) {
   const locale = useUiLocale();
   const copy = getProviderSettingsCopy(locale).oauthSection;
   const cards = modelOAuthCards(copy);
-  const [claudeCatalogEnabled, setClaudeCatalogEnabled] = useState<boolean | null>(null);
   const mountedRef = useMountedRef();
   const refreshTicketRef = useRef(0);
   // PR-OAUTH-CARD-LIVE-STATE-0 (WAWQAQ msg d79fd115 follow-up): before this
@@ -74,20 +73,12 @@ export function useOAuthCards(props: { query?: string }) {
   async function refreshAllCards() {
     const ticket = refreshTicketRef.current + 1;
     refreshTicketRef.current = ticket;
-    const claudeGate = await window.maka.claudeSubscription
-      .isExperimentalEnabled()
-      .then((enabled) => ({ enabled } as const))
-      .catch((error: unknown) => ({ error } as const));
-    const claudeEnabledForRefresh = 'enabled' in claudeGate
-      ? claudeGate.enabled
-      : claudeCatalogEnabled === true;
-    // Every card the gate allows, not just the ones the current search shows.
-    // The catalog keeps its query across navigation now, so filtering here left
-    // the cards that were hidden at mount with a null state: clearing the
-    // search then revealed signed-in accounts rendering as "可用".
-    const cardsToRefresh = cards.filter(
-      (card) => card.id !== 'claude' || claudeEnabledForRefresh,
-    );
+    // Every card that can still be signed into, not just the ones the current
+    // search shows. The catalog keeps its query across navigation now, so
+    // filtering here left the cards that were hidden at mount with a null
+    // state: clearing the search then revealed signed-in accounts rendering as
+    // "可用". The retired row has no account state to read.
+    const cardsToRefresh = cards.filter((card) => card.id !== 'claude');
     const results = await Promise.all(
       cardsToRefresh.map(async (card) => {
         try {
@@ -99,7 +90,6 @@ export function useOAuthCards(props: { query?: string }) {
       }),
     );
     if (!mountedRef.current || refreshTicketRef.current !== ticket) return false;
-    if ('enabled' in claudeGate) setClaudeCatalogEnabled(claudeGate.enabled);
     const failures = results.filter((result) => 'error' in result);
     setCardStates((prev) => {
       const next = { ...prev };
@@ -108,13 +98,9 @@ export function useOAuthCards(props: { query?: string }) {
       }
       return next;
     });
-    if ('error' in claudeGate || failures.length > 0) {
+    if (failures.length > 0) {
       const firstFailure = failures[0];
-      const error = 'error' in claudeGate
-        ? claudeGate.error
-        : firstFailure && 'error' in firstFailure
-          ? firstFailure.error
-          : undefined;
+      const error = firstFailure && 'error' in firstFailure ? firstFailure.error : undefined;
       const message = error
         ? subscriptionActionErrorMessage(error, locale)
         : copy.serviceUnavailable;
@@ -136,7 +122,6 @@ export function useOAuthCards(props: { query?: string }) {
   }, []);
 
   const visibleCards: OAuthCard[] = cards
-    .filter((card) => card.id !== 'claude' || claudeCatalogEnabled === true)
     .filter(matchesQuery)
     .map((card) => {
       const snapshot = cardStates[card.id];
@@ -286,12 +271,8 @@ function GitHubCopilotLoginPanel() {
 
 async function getSubscriptionSnapshot(serviceId: OAuthCardId): Promise<SubscriptionSnapshot> {
   if (serviceId === 'claude') {
-    const state = await window.maka.claudeSubscription.getAccountState();
-    return {
-      runtimeState: state.runtimeState,
-      email: state.profile?.email,
-      errorMessage: state.errorMessage,
-    };
+    // Retired: there is no account state to read.
+    return { runtimeState: 'not_logged_in' };
   }
   if (serviceId === 'github-copilot') {
     return window.maka.githubCopilotSubscription.getAccountState();

@@ -57,26 +57,6 @@ describe('ProviderAuth contract', () => {
     expect(error.state).toBe('error');
   });
 
-  test('wired OAuth subscription providers expose real validation actions after login', () => {
-    const contract = deriveProviderAuthContract({
-      providerType: 'claude-subscription',
-      hasSecret: true,
-      lastTestStatus: 'verified',
-    });
-
-    expect(contract.setupMode).toBe('oauth');
-    expect(contract.state).toBe('validated');
-    expect(contract.validationStatus).toBe('verified');
-    expect(contract.requiresSecret).toBe(true);
-    expect(contract.sendMayUseWithoutSecret).toBe(false);
-    expect(contract.actionAvailability.save_secret).toBe('hidden');
-    expect(contract.actionAvailability.test_credentials).toBe('available');
-    expect(contract.actionAvailability.fetch_models).toBe('hidden');
-    expect(contract.actionAvailability.start_oauth).toBe('hidden');
-    expect(contract.actionAvailability.refresh_oauth).toBe('available');
-    expect(contract.actionAvailability.revoke_auth).toBe('available');
-  });
-
   test('a discovery-capable wired OAuth provider keeps fetch_models available after login', () => {
     const contract = deriveProviderAuthContract({
       providerType: 'openai-codex',
@@ -169,7 +149,7 @@ describe('ProviderAuth contract', () => {
 
   test('disabled providers hide actions regardless of stored credential state', () => {
     const contract = deriveProviderAuthContract({
-      providerType: 'claude-subscription',
+      providerType: 'openai-codex',
       enabled: false,
       hasSecret: true,
       lastTestStatus: 'verified',

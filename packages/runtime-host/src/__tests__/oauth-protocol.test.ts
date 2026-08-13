@@ -74,7 +74,7 @@ test('OAuth account usage exposes only a bounded safe quota projection', () => {
       ok: true,
       result: {
         kind: 'available',
-        provider: 'claude-subscription',
+        provider: 'openai-codex',
         quota: {
           fiveHour: { utilization: 25, resetsAt: '2026-08-05T12:00:00.000Z' },
           fetchedAt: 1,
@@ -87,7 +87,7 @@ test('OAuth account usage exposes only a bounded safe quota projection', () => {
       ok: true,
       result: {
         kind: 'available',
-        provider: 'claude-subscription',
+        provider: 'openai-codex',
         quota: {
           fiveHour: { utilization: 25, resetsAt: '2026-08-05T12:00:00.000Z' },
           fetchedAt: 1,
@@ -103,7 +103,7 @@ test('OAuth account usage exposes only a bounded safe quota projection', () => {
         ok: true,
         result: {
           kind: 'available',
-          provider: 'claude-subscription',
+          provider: 'openai-codex',
           quota: {
             fiveHour: { utilization: 101, resetsAt: '' },
             fetchedAt: 1,

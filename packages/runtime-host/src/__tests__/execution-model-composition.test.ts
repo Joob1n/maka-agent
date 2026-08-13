@@ -265,16 +265,13 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
   let transports: ReturnType<typeof controlledOAuthTransports> | undefined;
   try {
     const policy = await openInteractiveRuntimePolicyStoresForWrite(owner.lease);
-    // claude-subscription discovery is fallback-only (session-scoped OAuth
-    // tokens cannot call GET /v1/models). Create seeds the curated inventory;
-    // pick an id from that inventory rather than opening a fetch ticket.
-    const subscriptionModelId = 'claude-sonnet-5';
+    const subscriptionModelId = 'gpt-5.5';
     const created = await policy.connectionCatalog.create({
       expectedCatalogRevision: 0,
       connection: {
         slug: 'backend-creation-connection',
         name: 'OAuth backend creation',
-        providerType: 'claude-subscription',
+        providerType: 'openai-codex',
         enabled: true,
         enabledModelIds: [subscriptionModelId],
       },
@@ -284,15 +281,10 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
     const connection = created.snapshot.connections[0];
     assert.ok(connection);
     if (!connection) return;
-    assert.ok(
-      connection.models.some((model) => model.id === subscriptionModelId),
-      'create must seed the curated claude-subscription inventory',
-    );
     const tokens: OAuthSubscriptionTokens = {
-      access_token: 'expired-oauth-access',
+      access_token: codexAccessTokenFixture('oauth-account-v1'),
       refresh_token: 'rotating-oauth-refresh',
       expires_at: 0,
-      account_uuid: 'oauth-account-v1',
     };
     await writeFile(
       join(capability.canonicalPath, 'credential-vault.json'),
@@ -319,6 +311,10 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
       )}\n`,
       { encoding: 'utf8', mode: 0o600 },
     );
+    // Codex resolves its inventory over the protocol rather than from a curated
+    // fallback, so publish the one model this test sends with. The ticket needs
+    // the credential above to exist first.
+    await publishConnectionModel(policy, connection.connectionId, subscriptionModelId);
     transports = controlledOAuthTransports();
     const authority = new HostOAuthExecutionAuthority(policy);
     const firstAbort = new AbortController();
@@ -370,9 +366,8 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
       const persisted = JSON.parse(
         resolved.secretMaterial.connection?.secret ?? '',
       ) as OAuthSubscriptionTokens;
-      assert.equal(persisted.access_token, 'refreshed-oauth-access');
+      assert.equal(persisted.access_token, codexAccessTokenFixture('oauth-account-v2'));
       assert.equal(persisted.refresh_token, 'rotated-oauth-refresh');
-      assert.equal(persisted.account_uuid, 'oauth-account-v2');
       assert.ok((persisted.expires_at ?? 0) > Date.now());
     }
   } finally {
@@ -2706,7 +2701,7 @@ function controlledOAuthTransports(): {
     let closed = false;
     return {
       fetch: async (url) => {
-        assert.equal(String(url), 'https://platform.claude.com/v1/oauth/token');
+        assert.equal(String(url), 'https://auth.openai.com/oauth/token');
         usedForRefresh = true;
         refreshCalls += 1;
         markRefreshStarted();
@@ -2747,10 +2742,9 @@ function controlledOAuthTransports(): {
       refreshCompleted = true;
       resolveRefresh(
         Response.json({
-          access_token: 'refreshed-oauth-access',
+          access_token: codexAccessTokenFixture('oauth-account-v2'),
           refresh_token: 'rotated-oauth-refresh',
           expires_in: 3_600,
-          account: { uuid: 'oauth-account-v2' },
         }),
       );
     },
@@ -3194,4 +3188,11 @@ function closeServer(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+}
+
+function codexAccessTokenFixture(accountId: string): string {
+  const payload = Buffer.from(
+    JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: accountId } }),
+  ).toString('base64url');
+  return `header.${payload}.signature`;
 }

@@ -29,7 +29,7 @@ import { createOpenAiResponsesPlaintextReasoningTransport } from './openai-respo
 import type { OpenAiResponsesTransportState } from './openai-responses-websocket.js';
 import { anthropicV1BaseUrl, googleV1BetaBaseUrl } from './provider-urls.js';
 import { resolveModelRuntime, type ResolvedModelRuntime } from './model-runtime.js';
-import { claudeSubscriptionHeaders, openAiCodexHeaders } from './subscription-auth.js';
+import { openAiCodexHeaders } from './subscription-auth.js';
 import { createRequestCustomizationFetch } from './request-customization-fetch.js';
 
 export interface ModelFactoryInput {
@@ -76,14 +76,6 @@ export function getAIModel(input: ModelFactoryInput): LanguageModelV4 {
         baseURL: adapter.normalizeBaseUrl ? anthropicV1BaseUrl(baseURL) : baseURL,
         fetch: requestFetch,
         headers: { 'anthropic-beta': ANTHROPIC_BETA },
-      }).chat(modelId);
-
-    case 'claude-subscription':
-      return createAnthropic({
-        authToken: apiKey,
-        baseURL: anthropicV1BaseUrl(baseURL),
-        fetch: requestFetch,
-        headers: claudeSubscriptionHeaders(),
       }).chat(modelId);
 
     case 'openai-codex':

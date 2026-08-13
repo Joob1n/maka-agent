@@ -164,8 +164,8 @@ describe('OAuth refresh response validation', () => {
     test(`a 200 refresh with ${name} never replaces the stored token`, async () => {
       const writes: string[] = [];
       const tokens = await resolveOAuthSubscriptionTokens({
-        providerType: 'claude-subscription',
-        slug: 'claude-subscription',
+        providerType: 'openai-codex',
+        slug: 'codex-subscription',
         credentialStore: {
           getSecret: async () => nearExpiryStored,
           setSecret: async (_slug, _kind, value) => {
@@ -188,8 +188,8 @@ describe('OAuth refresh response validation', () => {
   test('a rotated refresh token that is an empty string keeps the previous refresh token', async () => {
     const writes: string[] = [];
     const tokens = await resolveOAuthSubscriptionTokens({
-      providerType: 'claude-subscription',
-      slug: 'claude-subscription',
+      providerType: 'openai-codex',
+      slug: 'codex-subscription',
       credentialStore: {
         getSecret: async () => nearExpiryStored,
         setSecret: async (_slug, _kind, value) => {
@@ -241,8 +241,8 @@ describe('OAuth refresh persistence transaction', () => {
     });
     let current: string | null = stored;
     const tokens = await resolveOAuthSubscriptionTokens({
-      providerType: 'claude-subscription',
-      slug: 'claude-subscription',
+      providerType: 'openai-codex',
+      slug: 'codex-subscription',
       credentialStore: {
         getSecret: async () => current,
         compareAndSetSecret: async (_slug, _kind, expected, value) => {
@@ -283,8 +283,8 @@ describe('OAuth refresh persistence transaction', () => {
     let reads = 0;
     const committedValues: string[] = [];
     const tokens = await resolveOAuthSubscriptionTokens({
-      providerType: 'claude-subscription',
-      slug: 'claude-subscription',
+      providerType: 'openai-codex',
+      slug: 'codex-subscription',
       credentialStore: {
         getSecret: async () => {
           reads += 1;
@@ -397,8 +397,8 @@ describe('OAuth refresh persistence transaction', () => {
         releaseRefresh = resolve;
       });
       const resolving = resolveOAuthSubscriptionTokens({
-        providerType: 'claude-subscription',
-        slug: 'claude-subscription',
+        providerType: 'openai-codex',
+        slug: 'codex-subscription',
         credentialStore: refreshingStore,
         now: () => 10_000_000,
         fetchFn: async () => {

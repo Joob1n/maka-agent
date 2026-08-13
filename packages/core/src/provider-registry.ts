@@ -19,7 +19,6 @@ export type ApplyPatchProtocol = 'openai-structured' | 'codex-v4a-freeform';
 
 type ProviderRuntimeAdapterDefinition =
   | { kind: 'anthropic'; auth: 'api-key' | 'bearer'; normalizeBaseUrl: boolean }
-  | { kind: 'claude-subscription' }
   | { kind: 'openai'; apiProtocol?: 'openai-chat' | 'openai-responses' }
   | { kind: 'openai-codex' }
   | { kind: 'google'; normalizeBaseUrl?: boolean }
@@ -1777,7 +1776,8 @@ const providerRegistry = {
   },
   'claude-subscription': {
     label: 'Claude Subscription (Pro / Max OAuth)',
-    description: 'Claude app subscription auth path, hidden behind the internal experimental gate.',
+    description:
+      'Retired. Existing connections still decode so a workspace that has one keeps the rest of its catalog, but the path is no longer wired into Runtime and cannot be signed into.',
     baseUrl: 'https://api.anthropic.com',
     authKind: 'oauth_token',
     backendKind: 'ai-sdk',
@@ -1791,11 +1791,15 @@ const providerRegistry = {
     ],
     status: 'phase3-experimental',
     protocol: 'anthropic',
-    runtimeAdapter: { kind: 'claude-subscription' },
+    // Retired: the subscription path authenticated with the Claude Code client
+    // and shaped every request to look like that client. An unavailable adapter
+    // keeps the provider type registered — a persisted connection must still
+    // decode, or one retired entry takes the whole catalog down with it — while
+    // removing it from the models a Session can select or send with.
+    runtimeAdapter: { kind: 'unavailable' },
     modelDiscovery: {
       kind: 'fallback',
-      reason:
-        'Subscription OAuth tokens are session-scoped (user:sessions:claude_code, no user:inference), so GET /v1/models rejects them with 401',
+      reason: 'Retired provider; no discovery is performed',
     },
     category: 'oauth',
     catalogBadge: 'Experimental',

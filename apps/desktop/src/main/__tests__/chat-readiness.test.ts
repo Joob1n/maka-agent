@@ -59,12 +59,12 @@ describe('chat readiness guard', () => {
       },
       {
         name: 'OAuth provider requires login token',
-        slug: 'claude-subscription',
+        slug: 'codex-subscription',
         deps: deps({
           connection: connection({
-            slug: 'claude-subscription',
-            name: 'Claude OAuth',
-            providerType: 'claude-subscription',
+            slug: 'codex-subscription',
+            name: 'OpenAI Codex',
+            providerType: 'openai-codex',
           }),
           apiKey: null,
         }),

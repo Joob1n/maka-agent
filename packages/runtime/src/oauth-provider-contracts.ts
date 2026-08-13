@@ -1,4 +1,4 @@
-export type OAuthEnrollmentProvider = 'claude-subscription' | 'openai-codex' | 'xai-oauth';
+export type OAuthEnrollmentProvider = 'openai-codex' | 'xai-oauth';
 
 export type OAuthTokenEndpointErrorCategory =
   | 'invalid_grant'
@@ -40,21 +40,6 @@ export class OAuthDeviceAuthorizationExpiredError extends Error {
 export const OAUTH_MAX_TOKEN_CHARS = 32 * 1024;
 
 export const OAUTH_PROVIDER_CONTRACTS = {
-  'claude-subscription': {
-    clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
-    authorizationEndpoint: 'https://claude.com/cai/oauth/authorize',
-    tokenEndpoint: 'https://platform.claude.com/v1/oauth/token',
-    redirectUri: 'https://platform.claude.com/oauth/code/callback',
-    // `user:inference` is what authorizes Messages API calls; without it the
-    // granted token is session-scoped only and every inference request fails
-    // with `permission_error: OAuth token does not meet scope requirement
-    // any_of(..., user:inference, ...)`. The consent screen renders it as
-    // "Contribute to your Claude subscription usage".
-    scope: 'user:inference user:sessions:claude_code user:mcp_servers user:file_upload',
-    tokenUserAgent: 'claude-cli/2.1.153 (external, cli)',
-    presentation: 'paste-code',
-    experimentalEnvironmentVariable: 'MAKA_CLAUDE_SUBSCRIPTION_EXPERIMENTAL',
-  },
   'openai-codex': {
     clientId: 'app_EMoamEEZ73f0CkXaXp7hrann',
     tokenEndpoint: 'https://auth.openai.com/oauth/token',

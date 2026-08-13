@@ -44,7 +44,6 @@ export const RUNTIME_HOST_OAUTH_IPC_CHANNELS = Object.freeze([
   ...OAUTH_LOGIN_PROVIDERS.flatMap((provider) => [
     ...(provider === 'xai-oauth' ? [] : [`${provider}:is-experimental-enabled`]),
     ...SHARED_OAUTH_IPC_OPERATIONS.map((operation) => `${provider}:${operation}`),
-    ...(provider === 'claude-subscription' ? [`${provider}:refresh-quota`] : []),
   ]),
   ...ANTIGRAVITY_OAUTH_IPC_OPERATIONS.map(
     (operation) => `antigravity-subscription:${operation}`,
@@ -200,21 +199,6 @@ export function registerRuntimeHostOAuthIpc(deps: RuntimeHostOAuthIpcDeps): void
         ? { ok: true as const }
         : actionFailure('Unable to refresh OAuth account', 'refresh_failed');
     });
-    if (provider === 'claude-subscription') {
-      deps.ipcMain.handle(channel('refresh-quota'), async () => {
-        const connection = findRuntimeHostAccountConnection(
-          await deps.client.loadConnectionCatalog(),
-          provider,
-        );
-        if (!connection) return actionFailure('OAuth account is not connected');
-        const result = await deps.client.fetchOAuthAccountUsage(connection.connectionId);
-        if (result.kind !== 'available') {
-          return actionFailure(`OAuth account usage is unavailable: ${result.reason}`);
-        }
-        accountUsage.set(provider, result.quota);
-        return { ok: true as const };
-      });
-    }
     deps.ipcMain.handle(channel('logout'), async () => {
       await cancelProviderAttempts(deps, activeAttempts, provider);
       try {

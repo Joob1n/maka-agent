@@ -45,7 +45,7 @@ test('presents both Host OAuth methods without exposing the authorization URL', 
 });
 
 test('adapts every Host OAuth provider through one Desktop flow', async () => {
-  const provider = 'claude-subscription' as const;
+  const provider = 'openai-codex' as const;
   const handlers = new Map<
     string,
     Parameters<RuntimeHostOAuthIpcDeps['ipcMain']['handle']>[1]
@@ -67,7 +67,7 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
       {
         connectionId: '00000000-0000-4000-8000-000000000001',
         revision: 1,
-        slug: 'claude-subscription',
+        slug: 'codex-subscription',
         name: 'Claude Code',
         providerType: provider,
         enabled: true,
@@ -188,7 +188,7 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
 
   assert.deepEqual([...handlers.keys()].sort(), [...RUNTIME_HOST_OAUTH_IPC_CHANNELS].sort());
 
-  for (const prefix of ['claude-subscription', 'openai-codex', 'xai-oauth']) {
+  for (const prefix of ['openai-codex', 'xai-oauth']) {
     assert.equal(handlers.has(`${prefix}:get-auth-url`), true);
     assert.equal(handlers.has(`${prefix}:complete-authorization`), true);
     assert.equal(handlers.has(`${prefix}:get-account-state`), true);
@@ -206,13 +206,13 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
       runtimeState: 'not_logged_in',
     },
   );
-  const authorization = await invoke(handlers, 'claude-subscription:get-auth-url');
+  const authorization = await invoke(handlers, 'openai-codex:get-auth-url');
   assert.deepEqual(authorization, { authRequestId: attemptId, stateHint: 'STATE-HINT' });
   assert.deepEqual(opened, ['https://claude.example/authorize']);
   assert.deepEqual(
     await invoke(
       handlers,
-      'claude-subscription:complete-authorization',
+      'openai-codex:complete-authorization',
       attemptId,
       'authorization-code#state',
     ),
@@ -223,16 +223,11 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
     connectionId: catalog.connections[0]?.connectionId,
     modelId,
   });
-  assert.deepEqual(await invoke(handlers, 'claude-subscription:refresh-quota'), {
-    ok: true,
-  });
-  assert.deepEqual(await invoke(handlers, 'claude-subscription:get-account-state'), {
+  // Account usage is no longer reported for any provider, so the account state
+  // carries no quota projection.
+  assert.deepEqual(await invoke(handlers, 'openai-codex:get-account-state'), {
     provider,
     runtimeState: 'authenticated',
-    quota: {
-      fiveHour: { utilization: 20, resetsAt: '2026-08-05T12:00:00.000Z' },
-      fetchedAt: 1,
-    },
   });
 });
 
@@ -339,7 +334,7 @@ function oauthProjection(
   return {
     attemptId,
     connectionId,
-    provider: 'claude-subscription' as const,
+    provider: 'openai-codex' as const,
     phase,
   };
 }

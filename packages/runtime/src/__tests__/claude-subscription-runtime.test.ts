@@ -6,23 +6,6 @@ import { openAiCodexHeaders } from '../subscription-auth.js';
 import { testConnection } from '../test-connection.js';
 
 describe('Claude subscription runtime wiring', () => {
-  test('testConnection treats resolved Claude OAuth token as a usable login', async () => {
-    const result = await testConnection(claudeOAuthConnection(), 'oauth-access-token');
-    assert.equal(result.ok, true);
-  });
-
-  test('testConnection never burns Claude OAuth quota with a synthetic messages probe', async () => {
-    let requests = 0;
-    const result = await testConnection(claudeOAuthConnection(), 'oauth-access-token', undefined, {
-      fetch: async () => {
-        requests += 1;
-        throw new Error('Claude OAuth connection test must not issue a request');
-      },
-    });
-    assert.equal(result.ok, true);
-    assert.equal(requests, 0);
-  });
-
   test('anthropicV1BaseUrl normalizes base URLs to a single /v1 suffix', async () => {
     const { anthropicV1BaseUrl } = await import('../provider-urls.js');
     assert.equal(

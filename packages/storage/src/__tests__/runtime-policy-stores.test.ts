@@ -2585,7 +2585,7 @@ describe('runtime policy stores', () => {
       const claude = await createConnection(
         stores,
         0,
-        connectionDraft('claude-login', 'claude-subscription', 'Claude login'),
+        connectionDraft('codex-login', 'openai-codex', 'Codex login'),
       );
       const first = await stores.operations.beginInteractiveOAuthLogin(claude.connectionId);
       const second = await stores.operations.beginInteractiveOAuthLogin(claude.connectionId);
