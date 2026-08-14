@@ -215,12 +215,16 @@ function createBridge(input: {
   };
 }
 
-function installSubscriptionFixtures() {
+function installSubscriptionFixtures(bridge: ConnectionsBridge) {
   const target = window as unknown as {
     maka?: Record<string, unknown>;
   };
   target.maka = {
     ...(target.maka ?? {}),
+    // The retired Claude row renders only for a workspace that enrolled before,
+    // which the section reads off window.maka rather than through the panel's
+    // bridge prop. Same source here, so the story shows what that workspace sees.
+    connections: bridge,
     openAiCodex: browserSubscriptionFixture({
       runtimeState: 'authenticated',
       email: 'codex@example.com',
@@ -272,8 +276,8 @@ function ProviderStoryFrame(props: {
   const clickedRef = useRef(false);
 
   useEffect(() => {
-    installSubscriptionFixtures();
-  }, []);
+    installSubscriptionFixtures(props.bridge);
+  }, [props.bridge]);
 
   useEffect(() => {
     const autoOpen = props.autoOpen;
