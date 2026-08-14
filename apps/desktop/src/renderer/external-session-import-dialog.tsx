@@ -396,17 +396,30 @@ export function ExternalSessionImportDialog(props: {
   );
 }
 
+/**
+ * Per-source facts this dialog needs, in one table rather than a chain per
+ * question: a third adapter adds a row here instead of finding every `if
+ * (adapterId === …)` in the component.
+ *
+ * `hasArchive` is a capability, not copy — the checkbox widens nothing under a
+ * source that keeps every conversation in one place, and toggling it there only
+ * re-ran the catalog load. Its eventual home is the adapter contract, which is
+ * an IPC change; keeping it beside the label is the same edit for whoever adds
+ * the third source.
+ */
+const SOURCE_TRAITS: Record<
+  string,
+  { label: (copy: ExternalSessionImportCopy) => string; hasArchive: boolean }
+> = {
+  codex: { label: (copy) => copy.codex, hasArchive: true },
+  'claude-code': { label: (copy) => copy.claudeCode, hasArchive: false },
+};
+
 function sourceLabel(adapterId: string, copy: ExternalSessionImportCopy): string {
-  if (adapterId === 'codex') return copy.codex;
-  if (adapterId === 'claude-code') return copy.claudeCode;
-  return adapterId;
+  return SOURCE_TRAITS[adapterId]?.label(copy) ?? adapterId;
 }
 
-/**
- * Whether a source has an archive to include. Claude Code keeps every
- * conversation in one place, so the checkbox had nothing to widen there — it
- * only re-ran the catalog load through the effect on `includeArchived`.
- */
+/** An unknown source is assumed not to have one; it cannot be queried for it. */
 function sourceHasArchive(adapterId: string): boolean {
-  return adapterId === 'codex';
+  return SOURCE_TRAITS[adapterId]?.hasArchive ?? false;
 }
