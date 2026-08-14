@@ -250,7 +250,7 @@ export function ExternalSessionImportDialog(props: {
                 </div>
               )}
 
-              {adapterIds.length > 0 && (
+              {adapterId !== null && sourceHasArchive(adapterId) && (
                 <CheckboxInput
                   label={copy.includeArchived}
                   value={includeArchived}
@@ -400,4 +400,13 @@ function sourceLabel(adapterId: string, copy: ExternalSessionImportCopy): string
   if (adapterId === 'codex') return copy.codex;
   if (adapterId === 'claude-code') return copy.claudeCode;
   return adapterId;
+}
+
+/**
+ * Whether a source has an archive to include. Claude Code keeps every
+ * conversation in one place, so the checkbox had nothing to widen there — it
+ * only re-ran the catalog load through the effect on `includeArchived`.
+ */
+function sourceHasArchive(adapterId: string): boolean {
+  return adapterId === 'codex';
 }

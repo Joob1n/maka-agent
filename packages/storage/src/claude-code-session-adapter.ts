@@ -6,8 +6,10 @@ import type { AssistantStepContentKind, StoredMessage } from '@maka/core/session
 import {
   type ClaudeTitleCandidates,
   type ClaudeTranscriptMeta,
+  claudeUserMessageText,
   collectClaudeMeta,
   collectClaudeTitle,
+  isClaudeInterruptNotice,
   parseForeignJsonLine,
   pickClaudeTitle,
   sanitizeForeignTitle,
@@ -110,9 +112,7 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
   }
 
   private async listCatalog(query: ExternalSessionQuery): Promise<ClaudeCatalogEntry[]> {
-    const candidates = (await walkTranscriptFiles(this.projectsRoot)).sort(
-      (a, b) => b.mtimeMs - a.mtimeMs,
-    );
+    const candidates = await walkTranscriptFiles(this.projectsRoot);
     const entries: ClaudeCatalogEntry[] = [];
     for (const candidate of candidates) {
       // Reading it would throw, so offering it in a picker only produces a
@@ -129,7 +129,7 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
     for (const candidate of await walkTranscriptFiles(this.projectsRoot)) {
       if (basename(candidate.path) !== `${sessionId}.jsonl`) continue;
       const entry = await this.catalogEntry(candidate);
-      if (entry?.id === sessionId) return entry;
+      if (entry) return entry;
     }
     return undefined;
   }
@@ -243,12 +243,15 @@ export function convertClaudeCodeTranscript(
   const meta: ClaudeTranscriptMeta = {};
   const titles: ClaudeTitleCandidates = {};
   const usedIds = new Set<string>();
-  const emittedToolCallIds = new Set<string>();
   let activeTurnId: string | undefined;
+  let lastTurnId: string | undefined;
+  // One model response, keyed by `message.id`, can reach the transcript as
+  // several records with a `tool_result` between them — 378 of 383 such
+  // continuations in a 1236-file local store carry only `tool_use`. Folding
+  // consecutive records alone would import those as a second assistant row.
+  const stepIdByMessageId = new Map<string, string>();
   let lastTimestamp = 0;
   let step: ClaudeAssistantStep | undefined;
-  let turnHadApiError = false;
-  let turnAborted = false;
 
   const uniqueId = (base: string): string => {
     if (!usedIds.has(base)) {
@@ -278,27 +281,24 @@ export function convertClaudeCodeTranscript(
   // construction, so record uuids stay available as message ids.
   const ensureTurnId = (line: number): string => {
     activeTurnId ??= generatedClaudeId(sessionId, 'turn', line);
+    lastTurnId = activeTurnId;
     return activeTurnId;
   };
 
   /**
-   * Close the open Turn with a recorded `turn_state`.
+   * Record a terminal `turn_state` the transcript actually carries.
    *
-   * Runtime Ledger repair only trusts a reconstructed terminal RuntimeEvent
-   * when the transcript carries a terminal `turn_state`
-   * (`isTrustworthyRecoveredTerminal`). Without one, every imported Run is
-   * repaired to `failed`/`missing_terminal_event` and the whole conversation
-   * renders as errors. A Claude Code Turn that is followed by another Turn, or
-   * by the end of the transcript, did end — the transcript is the record of
-   * that, so the status is recorded rather than inferred.
+   * Only two facts qualify: Claude Code's interrupt notice, and a record it
+   * flagged `isApiErrorMessage`. Everything else — including "the Turn ended
+   * because another one began" — is an inference, and `deriveTurnRecords`
+   * makes it, labelled `inferred`. Asserting `recorded` here would have told
+   * `isTrustworthyRecoveredTerminal` that a killed process finished normally.
    */
-  const closeTurn = (line: number): void => {
-    if (activeTurnId === undefined) return;
-    const status = turnAborted ? 'aborted' : turnHadApiError ? 'failed' : 'completed';
+  const recordTurnState = (line: number, status: 'aborted' | 'failed', turnId: string): void => {
     messages.push({
       type: 'turn_state',
       id: uniqueId(generatedClaudeId(sessionId, 'turn-state', line)),
-      turnId: activeTurnId,
+      turnId,
       ts: lastTimestamp,
       status,
       ...(status === 'failed' ? { errorClass: 'claude_code_error' } : {}),
@@ -307,9 +307,6 @@ export function convertClaudeCodeTranscript(
         : {}),
       partialOutputRetained: true,
     });
-    activeTurnId = undefined;
-    turnHadApiError = false;
-    turnAborted = false;
   };
 
   const flushStep = (): void => {
@@ -318,8 +315,26 @@ export function convertClaudeCodeTranscript(
     step = undefined;
 
     const body = current.texts.join('\n');
-    let assistantId: string | undefined;
-    if (body.length > 0 || current.thinking.length > 0) {
+    const continues = stepIdByMessageId.get(current.messageId);
+    let assistantId: string | undefined = continues;
+    // A continuation that carries no new prose contributes only its calls, and
+    // they point back at the row the response already has.
+    if (continues === undefined && (body.length > 0 || current.thinking.length > 0)) {
+      assistantId = uniqueId(current.messageId);
+      stepIdByMessageId.set(current.messageId, assistantId);
+      messages.push({
+        type: 'assistant',
+        id: assistantId,
+        turnId: current.turnId,
+        ts: current.ts,
+        text: body,
+        ...(current.thinking.length > 0 ? { thinking: buildThinking(current.thinking) } : {}),
+        contentOrder: current.order,
+        modelId: current.modelId,
+      });
+    } else if (continues !== undefined && (body.length > 0 || current.thinking.length > 0)) {
+      // The rare continuation that does carry prose stays visible as its own
+      // row rather than being silently dropped.
       assistantId = uniqueId(current.messageId);
       messages.push({
         type: 'assistant',
@@ -334,8 +349,10 @@ export function convertClaudeCodeTranscript(
     }
 
     for (const tool of current.tools) {
-      if (emittedToolCallIds.has(tool.id)) continue;
-      emittedToolCallIds.add(tool.id);
+      // A repeated `tool_use` id would otherwise emit a second `tool_call`
+      // with a duplicate message id; `usedIds` is the same answer the rest of
+      // the conversion uses.
+      if (usedIds.has(tool.id)) continue;
       usedIds.add(tool.id);
       messages.push({
         type: 'tool_call',
@@ -362,15 +379,15 @@ export function convertClaudeCodeTranscript(
       // not model output, so they enter Maka as session notes.
       if (value.isApiErrorMessage === true) {
         flushStep();
-        turnHadApiError = true;
         messages.push({
           type: 'system_note',
           id: uniqueId(recordId(value, sessionId, 'error', record.line)),
           ...(activeTurnId === undefined ? {} : { turnId: activeTurnId }),
           ts: timestampFor(record),
           kind: 'error',
-          data: { text: claudeUserText(message) },
+          data: { text: claudeUserText(value) },
         });
+        if (activeTurnId !== undefined) recordTurnState(record.line, 'failed', activeTurnId);
         continue;
       }
 
@@ -404,19 +421,40 @@ export function convertClaudeCodeTranscript(
     if (toolResults.length > 0) {
       // The harness replying to the model, not the human speaking. Sibling text
       // blocks in the same record are Claude Code's own framing, so the record
-      // converts to tool results only and never opens a Turn.
+      // converts to tool results only.
+      //
+      // A tool result never opens a Turn: its `toolUseId` points into a
+      // `tool_call` that belongs to one already, and two real transcripts start
+      // with a result before any prompt. With no Turn to attach to it is a
+      // fragment of a conversation that is not in this file, and dropping it is
+      // more faithful than inventing a Turn to hold it.
+      const turnId = activeTurnId ?? lastTurnId;
+      if (turnId === undefined) continue;
       for (const block of toolResults) {
         const toolUseId = stringField(block, 'tool_use_id');
         if (!toolUseId) continue;
+        const text = claudeToolResultText(block.content);
         messages.push({
           type: 'tool_result',
           id: uniqueId(recordId(value, sessionId, 'tool-result', record.line)),
-          turnId: ensureTurnId(record.line),
+          turnId,
           ts: timestampFor(record),
           toolUseId,
           isError: block.is_error === true,
-          content: { kind: 'text', text: claudeToolResultText(block.content) },
+          content: { kind: 'text', text },
         });
+        // The user answering "no" at the approval prompt. Claude Code writes it
+        // as an errored tool result, sometimes with no interrupt notice after
+        // it, so without this the cancelled Turn reads as an ordinary one.
+        if (block.is_error === true && isClaudeToolRejection(text)) {
+          messages.push({
+            type: 'system_note',
+            id: uniqueId(recordId(value, sessionId, 'tool-rejected', record.line)),
+            turnId,
+            ts: lastTimestamp,
+            kind: 'abort',
+          });
+        }
       }
       continue;
     }
@@ -436,20 +474,21 @@ export function convertClaudeCodeTranscript(
     // never typed by the human and must not import as a user Turn.
     if (value.isMeta === true) continue;
 
-    const userText = claudeUserText(message);
+    const userText = claudeUserText(value);
     if (userText.length === 0) continue;
 
     // An interrupt notice ends the Turn the user stopped; it is not a new
     // request. Treating it as one would open a Turn holding only that notice.
     if (isClaudeInterruptNotice(userText)) {
       timestampFor(record);
-      turnAborted = true;
-      closeTurn(record.line);
+      if (activeTurnId !== undefined) recordTurnState(record.line, 'aborted', activeTurnId);
+      activeTurnId = undefined;
       continue;
     }
 
-    closeTurn(record.line);
     activeTurnId = generatedClaudeId(sessionId, 'turn', record.line);
+    lastTurnId = activeTurnId;
+    stepIdByMessageId.clear();
     messages.push({
       type: 'user',
       id: uniqueId(recordId(value, sessionId, 'user', record.line)),
@@ -459,7 +498,6 @@ export function convertClaudeCodeTranscript(
     });
   }
   flushStep();
-  closeTurn(records.at(-1)?.line ?? 0);
 
   const name = sanitizeForeignTitle(fallbackName) || pickClaudeTitle(titles) || sessionId;
   return {
@@ -537,19 +575,27 @@ function contentBlocks(message: JsonRecord): JsonRecord[] {
 }
 
 /** User-visible text of a `user` record; media-only prompts keep a placeholder. */
-function claudeUserText(message: JsonRecord): string {
-  if (typeof message.content === 'string') return message.content;
-  const blocks = contentBlocks(message);
-  const texts = blocks.flatMap((block) =>
-    stringField(block, 'type') === 'text' && typeof block.text === 'string' ? [block.text] : [],
-  );
-  if (texts.length > 0) return texts.join('\n');
+/**
+ * User-authored text for one record, on core's reading of it — the scanner and
+ * the importer must not disagree about what the human said. The image fallback
+ * is the adapter's own: a Turn whose prompt was a pasted screenshot has no text
+ * to carry, and an empty user message would drop the Turn entirely.
+ */
+function claudeUserText(record: JsonRecord): string {
+  const text = claudeUserMessageText(record);
+  if (text !== undefined) return text;
+  const message = asRecord(record.message);
+  const blocks = message ? contentBlocks(message) : [];
   return blocks.some((block) => stringField(block, 'type') === 'image') ? '[Image]' : '';
 }
 
-/** Claude Code's own notice that the user stopped the Turn mid-flight. */
-function isClaudeInterruptNotice(text: string): boolean {
-  return text.trimStart().startsWith('[Request interrupted by user');
+/**
+ * Claude Code's fixed text for "the user declined this tool call". Matched on
+ * the sentence rather than on `is_error` alone: an ordinary tool failure is
+ * also an errored result and is not an abort.
+ */
+function isClaudeToolRejection(text: string): boolean {
+  return text.includes("The user doesn't want to proceed with this tool use");
 }
 
 function claudeToolResultText(value: unknown): string {
@@ -612,18 +658,47 @@ async function readUtf8Window(
     const length = Math.min(maxBytes, metadata.size);
     const buffer = Buffer.allocUnsafe(length);
     const position = anchor === 'head' ? 0 : metadata.size - length;
-    const { bytesRead } = await handle.read(buffer, 0, length, position);
-    return buffer.subarray(0, bytesRead).toString('utf8');
+    // A single `read` may return short. The truncated tail would be a half
+    // line, `parseClaudeRecords` skips malformed lines in silence, and the
+    // import would report success on a transcript missing its end.
+    let filled = 0;
+    while (filled < length) {
+      const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    return buffer.subarray(0, filled).toString('utf8');
   } finally {
     await handle.close();
   }
 }
 
-/** The whole transcript, refusing anything past the configured bound. */
+/**
+ * The whole transcript, refusing anything past the configured bound.
+ *
+ * The bound is checked against the handle the read uses, not against a separate
+ * `stat`: a file that grows between the two would otherwise pass the check and
+ * then be silently truncated to the older size.
+ */
 async function readWholeTranscript(path: string, maxBytes: number): Promise<string> {
-  const { size } = await stat(path);
-  if (size > maxBytes) throw new Error(`Claude Code transcript exceeds ${maxBytes} bytes`);
-  return readUtf8Window(path, maxBytes, 'head');
+  const handle = await open(path, 'r');
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) throw new Error('Claude Code transcript is not a regular file');
+    if (metadata.size > maxBytes) {
+      throw new Error(`Claude Code transcript exceeds ${maxBytes} bytes`);
+    }
+    const buffer = Buffer.allocUnsafe(metadata.size);
+    let filled = 0;
+    while (filled < metadata.size) {
+      const { bytesRead } = await handle.read(buffer, filled, metadata.size - filled, filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    return buffer.subarray(0, filled).toString('utf8');
+  } finally {
+    await handle.close();
+  }
 }
 
 function asRecord(value: unknown): JsonRecord | undefined {

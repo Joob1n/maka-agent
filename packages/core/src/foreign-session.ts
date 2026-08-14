@@ -277,13 +277,22 @@ export function claudeFirstPromptCandidate(record: Record<string, unknown>): str
  * and must not be dropped from the handoff.
  */
 export function isSyntheticClaudeUserText(text: string): boolean {
-  const t = text.trimStart();
   return (
-    t.startsWith('[Request interrupted by user') ||
+    isClaudeInterruptNotice(text) ||
     /^<\/?(command-(name|message|args|contents)|local-command-(stdout|stderr)|bash-(input|stdout|stderr))[\s>]/.test(
-      t,
+      text.trimStart(),
     )
   );
+}
+
+/**
+ * Claude Code's own notice that the user stopped the Turn mid-flight. Shared
+ * with the import adapter: the scanner deciding "this is not a prompt" and the
+ * adapter deciding "this Turn was aborted" are the same judgement, and a drift
+ * between them would silently reclassify a cancelled Turn.
+ */
+export function isClaudeInterruptNotice(text: string): boolean {
+  return text.trimStart().startsWith('[Request interrupted by user');
 }
 
 export function pickClaudeTitle(titles: ClaudeTitleCandidates): string {

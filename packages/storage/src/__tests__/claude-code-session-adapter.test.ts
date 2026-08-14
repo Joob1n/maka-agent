@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -286,25 +286,194 @@ describe('ClaudeCodeSessionAdapter', () => {
     );
   });
 
-  test('records a terminal turn_state for every Turn', async () => {
+  test('records a terminal turn_state only for a fact the transcript carries', async () => {
     const text = await readFile(CURRENT_FIXTURE, 'utf8');
     const session = convertClaudeCodeTranscript(text, 'claude-session-1', '', '/fallback');
     const turns = deriveTurnRecords(session.messages);
 
-    // Runtime Ledger repair only trusts a reconstructed terminal RuntimeEvent
-    // when the Turn carries a recorded terminal state. An inferred status makes
-    // it repair the Run to failed/missing_terminal_event, so every imported
-    // Turn then renders as an error.
+    // The provider error is written down, so that Turn's terminal state is
+    // `recorded`. Nothing in the transcript says the second Turn ended — only
+    // that another one began — so its status is derived and labelled as such.
     assert.deepEqual(
       turns.map((turn) => turn.statusSource),
-      turns.map(() => 'recorded'),
+      ['recorded', 'inferred'],
     );
     assert.deepEqual(
       turns.map((turn) => turn.status),
       ['failed', 'completed'],
     );
-    // The Turn holding the provider error is the failed one, and it says why.
     assert.equal(turns[0]?.errorClass, 'claude_code_error');
+  });
+
+  test('does not report an unfinished Turn as a completed one', () => {
+    const line = (record: unknown): string => JSON.stringify(record);
+    // A killed process, a crash, or a Session still running: the last prompt has
+    // no answer after it. Importing this as a `recorded` completed Turn told
+    // Runtime that a conversation which never finished had finished normally.
+    const text = [
+      line({
+        type: 'user',
+        uuid: 'k-1',
+        cwd: '/workspace/project',
+        timestamp: '2026-08-08T00:00:01.000Z',
+        message: { role: 'user', content: 'Start the migration' },
+      }),
+      line({
+        type: 'assistant',
+        uuid: 'k-2',
+        timestamp: '2026-08-08T00:00:02.000Z',
+        message: {
+          id: 'msg_k1',
+          model: 'claude-opus-5',
+          content: [{ type: 'text', text: 'On it.' }],
+        },
+      }),
+      line({
+        type: 'user',
+        uuid: 'k-3',
+        cwd: '/workspace/project',
+        timestamp: '2026-08-08T00:00:03.000Z',
+        message: { role: 'user', content: 'Now do the second half' },
+      }),
+    ].join('\n');
+
+    const session = convertClaudeCodeTranscript(text, 'claude-killed', '', '/fallback');
+    assert.equal(
+      session.messages.some((message) => message.type === 'turn_state'),
+      false,
+    );
+    const turns = deriveTurnRecords(session.messages);
+    assert.deepEqual(
+      turns.map((turn) => turn.statusSource),
+      ['inferred', 'inferred'],
+    );
+  });
+
+  test('reads a declined tool call as an abort rather than an ordinary result', () => {
+    const line = (record: unknown): string => JSON.stringify(record);
+    const text = [
+      line({
+        type: 'user',
+        uuid: 'r-1',
+        cwd: '/workspace/project',
+        timestamp: '2026-08-08T00:00:01.000Z',
+        message: { role: 'user', content: 'Delete the build directory' },
+      }),
+      line({
+        type: 'assistant',
+        uuid: 'r-2',
+        timestamp: '2026-08-08T00:00:02.000Z',
+        message: {
+          id: 'msg_r1',
+          model: 'claude-opus-5',
+          content: [
+            { type: 'tool_use', id: 'toolu_r1', name: 'Bash', input: { command: 'rm -rf build' } },
+          ],
+        },
+      }),
+      line({
+        type: 'user',
+        uuid: 'r-3',
+        timestamp: '2026-08-08T00:00:03.000Z',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_r1',
+              is_error: true,
+              content:
+                "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+            },
+          ],
+        },
+      }),
+    ].join('\n');
+
+    const session = convertClaudeCodeTranscript(text, 'claude-rejected', '', '/fallback');
+    // An ordinary tool failure is also an errored result, so the abort has to
+    // come from the rejection sentence, not from `is_error`.
+    assert.ok(
+      session.messages.some(
+        (message) => message.type === 'system_note' && message.kind === 'abort',
+      ),
+    );
+    assert.equal(deriveTurnRecords(session.messages)[0]?.status, 'aborted');
+  });
+
+  test('keeps an ordinary errored tool result out of the abort path', () => {
+    const line = (record: unknown): string => JSON.stringify(record);
+    const text = [
+      line({
+        type: 'user',
+        uuid: 'e-1',
+        cwd: '/workspace/project',
+        timestamp: '2026-08-08T00:00:01.000Z',
+        message: { role: 'user', content: 'Read the config' },
+      }),
+      line({
+        type: 'assistant',
+        uuid: 'e-2',
+        timestamp: '2026-08-08T00:00:02.000Z',
+        message: {
+          id: 'msg_e1',
+          model: 'claude-opus-5',
+          content: [
+            { type: 'tool_use', id: 'toolu_e1', name: 'Read', input: { path: '/missing' } },
+          ],
+        },
+      }),
+      line({
+        type: 'user',
+        uuid: 'e-3',
+        timestamp: '2026-08-08T00:00:03.000Z',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_e1', is_error: true, content: 'ENOENT' },
+          ],
+        },
+      }),
+    ].join('\n');
+
+    const session = convertClaudeCodeTranscript(text, 'claude-tool-error', '', '/fallback');
+    assert.equal(
+      session.messages.some(
+        (message) => message.type === 'system_note' && message.kind === 'abort',
+      ),
+      false,
+    );
+  });
+
+  test('drops a tool result that arrives before any Turn exists', () => {
+    const line = (record: unknown): string => JSON.stringify(record);
+    // Two real transcripts open with a result whose `tool_use_id` points into a
+    // conversation that is not in this file. Opening a Turn to hold it produced
+    // a row with no prompt and no answer.
+    const text = [
+      line({
+        type: 'user',
+        uuid: 'o-1',
+        timestamp: '2026-08-08T00:00:01.000Z',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_elsewhere', content: 'ok' }],
+        },
+      }),
+      line({
+        type: 'user',
+        uuid: 'o-2',
+        cwd: '/workspace/project',
+        timestamp: '2026-08-08T00:00:02.000Z',
+        message: { role: 'user', content: 'Now start properly' },
+      }),
+    ].join('\n');
+
+    const session = convertClaudeCodeTranscript(text, 'claude-orphan', '', '/fallback');
+    assert.deepEqual(
+      session.messages.map((message) => message.type),
+      ['user'],
+    );
   });
 
   test('treats an interrupt notice as the end of its Turn, not a new one', () => {
@@ -368,13 +537,14 @@ describe('ClaudeCodeSessionAdapter', () => {
     const turns = deriveTurnRecords(session.messages);
     assert.equal(turns.length, 1);
     assert.equal(turns[0]?.status, 'completed');
-    assert.equal(turns[0]?.statusSource, 'recorded');
+    // Nothing in a 2.0 transcript records that the Turn ended either.
+    assert.equal(turns[0]?.statusSource, 'inferred');
 
     // text + tool_use arriving in one record still yields one assistant step
     // plus a call that points back at it.
     assert.deepEqual(
       session.messages.map((message) => message.type),
-      ['user', 'assistant', 'tool_call', 'tool_result', 'assistant', 'turn_state'],
+      ['user', 'assistant', 'tool_call', 'tool_result', 'assistant'],
     );
     const assistant = session.messages[1];
     assert.equal(assistant?.type === 'assistant' && assistant.text, 'Let me count them.');
@@ -394,7 +564,7 @@ describe('ClaudeCodeSessionAdapter', () => {
     const text = await readFile(CURRENT_FIXTURE, 'utf8');
     assert.match(text, /^\{ this line is not valid json$/m);
     const session = convertClaudeCodeTranscript(text, 'claude-session-1', '', '/fallback');
-    assert.equal(session.messages.length, 12);
+    assert.equal(session.messages.length, 11);
   });
 
   test('keeps message ids unique when a transcript repeats a record uuid', () => {
@@ -433,6 +603,77 @@ describe('ClaudeCodeSessionAdapter', () => {
         /Invalid Claude Code Session id/,
       );
       await assert.rejects(() => adapter.readSession('missing'), /Claude Code Session not found/);
+    });
+  });
+
+  test('refuses a transcript that resolves outside the projects root', async () => {
+    await withClaudeHome(async (claudeHome) => {
+      await seedFixtureTranscript(claudeHome, '-workspace-project', 'claude-session-1');
+      // A name inside the root is not enough: the id check passes and the walk
+      // finds it, so only resolving the real path keeps the read inside.
+      // Same basename as the link, so the id and basename checks both pass.
+      // Two layers refuse this: the walk skips symlinks, and `realpath` +
+      // root-prefix refuses one that got past it. The assertion fails only when
+      // both are gone — verified by mutating each in turn.
+      const outside = join(claudeHome, 'escaped-session.jsonl');
+      await writeFile(
+        outside,
+        `${JSON.stringify({
+          type: 'user',
+          uuid: 'x-1',
+          cwd: '/elsewhere',
+          isSidechain: false,
+          timestamp: '2026-08-08T00:00:00.000Z',
+          message: { role: 'user', content: 'Not ours to read' },
+        })}\n`,
+        'utf8',
+      );
+      await symlink(
+        outside,
+        join(claudeHome, 'projects', '-workspace-project', 'escaped-session.jsonl'),
+      );
+
+      const adapter = new ClaudeCodeSessionAdapter({ claudeHome });
+      assert.deepEqual(
+        (await adapter.listSessions()).map((session) => session.id),
+        ['claude-session-1'],
+      );
+      await assert.rejects(
+        () => adapter.readSession('escaped-session'),
+        /Claude Code Session not found/,
+      );
+    });
+  });
+
+  test('grows the head probe when the opening window carries no cwd', async () => {
+    await withClaudeHome(async (claudeHome) => {
+      // `cwd` past the 256KB probe is only reachable by the second, larger
+      // window. Without the growth step the Session lists with no project and
+      // drops out of every cwd-scoped query.
+      await seedTranscript(claudeHome, '-workspace-project', 'claude-late-cwd', [
+        {
+          type: 'assistant',
+          uuid: 'late-1',
+          timestamp: '2026-08-08T00:00:00.000Z',
+          message: {
+            id: 'msg_late',
+            role: 'assistant',
+            model: 'claude-opus-5',
+            content: [{ type: 'text', text: 'x'.repeat(300 * 1024) }],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'late-2',
+          cwd: '/workspace/project',
+          isSidechain: false,
+          timestamp: '2026-08-08T00:00:01.000Z',
+          message: { role: 'user', content: 'Where am I?' },
+        },
+      ]);
+
+      const [summary] = await new ClaudeCodeSessionAdapter({ claudeHome }).listSessions();
+      assert.equal(summary?.cwd, '/workspace/project');
     });
   });
 

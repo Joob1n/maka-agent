@@ -195,7 +195,12 @@ export class RuntimeLedgerRepair {
     const recoveredTerminal = recovered.find((event) => isMatchingTerminalRuntimeEvent(run, event));
     const legacyTerminal = latestTurnState(messages, run.turnId);
     const canTrustRecoveredTerminal = recoveredTerminal
-      ? isTrustworthyRecoveredTerminal(run, legacyTerminal, recoveredTerminal)
+      ? isTrustworthyRecoveredTerminal(
+          run,
+          legacyTerminal,
+          recoveredTerminal,
+          modelHistory === 'conversation_text',
+        )
       : false;
     const recoveredEventsToPersist = canTrustRecoveredTerminal
       ? recovered
@@ -635,24 +640,49 @@ function isSameRecoveredRuntimeEvent(existing: RuntimeEvent, recovered: RuntimeE
   );
 }
 
+/**
+ * Whether a terminal RuntimeEvent rebuilt from stored messages may be believed.
+ *
+ * For a live Run the header is the authority and the messages are a possibly
+ * half-written record of it, so a recovered terminal is only trusted when a
+ * recorded `turn_state` corroborates it.
+ *
+ * `headerDerivedFromTheseMessages` is the transcript-materialization path,
+ * where that reasoning does not apply: `transcriptRunHeader` builds the header
+ * out of `deriveTurnRecords` over the very same messages. There is no
+ * independent record for the transcript to contradict, so requiring a
+ * `recorded` terminal only pushes the pressure onto importers, which answer it
+ * by asserting a status they never observed. An inferred terminal that agrees
+ * with the header it was derived from is exactly as good as the import gets.
+ */
 function isTrustworthyRecoveredTerminal(
   run: AgentRunHeader,
   turnState: Extract<StoredMessage, { type: 'turn_state' }> | undefined,
   terminal: RuntimeEvent,
+  headerDerivedFromTheseMessages: boolean,
 ): boolean {
-  if (!turnState || !isTerminalTurnStatus(turnState.status)) return false;
-  if (terminal.status === 'completed') {
-    return run.status === 'completed' && turnState.status === 'completed';
+  if (!terminalAgreesWithRunHeader(run, terminal)) return false;
+  if (!turnState || !isTerminalTurnStatus(turnState.status)) {
+    return headerDerivedFromTheseMessages;
   }
+  if (terminal.status === 'completed') return turnState.status === 'completed';
   if (terminal.status === 'failed') {
     return (
-      run.status === 'failed' &&
       turnState.status === 'failed' &&
       (!run.failureClass || !turnState.errorClass || turnState.errorClass === run.failureClass)
     );
   }
   if (terminal.status === 'aborted' || terminal.status === 'cancelled') {
-    return run.status === 'cancelled' && turnState.status === 'aborted';
+    return turnState.status === 'aborted';
+  }
+  return false;
+}
+
+function terminalAgreesWithRunHeader(run: AgentRunHeader, terminal: RuntimeEvent): boolean {
+  if (terminal.status === 'completed') return run.status === 'completed';
+  if (terminal.status === 'failed') return run.status === 'failed';
+  if (terminal.status === 'aborted' || terminal.status === 'cancelled') {
+    return run.status === 'cancelled';
   }
   return false;
 }

@@ -336,7 +336,14 @@ export function backfillRuntimeEventsFromStoredMessages(
     }
   }
 
-  const terminal = terminalRuntimeEvent({ run: input.run, turnMessages, invocationId, newId, now });
+  const terminal = terminalRuntimeEvent({
+    run: input.run,
+    turnMessages,
+    invocationId,
+    newId,
+    now,
+    headerDerivedFromTheseMessages: conversationTextOnly,
+  });
   if (terminal.event) {
     events.push(terminal.event);
   } else if (terminal.diagnostic) {
@@ -401,9 +408,10 @@ function terminalRuntimeEvent(input: {
   invocationId: string;
   newId: () => string;
   now: () => number;
+  headerDerivedFromTheseMessages: boolean;
 }): { event?: RuntimeEvent; diagnostic?: RuntimeEventBackfillDiagnostic } {
   const turnState = latestTurnState(input.turnMessages);
-  const status = terminalStatus(input.run, turnState);
+  const status = terminalStatus(input.run, turnState, input.headerDerivedFromTheseMessages);
   if (!status) {
     return {
       diagnostic: {
@@ -453,9 +461,18 @@ function terminalRuntimeEvent(input: {
   };
 }
 
+/**
+ * `headerDerivedFromTheseMessages` is the transcript-materialization path,
+ * where the header was built by `deriveTurnRecords` over these same messages.
+ * Elsewhere a header without corroborating legacy evidence is exactly the
+ * half-written state this refuses to guess at, but there the header carries no
+ * information the messages do not already carry, and refusing leaves the Run
+ * with no terminal at all — repaired to `failed` regardless of what it says.
+ */
 function terminalStatus(
   run: AgentRunHeader,
   turnState: TurnStateMessage | undefined,
+  headerDerivedFromTheseMessages = false,
 ): RuntimeEventStatus | undefined {
   const legacyStatus = turnState?.status;
   if (legacyStatus === 'completed' || run.status === 'completed') return 'completed';
@@ -468,6 +485,10 @@ function terminalStatus(
   if (legacyStatus === 'aborted' && run.status === 'cancelled') return 'aborted';
   if ((legacyStatus === 'aborted' || run.status === 'cancelled') && turnState?.abortSource)
     return 'aborted';
+  if (headerDerivedFromTheseMessages) {
+    if (run.status === 'failed') return 'failed';
+    if (run.status === 'cancelled') return 'aborted';
+  }
   return undefined;
 }
 

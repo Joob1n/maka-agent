@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { isTerminalRuntimeEvent } from '@maka/core/runtime-event';
 import type { StoredMessage } from '@maka/core/session';
 import {
   createSqliteAgentRunStore,
@@ -185,6 +186,87 @@ test('repairs imported transcript turns into provider-neutral canonical history'
         ['assistant', 'Add a regression test.'],
       ],
     );
+  } finally {
+    runtimeEvents.close();
+    runs.close?.();
+    await sessions.close?.();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('materializes an imported Turn whose terminal status was inferred', async () => {
+  // A transcript records what happened, not that it stopped happening. Before
+  // this, `isTrustworthyRecoveredTerminal` refused any terminal a `turn_state`
+  // did not corroborate, so an import with no synthesized state was repaired to
+  // failed/missing_terminal_event and the whole conversation rendered as errors
+  // — which is what pushed the adapters into asserting a `recorded` status they
+  // never observed. Here the header is derived from these same messages, so
+  // there is no more authoritative record for them to contradict.
+  const root = await mkdtemp(join(tmpdir(), 'maka-transcript-ledger-inferred-'));
+  const sessions = createSessionStore(root);
+  const runs = createSqliteAgentRunStore(root);
+  const runtimeEvents = createSqliteRuntimeStore(join(root, 'runtime.sqlite'));
+  let sequence = 0;
+  const newId = () => `inferred-${++sequence}`;
+
+  try {
+    const externalTs = Date.now() + 86_400_000;
+    const messages: StoredMessage[] = [
+      { type: 'user', id: 'i-user', turnId: 'turn-1', ts: externalTs, text: 'Fix the parser' },
+      {
+        type: 'assistant',
+        id: 'i-assistant',
+        turnId: 'turn-1',
+        ts: externalTs,
+        text: 'Done.',
+        modelId: 'external-model',
+      },
+      { type: 'user', id: 'i-user-2', turnId: 'turn-2', ts: externalTs + 1, text: 'Cancel that' },
+      {
+        type: 'system_note',
+        id: 'i-abort',
+        turnId: 'turn-2',
+        ts: externalTs + 2,
+        kind: 'abort',
+      },
+    ];
+    const session = await sessions.createImportedSession(
+      {
+        cwd: '/repo',
+        backend: 'fake',
+        llmConnectionSlug: 'deepseek',
+        model: 'deepseek-v4-flash',
+        permissionMode: 'ask',
+      },
+      messages,
+    );
+    const repair = new RuntimeLedgerRepair({
+      runStore: runs,
+      runtimeEventStore: runtimeEvents,
+      readMessages: (sessionId) => sessions.readMessages(sessionId),
+      appendMessage: (sessionId, message) => sessions.appendMessage(sessionId, message),
+      appendTurnState: async () => undefined,
+      newId,
+      now: () => 100,
+    });
+
+    await repair.materializeTranscriptLedger(session);
+
+    const imported = await runs.listSessionRuns(session.id);
+    const byTurn = new Map(imported.map((run) => [run.turnId, run] as const));
+    // Not `failed` / `missing_terminal_event`: the inferred status carries.
+    assert.equal(byTurn.get('turn-1')?.status, 'completed');
+    assert.equal(byTurn.get('turn-1')?.failureClass, undefined);
+    // And an inferred terminal is still read for what it says, not flattened.
+    assert.equal(byTurn.get('turn-2')?.status, 'cancelled');
+
+    for (const run of imported) {
+      const events = await runtimeEvents.readRuntimeEvents(session.id, run.runId);
+      assert.ok(
+        events.some((event) => isTerminalRuntimeEvent(event)),
+        `${run.turnId} must materialize a terminal RuntimeEvent`,
+      );
+    }
   } finally {
     runtimeEvents.close();
     runs.close?.();
