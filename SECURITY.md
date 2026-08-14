@@ -96,7 +96,8 @@ supply their own boundary. See
    Antigravity preview) live in the same store: `credentials.json`
    is the single authority every Runtime Host surface — Desktop, TUI, CLI —
    reads and writes, under the same OS-account and 0o700/0o600 boundary
-   as other runtime credentials. Electron safeStorage is not part of
+   as other runtime credentials. A retired provider's token stays in that
+   store under the same boundary until the user deletes its connection. Electron safeStorage is not part of
    this boundary anymore. Pre-existing safeStorage-encrypted credential
    or token files are not imported; users with only those copies must
    re-authenticate.
@@ -163,8 +164,7 @@ privacy commitments:
   consumer tests own the full enforcement inventory.
 - **Token boundary.** Cleartext API keys / OAuth tokens / bot
   tokens NEVER cross the main→renderer IPC boundary.
-  `apps/desktop/src/main/__tests__/web-search-credentials.test.ts`
-  enforces this for Tavily credentials.
+  No automated test asserts this today — see §4.
 
 ## 3. Scope of vulnerability reports
 
@@ -212,9 +212,13 @@ Credential-test requests may submit an unsaved cleartext token so the
 user can verify it before saving. The main process accepts it for that
 single request and does not echo it in the response.
 
-The static-analysis contract tests for this policy:
-- `apps/desktop/src/main/__tests__/web-search-credentials.test.ts`
-- `apps/desktop/src/main/__tests__/runtime-host-connections-ipc-main.test.ts`
+This policy has no contract test left in the repo. #1851 removed the two
+source-grep tests that enforced it (`web-search-boundary.test.ts`,
+`claude-subscription-ipc-boundary.test.ts`) and #1332 replaced that style with
+behavior tests, none of which assert the boundary. Treat the paragraphs above
+as the specification and read the IPC handlers themselves; a report that finds
+a cleartext secret crossing main→renderer is in scope precisely because
+nothing automated is watching for it.
 
 ## 5. Versioning
 

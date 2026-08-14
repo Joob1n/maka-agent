@@ -20,6 +20,7 @@ import {
   PROVIDER_REGISTRY,
   READY_PROVIDER_TYPES,
   RECOMMENDED_PROVIDER_TYPES,
+  isRetiredProvider,
   isWiredOAuthProvider,
   type ApplyPatchProtocol,
   type ProviderCatalogGroup,
@@ -38,6 +39,7 @@ export {
   PROVIDER_REGISTRY,
   READY_PROVIDER_TYPES,
   RECOMMENDED_PROVIDER_TYPES,
+  isRetiredProvider,
   isWiredOAuthProvider,
 };
 export type {

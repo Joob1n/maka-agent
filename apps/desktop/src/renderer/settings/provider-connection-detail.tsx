@@ -134,6 +134,7 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     needsOAuth,
     usesGitHubCopilotLogin,
     oauthLoginService,
+    retired,
     supportsRemoteDiscovery,
     credentialProbePending,
     hasUsableCredential,
@@ -310,7 +311,9 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
           />
         )}
         {needsOAuth && (
-          usesGitHubCopilotLogin ? (
+          retired ? (
+            <Banner status="info" role="status" title={copy.oauthRetired} description={copy.oauthRetiredDetail} />
+          ) : usesGitHubCopilotLogin ? (
             <GitHubCopilotReloginNotice hasSecret={hasSecret} onRelogin={refreshAfterRelogin} />
           ) : oauthLoginService ? (
             <OAuthReloginNotice

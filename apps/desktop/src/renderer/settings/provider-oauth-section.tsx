@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Banner, HStack, Text, VStack } from '@astryxdesign/core';
 import { type ProviderType } from '@maka/core/llm-connections';
+import { isRetiredProvider } from '@maka/core/provider-registry';
 import {
   Badge,
   Button,
@@ -82,24 +83,36 @@ export function useOAuthCards(props: { query?: string }) {
     // filtering here left the cards that were hidden at mount with a null
     // state: clearing the search then revealed signed-in accounts rendering as
     // "可用". The retired row has no account state to read.
-    const cardsToRefresh = cards.filter((card) => card.id !== 'claude');
-    const retired = await window.maka.connections
-      .list()
-      .then((list) => list.some((item) => item.providerType === 'claude-subscription'))
-      .catch(() => false);
-    const results = await Promise.all(
-      cardsToRefresh.map(async (card) => {
-        try {
-          const snapshot = await getSubscriptionSnapshot(card.id);
-          return { id: card.id, snapshot } as const;
-        } catch (error) {
-          return { id: card.id, error } as const;
-        }
-      }),
-    );
+    const cardsToRefresh = cards.filter((card) => !isRetiredProvider(card.providerType));
+    const [retired, results] = await Promise.all([
+      // A retired row is shown only to a workspace that enrolled before, so
+      // this asks the catalog rather than an account-state channel the retired
+      // provider no longer has. Alongside the snapshots, not before them: it is
+      // on the path to first paint.
+      window.maka.connections
+        .list()
+        .then((list) => list.some((item) => isRetiredProvider(item.providerType)))
+        .catch((error: unknown) => ({ error })),
+      Promise.all(
+        cardsToRefresh.map(async (card) => {
+          try {
+            const snapshot = await getSubscriptionSnapshot(card.id);
+            return { id: card.id, snapshot } as const;
+          } catch (error) {
+            return { id: card.id, error } as const;
+          }
+        }),
+      ),
+    ]);
     if (!mountedRef.current || refreshTicketRef.current !== ticket) return false;
-    setHasRetiredConnection(retired);
-    const failures = results.filter((result) => 'error' in result);
+    // A failed list leaves the previous answer standing. Flipping it to `false`
+    // would retract the retirement notice from the users it exists for, and a
+    // transient list failure is not evidence that the connection is gone.
+    if (typeof retired === 'boolean') setHasRetiredConnection(retired);
+    const failures = [
+      ...results.filter((result) => 'error' in result),
+      ...(typeof retired === 'boolean' ? [] : [retired]),
+    ];
     setCardStates((prev) => {
       const next = { ...prev };
       for (const result of results) {
@@ -131,7 +144,7 @@ export function useOAuthCards(props: { query?: string }) {
   }, []);
 
   const visibleCards: OAuthCard[] = cards
-    .filter((card) => card.id !== 'claude' || hasRetiredConnection)
+    .filter((card) => !isRetiredProvider(card.providerType) || hasRetiredConnection)
     .filter(matchesQuery)
     .map((card) => {
       const snapshot = cardStates[card.id];
@@ -279,11 +292,9 @@ function GitHubCopilotLoginPanel() {
   );
 }
 
+// Never called for a retired card: `refreshAllCards` filters those out before
+// any snapshot is read, because a retired provider has no account-state channel.
 async function getSubscriptionSnapshot(serviceId: OAuthCardId): Promise<SubscriptionSnapshot> {
-  if (serviceId === 'claude') {
-    // Retired: there is no account state to read.
-    return { runtimeState: 'not_logged_in' };
-  }
   if (serviceId === 'github-copilot') {
     return window.maka.githubCopilotSubscription.getAccountState();
   }

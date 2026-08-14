@@ -54,6 +54,9 @@ const zhCopy = {
     oauthLoadingDetail: '正在读取本机 OAuth 登录状态，读取完成前不会把未知状态显示成未登录。',
     oauthUnknownDetail: '暂时无法读取本机 OAuth 登录状态；请刷新页面或重新打开设置。',
     oauthWaitingDetail: '请到账号连接完成登录；登录成功后会自动出现在模型连接里。',
+    oauthRetired: '此登录方式已停用',
+    oauthRetiredDetail:
+      '这条连接使用的登录方式已从 Maka 移除，无法再登录，也无法用于对话。改用 Anthropic API Key 连接即可继续使用 Claude 模型；删除这条连接会一并清除本机保存的登录凭据。',
     credentialLoadingDetail: '正在读取模型凭据状态，读取完成前暂不测试连接或刷新模型。',
     credentialUnknownDetail: '模型凭据状态暂时没刷新成功，已避免把未知状态显示成未登录或未配置。',
     testConnection: '测试连接',
@@ -193,6 +196,9 @@ const enCopy: ProviderSettingsCopy = {
     oauthLoadingDetail: 'Reading the local OAuth status. An unknown state will not be shown as signed out.',
     oauthUnknownDetail: 'The local OAuth status is temporarily unavailable. Refresh the page or reopen Settings.',
     oauthWaitingDetail: 'Complete sign-in under account connections. The model connection appears automatically afterward.',
+    oauthRetired: 'This sign-in path is retired',
+    oauthRetiredDetail:
+      'The sign-in this connection uses was removed from Maka. It can no longer be signed into or used in a conversation. Add an Anthropic API key connection to keep using Claude models; deleting this connection also clears the sign-in credential stored on this machine.',
     credentialLoadingDetail: 'Reading model credential status. Connection tests and model refresh are paused until it finishes.',
     credentialUnknownDetail: 'Model credential status could not be refreshed, so the connection is not being mislabeled as signed out or unconfigured.',
     testConnection: 'Test connection',

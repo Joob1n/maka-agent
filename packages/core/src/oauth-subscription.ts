@@ -89,9 +89,9 @@ export interface QuotaSnapshot {
 /**
  * Full subscription account state — the renderer-facing surface.
  *
- * This is what `claude-subscription:get-account-state` IPC returns.
- * The renderer consumes this directly; no token-shaped data ever
- * crosses the IPC boundary.
+ * The renderer consumes this directly; no token-shaped data ever crosses the
+ * IPC boundary. The channel that used to return it is gone with the retired
+ * provider; the shape stays for the wire contract the live providers share.
  */
 export interface SubscriptionAccountState {
   provider: OAuthSubscriptionProvider;
@@ -135,14 +135,15 @@ export type SubscriptionActionFailureReason =
   | 'unknown';
 
 /**
- * Authorization URL payload returned by `claude-subscription:get-auth-url`.
+ * Authorization URL payload returned by a subscription provider's get-auth-url
+ * channel.
  *
  * The renderer gets ONLY an opaque request id + a short state hint —
  * **never the URL itself** (kenji `027c93c0`). The URL stays in the
- * main process's pending state map and is opened via the
- * separate `claude-subscription:open-auth-url` IPC, which looks
- * the URL up by the same request id. This way a malicious or
- * compromised renderer cannot ask main to open an arbitrary URL.
+ * main process's pending state map and is opened via the separate
+ * open-auth-url channel, which looks the URL up by the same request id.
+ * This way a malicious or compromised renderer cannot ask main to open an
+ * arbitrary URL.
  *
  * `stateHint` is the first 8 chars of the OAuth state. The
  * renderer surfaces it so the user knows which paste-code modal

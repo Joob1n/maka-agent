@@ -1,5 +1,6 @@
 import {
   PROVIDER_DEFAULTS,
+  isRetiredProvider,
   isWiredOAuthProvider,
   providerAuthRequiresSecret,
   providerSupportsModelDiscovery,
@@ -9,7 +10,13 @@ import {
   type ProviderType,
 } from './llm-connections.js';
 
-export const PROVIDER_AUTH_SETUP_MODES = ['api_key', 'oauth', 'oauth_preview', 'none'] as const;
+export const PROVIDER_AUTH_SETUP_MODES = [
+  'api_key',
+  'oauth',
+  'oauth_preview',
+  'oauth_retired',
+  'none',
+] as const;
 export type ProviderAuthSetupMode = (typeof PROVIDER_AUTH_SETUP_MODES)[number];
 
 export const PROVIDER_AUTH_STATES = [
@@ -20,6 +27,7 @@ export const PROVIDER_AUTH_STATES = [
   'needs_reauth',
   'error',
   'preview_only',
+  'retired',
 ] as const;
 export type ProviderAuthState = (typeof PROVIDER_AUTH_STATES)[number];
 
@@ -107,6 +115,24 @@ export function deriveProviderAuthContract(input: ProviderAuthContractInput): Pr
   }
 
   if (defaults.authKind === 'oauth_token') {
+    // Retired before preview: an unwired provider and a retired one are both
+    // unwired, but only one of them was ever available. Reading this as a
+    // preview would offer a sign-in that was deliberately taken away.
+    if (isRetiredProvider(input.providerType)) {
+      return {
+        providerType: input.providerType,
+        setupMode: 'oauth_retired',
+        state: 'retired',
+        validationStatus: 'not_run',
+        requiresSecret: true,
+        sendMayUseWithoutSecret: false,
+        actionAvailability,
+        copy: {
+          label: `${defaults.label} 已停用`,
+          detail: '此登录方式已从 Maka 移除；删除这条连接会一并清除本机保存的登录凭据。',
+        },
+      };
+    }
     if (isWiredOAuthProvider(input.providerType)) {
       const validationStatus = input.lastTestStatus ?? 'not_run';
       const state: ProviderAuthState = authStateFromSecretAndTest(hasSecret, input.lastTestStatus);
@@ -254,6 +280,7 @@ function setupModeForAuthKind(authKind: ConnectionAuth['kind']): ProviderAuthSet
 
 function setupModeForProvider(providerType: ProviderType): ProviderAuthSetupMode {
   const authKind = PROVIDER_DEFAULTS[providerType]?.authKind;
+  if (authKind === 'oauth_token' && isRetiredProvider(providerType)) return 'oauth_retired';
   if (authKind === 'oauth_token' && isWiredOAuthProvider(providerType)) return 'oauth';
   return setupModeForAuthKind(authKind);
 }
@@ -290,6 +317,11 @@ function copyForApiKey(label: string, state: ProviderAuthState): ProviderAuthCon
       return {
         label,
         detail: '当前状态不走模型密钥凭据流程。',
+      };
+    case 'retired':
+      return {
+        label: `${label} 已停用`,
+        detail: '这个 provider 已从 Maka 移除，不能再登录或用于对话。',
       };
   }
 }
@@ -330,6 +362,11 @@ function copyForOptionalApiKey(
         label,
         detail: '当前状态不走可选模型密钥流程。',
       };
+    case 'retired':
+      return {
+        label: `${label} 已停用`,
+        detail: '这个 provider 已从 Maka 移除，不能再登录或用于对话。',
+      };
   }
 }
 
@@ -365,6 +402,11 @@ function copyForOAuth(label: string, state: ProviderAuthState): ProviderAuthCont
       return {
         label,
         detail: '当前状态不走 OAuth 账号流程。',
+      };
+    case 'retired':
+      return {
+        label: `${label} 已停用`,
+        detail: '这个登录方式已从 Maka 移除；删除这条连接会一并清除本机保存的登录凭据。',
       };
   }
 }

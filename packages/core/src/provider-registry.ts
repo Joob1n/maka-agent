@@ -43,7 +43,7 @@ export type ProviderRuntimeAdapter = ProviderRuntimeAdapterDefinition & {
 export type ProviderModelDiscovery =
   | {
       kind: 'protocol';
-      auth?: 'claude-subscription' | 'github-copilot' | 'oauth-bearer' | 'openai-codex' | 'none';
+      auth?: 'github-copilot' | 'oauth-bearer' | 'openai-codex' | 'none';
       path?: string;
       query?: Readonly<Record<string, string>>;
       responseShape?: 'array-or-data';
@@ -72,6 +72,13 @@ export interface ProviderDefaults {
   status: 'ready' | 'phase3-experimental';
   protocol: 'anthropic' | 'openai' | 'google' | 'cohere';
   runtimeAdapter: ProviderRuntimeAdapter;
+  /**
+   * A provider Maka used to offer and no longer does. It stays registered so a
+   * workspace that enrolled before keeps decoding its stored connection, but no
+   * surface may offer to sign into it. Distinct from an unwired preview
+   * provider, which was never available in the first place.
+   */
+  retired?: true;
   modelDiscovery: ProviderModelDiscovery;
   category: ProviderCategory;
   catalogGroup?: ProviderCatalogGroup;
@@ -1791,6 +1798,7 @@ const providerRegistry = {
     ],
     status: 'phase3-experimental',
     protocol: 'anthropic',
+    retired: true,
     // Retired: the subscription path authenticated with the Claude Code client
     // and shaped every request to look like that client. An unavailable adapter
     // keeps the provider type registered — a persisted connection must still
@@ -1858,6 +1866,15 @@ export const RECOMMENDED_PROVIDER_TYPES = providerTypesByOrder('recommendedOrder
  * OAuth credential contract and a runnable model adapter. OAuth entries whose
  * adapter is unavailable remain preview-only.
  */
+/**
+ * A retired provider keeps decoding but must never be presented as available.
+ * Read this rather than inferring retirement from an unavailable adapter: an
+ * unwired preview provider looks identical from there and is not the same thing.
+ */
+export function isRetiredProvider(providerType: ProviderType): boolean {
+  return PROVIDER_REGISTRY[providerType].retired === true;
+}
+
 export function isWiredOAuthProvider(providerType: ProviderType): boolean {
   const provider = PROVIDER_REGISTRY[providerType];
   return provider.authKind === 'oauth_token' && provider.runtimeAdapter.kind !== 'unavailable';

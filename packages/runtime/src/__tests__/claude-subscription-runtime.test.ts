@@ -78,18 +78,6 @@ describe('Claude subscription runtime wiring', () => {
   });
 });
 
-function claudeOAuthConnection(): LlmConnection {
-  return {
-    slug: 'claude-subscription',
-    name: 'Claude OAuth',
-    providerType: 'claude-subscription',
-    defaultModel: 'claude-sonnet-4-5-20250929',
-    enabled: true,
-    createdAt: 1,
-    updatedAt: 1,
-  };
-}
-
 function codexOAuthConnection(): LlmConnection {
   return {
     slug: 'openai-codex',

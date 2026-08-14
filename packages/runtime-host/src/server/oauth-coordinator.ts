@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
 import { createProxiedFetchTransport } from '@maka/runtime/network/scoped-fetch-transport';
 import {
@@ -262,9 +261,11 @@ export class HostOAuthCoordinator {
       return invalidRequest('Connection cannot start an interactive OAuth login');
     }
     if (this.#admissionClosed) return hostDraining();
-    // Storage already refuses to admit a retired provider, so the ticket above
-    // cannot belong to one by the time it reaches here.
-    const provider = admitted.connection.providerType as OAuthLoginProvider;
+    // No cast: the admission ticket is typed to storage's
+    // `InteractiveOAuthLoginProvider`, so the compiler keeps that union and the
+    // protocol's `OAuthLoginProvider` from drifting apart — which is the one
+    // property worth checking in a change whose job is narrowing both in step.
+    const provider = admitted.connection.providerType;
     if (!this.#isProviderEnabled(provider)) {
       return operationUnavailable('OAuth enrollment is disabled for this provider');
     }
@@ -544,10 +545,6 @@ function loginFailureCode(error: unknown): OAuthLoginFailureCode {
       : 'authorization_failed';
   }
   return 'internal_failure';
-}
-
-function randomOpaqueValue(): string {
-  return randomBytes(32).toString('base64url');
 }
 
 function authorizationTimeout(value: number | undefined): number {

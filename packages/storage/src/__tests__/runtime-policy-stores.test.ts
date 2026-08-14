@@ -2646,6 +2646,19 @@ describe('runtime policy stores', () => {
         kind: 'provider_action_unavailable',
         availability: 'hidden',
       });
+
+      // A retired provider reaches here the same way an unwired one does: the
+      // stored connection still decodes, so it can be looked up and asked to
+      // start a login. Storage is the single place that refuses.
+      const retired = await createConnection(
+        stores,
+        3,
+        connectionDraft('claude-retired', 'claude-subscription', 'Claude retired'),
+      );
+      assert.deepEqual(await stores.operations.beginInteractiveOAuthLogin(retired.connectionId), {
+        kind: 'provider_action_unavailable',
+        availability: 'hidden',
+      });
     });
   });
 

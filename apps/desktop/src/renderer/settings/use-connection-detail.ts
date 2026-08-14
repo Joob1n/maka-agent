@@ -13,7 +13,7 @@ import {
   type RelayModelProfile,
   type ThinkingLevel,
 } from '@maka/core/model-thinking';
-import { isWiredOAuthProvider } from '@maka/core/provider-registry';
+import { isRetiredProvider, isWiredOAuthProvider } from '@maka/core/provider-registry';
 import {
   providerAuthRequiresSecret,
   providerAuthSupportsApiKey,
@@ -34,10 +34,11 @@ import {
 } from './provider-panel-shared';
 
 // Maps an OAuth model-connection provider type to the browser-assisted login
-// service that can re-run its authorization from inside the connection dialog. Only
-// the loopback / polling services (Codex, Antigravity) are one-button-drivable
-// here; Claude's paste-code flow and plain API-key providers return null so the
-// notice falls back to prose instead of rendering a dead button.
+// service that can re-run its authorization from inside the connection dialog.
+// Only the loopback / polling services (Codex, xAI, Antigravity) are
+// one-button-drivable here; plain API-key providers return null so the notice
+// falls back to prose instead of rendering a dead button. A retired provider
+// never reaches this — see `retired` in the hook.
 export interface OAuthLoginService {
   bridge: OAuthLoginFlowBridge;
   display: { name: string; shortName: string };
@@ -114,7 +115,13 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
   const toast = useToast();
   const supportsApiKey = providerAuthSupportsApiKey(connection.providerType);
   const needsOAuth = defaults.authKind === 'oauth_token';
-  const oauthLoginService = needsOAuth ? oauthLoginServiceFor(connection.providerType) : null;
+  // A retired provider still has its credential on disk, so `hasSecret` is true
+  // and the generic notice used to tell these users to "reauthorize under
+  // account connections" — an instruction that now leads to the retirement
+  // notice and nowhere else.
+  const retired = isRetiredProvider(connection.providerType);
+  const oauthLoginService =
+    needsOAuth && !retired ? oauthLoginServiceFor(connection.providerType) : null;
   const usesGitHubCopilotLogin = connection.providerType === 'github-copilot';
   const supportsRemoteDiscovery = providerSupportsModelDiscovery(connection.providerType);
   const requiresCredential = providerAuthRequiresSecret(connection.providerType);
@@ -625,6 +632,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     needsOAuth,
     usesGitHubCopilotLogin,
     oauthLoginService,
+    retired,
     supportsRemoteDiscovery,
     credentialProbePending,
     hasUsableCredential,

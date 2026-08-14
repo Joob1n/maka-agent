@@ -716,6 +716,115 @@ async function waitForTerminal(
   throw new Error('OAuth login did not settle');
 }
 
+// Re-landed from the Claude fixture this PR removed. What it asserts is
+// provider-agnostic: `oauth-coordinator.ts` wraps every commit in
+// `#activation.runMutation`, so credential commit and backend activation must
+// exclude each other in both directions for Codex and xAI too.
+test('OAuth credential commit excludes overlapping backend activations in both directions', async () => {
+  await withFixture('openai-codex', async (fixture) => {
+    const client = await attachPresentation(fixture.capabilities, 'client-activation', []);
+    const precedingActivationEntered = deferred();
+    const releasePrecedingActivation = deferred();
+    const precedingActivation = fixture.activation.runBackendActivation(async () => {
+      precedingActivationEntered.resolve();
+      await releasePrecedingActivation.promise;
+    });
+    await precedingActivationEntered.promise;
+
+    const invalidationEntered = deferred();
+    const releaseInvalidation = deferred();
+    const coordinator = new HostOAuthCoordinator({
+      runtimePolicy: fixture.stores,
+      activation: fixture.activation,
+      clientCapabilities: fixture.capabilities,
+      isProviderEnabled: () => true,
+      acquireResidency: fixture.acquireResidency,
+      invalidateBackends: async () => {
+        fixture.invalidations += 1;
+        invalidationEntered.resolve();
+        await releaseInvalidation.promise;
+      },
+      onFatal: (error) => {
+        throw error;
+      },
+      now: () => NOW,
+      startCodexAuthorization: async () => ({
+        deviceAuthId: 'deviceauth-activation',
+        userCode: 'CODE-ACT1',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: NOW + 60_000,
+        intervalMs: 1_000,
+      }),
+      pollCodexAuthorization: async () => ({
+        authorizationCode: 'activation-auth-code',
+        codeVerifier: 'activation-verifier',
+      }),
+      exchangeCodexCode: async () => tokenFixture('gated-access'),
+    });
+
+    const started = await coordinator.handlers['oauth.login.start'](
+      { attemptId: 'attempt-activation', connectionId: fixture.connection.connectionId },
+      operationContext('client-activation', fixture.acquireResidency),
+    );
+    assert.equal(started.ok, true);
+    await waitForPhase(coordinator, 'attempt-activation', 'committing');
+    assert.equal(fixture.invalidations, 0);
+
+    let laterActivationEntered = false;
+    const laterActivation = fixture.activation.runBackendActivation(() => {
+      laterActivationEntered = true;
+    });
+    releasePrecedingActivation.resolve();
+    await invalidationEntered.promise;
+    assert.equal(laterActivationEntered, false);
+
+    releaseInvalidation.resolve();
+    assert.equal((await waitForTerminal(coordinator, 'attempt-activation')).phase, 'authenticated');
+    await Promise.all([precedingActivation, laterActivation]);
+    assert.equal(laterActivationEntered, true);
+    await coordinator.close();
+    client.close();
+  });
+});
+
+// The wire constant this PR newly defines had no caller after the Claude
+// fixture went, so changing `reason` left the whole package green.
+test('account usage answers unsupported_provider for every wired provider', async () => {
+  await withFixture('openai-codex', async (fixture) => {
+    const coordinator = new HostOAuthCoordinator({
+      runtimePolicy: fixture.stores,
+      activation: fixture.activation,
+      clientCapabilities: fixture.capabilities,
+      isProviderEnabled: () => true,
+      acquireResidency: fixture.acquireResidency,
+      invalidateBackends: async () => undefined,
+      onFatal: (error) => {
+        throw error;
+      },
+      now: () => NOW,
+    });
+
+    assert.deepEqual(
+      await coordinator.handlers['oauth.account.usage.fetch'](
+        { connectionId: fixture.connection.connectionId },
+        operationContext('client-usage', fixture.acquireResidency),
+      ),
+      { ok: true, result: { kind: 'unavailable', reason: 'unsupported_provider' } },
+    );
+    // An unknown Connection reaches the same answer: the operation is
+    // unconditionally unavailable, so it reads no state to distinguish them.
+    assert.deepEqual(
+      await coordinator.handlers['oauth.account.usage.fetch'](
+        { connectionId: 'connection-that-does-not-exist' },
+        operationContext('client-usage', fixture.acquireResidency),
+      ),
+      { ok: true, result: { kind: 'unavailable', reason: 'unsupported_provider' } },
+    );
+    assert.equal(fixture.activeResidencies, 0);
+    await coordinator.close();
+  });
+});
+
 async function waitForPhase(
   coordinator: HostOAuthCoordinator,
   attemptId: string,

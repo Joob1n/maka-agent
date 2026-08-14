@@ -113,12 +113,6 @@ export function decodeOAuthInitialTokenPayload(
   };
 }
 
-function assertOpaqueValue(_name: string, value: string, maxChars: number): void {
-  if (typeof value !== 'string' || value.length === 0 || value.length > maxChars) {
-    throw new OAuthTokenEndpointError('invalid_response');
-  }
-}
-
 function assertTokenEndpointTimeout(timeoutMs: number): void {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
     throw new OAuthTokenEndpointError('invalid_response');

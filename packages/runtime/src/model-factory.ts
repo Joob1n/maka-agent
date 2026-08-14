@@ -395,8 +395,7 @@ export function buildProviderOptions(
     // provider's native effort values pass through unchanged.
     case 'anthropic':
     case 'MiniMax':
-    case 'MiniMax-cn':
-    case 'claude-subscription': {
+    case 'MiniMax-cn': {
       let reasoning = {};
       if (level === 'off' && thinkingOptions?.offBehavior === 'anthropic-thinking-disabled') {
         reasoning = { thinking: { type: 'disabled' as const } };

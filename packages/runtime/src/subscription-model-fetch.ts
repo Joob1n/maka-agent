@@ -95,10 +95,6 @@ function containsGitHubCopilotImage(value: unknown): boolean {
   return Object.values(record).some(containsGitHubCopilotImage);
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
 function buildOpenAiCodexFetch(
   sessionId: string,
   fetchFn: typeof fetch,

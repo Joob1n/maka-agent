@@ -65,7 +65,7 @@ Wiki bar: Design Conventions · API Use-the-System · Theming · Container Paddi
 | `apps/desktop/src/renderer/settings/bot-chat-shared.tsx` | settings-module | none | aligned — no raw controls; no Astryx JSX usage | aligned |
 | `apps/desktop/src/renderer/settings/bot-onboarding-modal.tsx` | settings-page | Button, Dialog, DialogHeader, Layout, LayoutContent, Spinner | aligned — uses Astryx (Button, Dialog, DialogHeader, Layout, LayoutContent, Spinner) | aligned |
 | `apps/desktop/src/renderer/settings/bot-wechat-login.tsx` | settings-module | Banner, Button, Collapsible, Dialog, DialogHeader, EmptyState, Layout, LayoutContent, Spinner | aligned — uses Astryx (Banner, Button, Collapsible, Dialog, DialogHeader, EmptyState, Layout, LayoutContent) | aligned |
-| `apps/desktop/src/renderer/settings/claude-subscription-card.tsx` | settings-module | Banner, Button | aligned — uses Astryx (Banner, Button) | aligned |
+| `apps/desktop/src/renderer/settings/claude-subscription-card.tsx` | settings-module | Banner | aligned — uses Astryx (Banner) | aligned |
 | `apps/desktop/src/renderer/settings/custom-pet-settings-section.tsx` | settings-module | Badge, Button, EmptyState | aligned — uses Astryx (Badge, Button, EmptyState) | aligned |
 | `apps/desktop/src/renderer/settings/daily-review-settings-page.tsx` | settings-page | Banner | aligned — uses Astryx (Banner) | aligned |
 | `apps/desktop/src/renderer/settings/data-settings-page.tsx` | settings-page | Banner, Button | aligned — uses Astryx (Banner, Button) | aligned |
