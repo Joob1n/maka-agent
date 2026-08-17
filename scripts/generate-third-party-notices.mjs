@@ -344,12 +344,16 @@ function validateAssetNotices() {
  * or environmental rather than a missed regeneration.
  */
 function describeNoticeDrift(committed, generated) {
+  // Split on either ending. A CRLF checkout would otherwise leave `\r` on every
+  // extracted name, reporting the same packages as both added and removed and
+  // hiding the text-drift branch below — the diagnostic would misdescribe
+  // exactly the environment-specific failure it exists to explain.
+  const linesOf = (text) => text.split(/\r?\n/);
   const packagesIn = (text) =>
     new Set(
-      text
-        .split('\n')
+      linesOf(text)
         .filter((line) => line.startsWith('Package: '))
-        .map((line) => line.slice('Package: '.length)),
+        .map((line) => line.slice('Package: '.length).trim()),
     );
   const committedPackages = packagesIn(committed);
   const generatedPackages = packagesIn(generated);
@@ -368,15 +372,26 @@ function describeNoticeDrift(committed, generated) {
   list('committed but no longer in the closure', onlyCommitted);
 
   if (onlyGenerated.length === 0 && onlyCommitted.length === 0) {
-    const committedLines = committed.split('\n');
-    const generatedLines = generated.split('\n');
+    const committedLines = linesOf(committed);
+    const generatedLines = linesOf(generated);
     const limit = Math.max(committedLines.length, generatedLines.length);
     let index = 0;
     while (index < limit && committedLines[index] === generatedLines[index]) index += 1;
     lines.push('  the same packages are listed, so the difference is in the notice text itself');
-    lines.push(`  first difference at line ${index + 1}:`);
-    lines.push(`    committed:  ${JSON.stringify(committedLines[index] ?? '<end of file>')}`);
-    lines.push(`    generated:  ${JSON.stringify(generatedLines[index] ?? '<end of file>')}`);
+    if (index === limit) {
+      // Every line matches once endings are normalized, so the bytes differ only
+      // in how the lines end. Naming that is the whole answer — regenerating
+      // will not help, and the repository already forces LF through
+      // .gitattributes, so a CRLF checkout means that rule did not take effect.
+      lines.push('  every line matches once line endings are normalized:');
+      lines.push(`    committed uses CRLF: ${committed.includes('\r\n')}`);
+      lines.push(`    generated uses CRLF: ${generated.includes('\r\n')}`);
+      lines.push('  check .gitattributes and the checkout, not the dependency closure');
+    } else {
+      lines.push(`  first difference at line ${index + 1}:`);
+      lines.push(`    committed:  ${JSON.stringify(committedLines[index] ?? '<end of file>')}`);
+      lines.push(`    generated:  ${JSON.stringify(generatedLines[index] ?? '<end of file>')}`);
+    }
   }
   return lines.join('\n');
 }
