@@ -333,12 +333,66 @@ function validateAssetNotices() {
   }
 }
 
+/**
+ * Say what drifted, not just that something did.
+ *
+ * The comparison is byte-exact over a 15k-line generated file, so "stale" on
+ * its own leaves whoever hit it — often on a CI runner whose OS they are not
+ * holding — with nothing to act on. The two shapes worth separating are a
+ * changed dependency closure, which the suggested command fixes, and identical
+ * packages whose license bytes moved, which usually means something upstream
+ * or environmental rather than a missed regeneration.
+ */
+function describeNoticeDrift(committed, generated) {
+  const packagesIn = (text) =>
+    new Set(
+      text
+        .split('\n')
+        .filter((line) => line.startsWith('Package: '))
+        .map((line) => line.slice('Package: '.length)),
+    );
+  const committedPackages = packagesIn(committed);
+  const generatedPackages = packagesIn(generated);
+  const onlyGenerated = [...generatedPackages].filter((name) => !committedPackages.has(name));
+  const onlyCommitted = [...committedPackages].filter((name) => !generatedPackages.has(name));
+
+  const lines = [];
+  const list = (label, names) => {
+    if (names.length === 0) return;
+    const shown = names.slice(0, 10);
+    lines.push(`  ${label} (${names.length}):`);
+    for (const name of shown) lines.push(`    ${name}`);
+    if (names.length > shown.length) lines.push(`    …and ${names.length - shown.length} more`);
+  };
+  list('present in the closure but missing from the committed file', onlyGenerated);
+  list('committed but no longer in the closure', onlyCommitted);
+
+  if (onlyGenerated.length === 0 && onlyCommitted.length === 0) {
+    const committedLines = committed.split('\n');
+    const generatedLines = generated.split('\n');
+    const limit = Math.max(committedLines.length, generatedLines.length);
+    let index = 0;
+    while (index < limit && committedLines[index] === generatedLines[index]) index += 1;
+    lines.push('  the same packages are listed, so the difference is in the notice text itself');
+    lines.push(`  first difference at line ${index + 1}:`);
+    lines.push(`    committed:  ${JSON.stringify(committedLines[index] ?? '<end of file>')}`);
+    lines.push(`    generated:  ${JSON.stringify(generatedLines[index] ?? '<end of file>')}`);
+  }
+  return lines.join('\n');
+}
+
 validateAssetNotices();
 const generated = renderNotice();
 if (checkOnly) {
-  if (!existsSync(outputPath) || readFileSync(outputPath, 'utf8') !== generated) {
+  if (!existsSync(outputPath)) {
     throw new Error(
-      'Production dependency notices are stale. Run npm run generate:third-party-notices.',
+      `Production dependency notices are missing at ${outputPath}. Run npm run generate:third-party-notices.`,
+    );
+  }
+  const committed = readFileSync(outputPath, 'utf8');
+  if (committed !== generated) {
+    throw new Error(
+      `Production dependency notices are stale. Run npm run generate:third-party-notices.\n${describeNoticeDrift(committed, generated)}`,
     );
   }
   console.log('[third-party-notices] OK — production dependency inventory is current.');
