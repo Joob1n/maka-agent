@@ -245,8 +245,17 @@ License: SIL Open Font License, Version 1.1
 Maka's desktop renderer bundle embeds Geist Variable and Geist Mono Variable
 webfont files. The packages that carry them are build-time dependencies, but
 the `.woff2` files themselves are emitted into the renderer bundle and are
-therefore redistributed in binary artifacts. The following SIL Open Font
-License, Version 1.1 applies to that material:
+therefore redistributed in binary artifacts. The upstream license text for
+that material follows verbatim:
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
 
 PREAMBLE
 The goals of the Open Font License (OFL) are to stimulate worldwide
