@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   assertMissing,
+  assertPackagedDependencyClosure,
   assertPackagedResources,
   isolatedUserEnv,
   makePtyProbe,
@@ -115,6 +116,10 @@ export async function verifyPackagedWindowsApp(
     requireWindowsSandbox,
     requireDisclaimer,
   });
+  // Same seam the sandbox check uses: a baseline install predates this
+  // classification, so requiring it of a previously released build would fail
+  // a release that was correct when it shipped.
+  if (expectedVersion === undefined) await assertPackagedDependencyClosure(resources);
   await requirePath(join(resources, 'git', 'cmd', 'git.exe'));
 
   step('reading the executable architecture');

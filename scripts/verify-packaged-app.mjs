@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { access, mkdir, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createReadStream, readFileSync } from 'node:fs';
+import { access, mkdir, readFile, readdir } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { join, resolve } from 'node:path';
+import { getRawHeader } from '@electron/asar';
 
 // `timeoutMs` is opt-in, for the commands that have actually hung: node-pty
 // under conpty keeps a handle open after its child exits. Everything else runs
@@ -423,6 +425,74 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
     throw new Error(`${error.message}${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
   } finally {
     await stopChild(child);
+  }
+}
+
+/**
+ * What `app.asar` actually carries under `node_modules`, read from the archive
+ * header rather than inferred from a manifest.
+ */
+const desktopRoot = resolve(import.meta.dirname, '..', 'apps', 'desktop');
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function asarNodeModules(asarPath) {
+  const { header } = getRawHeader(asarPath);
+  const modules = header.files?.node_modules?.files ?? {};
+  const names = new Set();
+  for (const [name, node] of Object.entries(modules)) {
+    if (name.startsWith('@')) {
+      for (const scoped of Object.keys(node.files ?? {})) names.add(`${name}/${scoped}`);
+    } else {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * The packaged archive is the only thing that can answer this. A manifest
+ * assertion would still pass if electron-builder changed how it walks the
+ * closure, if a transitive package leaked back in, or if the renderer stopped
+ * bundling one of these — none of which are visible from `package.json`.
+ */
+export async function assertPackagedDependencyClosure(resourcesPath, { readManifest } = {}) {
+  const manifest = readManifest
+    ? await readManifest()
+    : readJson(join(desktopRoot, 'package.json'));
+  const rendererOnly = manifest?.maka?.rendererBundledDependencies;
+  if (!Array.isArray(rendererOnly) || rendererOnly.length === 0) {
+    throw new Error('maka.rendererBundledDependencies must list the renderer roots');
+  }
+  const packaged = asarNodeModules(join(resourcesPath, 'app.asar'));
+
+  const shipped = rendererOnly.filter((name) => packaged.has(name));
+  if (shipped.length > 0) {
+    throw new Error(`app.asar carries renderer-only packages a second time: ${shipped.join(', ')}`);
+  }
+  // The PTY stack reaches these from the main process, so their absence would
+  // mean the opposite failure — a closure trimmed past what actually runs.
+  for (const required of ['@xterm/headless', '@xterm/addon-unicode11']) {
+    if (!packaged.has(required)) {
+      throw new Error(`app.asar is missing ${required}, which the PTY stack loads`);
+    }
+  }
+
+  // Everything the archive ships needs a notice, including what vite bundled
+  // into dist-renderer rather than what npm placed in node_modules.
+  const notices = await readFile(
+    join(desktopRoot, 'resources', 'licenses', 'npm', 'THIRD_PARTY_NOTICES.txt'),
+    'utf8',
+  );
+  const uncovered = rendererOnly.filter(
+    (name) => !name.startsWith('@maka/') && !notices.includes(`\nPackage: ${name}@`),
+  );
+  if (uncovered.length > 0) {
+    throw new Error(
+      `shipped renderer packages missing from THIRD_PARTY_NOTICES.txt: ${uncovered.join(', ')}`,
+    );
   }
 }
 

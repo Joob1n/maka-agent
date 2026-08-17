@@ -17,6 +17,15 @@ export default {
   directories: {
     output: 'release',
   },
+  // `files` names what to include; the production dependency closure of
+  // `package.json` comes along automatically. Renderer-only packages are kept
+  // out of that closure by living in `devDependencies` — vite bundles them into
+  // `dist-renderer`, so a second copy of their sources in `app.asar` is never
+  // loaded. A hand-written exclude list was tried first and could not hold: it
+  // has to name every transitive package too, and it silently went stale.
+  //
+  // `@xterm/headless` stays a dependency on purpose — `@maka/runtime` imports
+  // it for the PTY stack, so only the renderer-side xterm packages moved.
   files: [
     'dist/**/*',
     'dist-renderer/**/*',

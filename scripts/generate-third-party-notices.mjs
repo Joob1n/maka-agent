@@ -19,6 +19,10 @@ const TARGETS = {
     underline: '====================================================',
     outputPath: join(repoRoot, 'apps/desktop/resources/licenses/npm/THIRD_PARTY_NOTICES.txt'),
     validateAssets: true,
+    // Only this target bundles a renderer, so only this one unions the vite
+    // module graph into its notices. The CLI ships its production closure and
+    // nothing else, and must not be asked for renderer roots it has none of.
+    manifestPath: join(repoRoot, 'apps/desktop/package.json'),
   },
   cli: {
     workspaceName: 'maka-agent',
@@ -164,11 +168,11 @@ function normalizeText(text) {
     .trim();
 }
 
-function collectWorkspaceClosure(workspaceName) {
+function npmWorkspaceTree(workspaceName, omitDev) {
   const tree = JSON.parse(
     execFileSync(
       'npm',
-      ['ls', '--workspace', workspaceName, '--omit=dev', '--all', '--json'],
+      ['ls', '--workspace', workspaceName, ...(omitDev ? ['--omit=dev'] : []), '--all', '--json'],
       npmSpawnOptions({
         cwd: repoRoot,
         encoding: 'utf8',
@@ -178,21 +182,74 @@ function collectWorkspaceClosure(workspaceName) {
   );
   const workspace = tree.dependencies?.[workspaceName];
   if (!workspace) throw new Error(`npm ls did not return the ${workspaceName} workspace`);
+  return workspace;
+}
 
-  const packages = new Map();
-  const visit = (dependencies) => {
-    for (const [name, dependency] of Object.entries(dependencies ?? {})) {
-      if (!dependency || typeof dependency !== 'object') continue;
-      if (!name.startsWith(WORKSPACE_PREFIX) && typeof dependency.version === 'string') {
-        packages.set(`${name}@${dependency.version}`, {
-          name,
-          version: dependency.version,
-        });
-      }
-      visit(dependency.dependencies);
+function collectInto(packages, dependencies) {
+  for (const [name, dependency] of Object.entries(dependencies ?? {})) {
+    if (!dependency || typeof dependency !== 'object') continue;
+    if (!name.startsWith(WORKSPACE_PREFIX) && typeof dependency.version === 'string') {
+      packages.set(`${name}@${dependency.version}`, { name, version: dependency.version });
     }
-  };
-  visit(workspace.dependencies);
+    collectInto(packages, dependency.dependencies);
+  }
+}
+
+/**
+ * Packages the desktop workspace declares as bundled into the renderer.
+ *
+ * They live in `devDependencies` so electron-builder keeps a second, unread
+ * copy of their sources out of `app.asar` — but vite bundles them into
+ * `dist-renderer`, which the archive does carry. So they ship, and their
+ * notices have to ship with them. Reading the list from the manifest keeps this
+ * generator and `packaged-dependency-closure` from drifting apart.
+ */
+function rendererBundledRoots() {
+  if (!target.manifestPath) return [];
+  const declared = readJson(target.manifestPath)?.maka?.rendererBundledDependencies;
+  if (!Array.isArray(declared) || declared.length === 0) {
+    throw new Error(
+      `${target.manifestPath}: maka.rendererBundledDependencies must list the renderer roots`,
+    );
+  }
+  return declared;
+}
+
+/**
+ * What the packaged application actually carries: the Node production closure
+ * that lands in `app.asar/node_modules`, plus everything reachable from the
+ * renderer roots, which lands inside the vite bundle. Generating from the
+ * production closure alone would drop notices for code that still ships.
+ */
+function collectWorkspaceClosure(workspaceName) {
+  const packages = new Map();
+  collectInto(packages, npmWorkspaceTree(workspaceName, true).dependencies);
+
+  const roots = new Set(rendererBundledRoots());
+  if (roots.size === 0) {
+    return [...packages.values()].sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
+    );
+  }
+  const full = npmWorkspaceTree(workspaceName, false).dependencies ?? {};
+  for (const [name, dependency] of Object.entries(full)) {
+    if (!roots.has(name) || !dependency || typeof dependency !== 'object') continue;
+    if (!name.startsWith(WORKSPACE_PREFIX) && typeof dependency.version === 'string') {
+      packages.set(`${name}@${dependency.version}`, { name, version: dependency.version });
+    }
+    collectInto(packages, dependency.dependencies);
+  }
+  // A workspace root (`@maka/ui`) carries no notice of its own — it is first
+  // party — but its dependencies do, so absence from `packages` is only a
+  // problem for a third-party root.
+  const missing = [...roots].filter(
+    (root) => !root.startsWith(WORKSPACE_PREFIX) && !Object.hasOwn(full, root),
+  );
+  if (missing.length > 0) {
+    throw new Error(`renderer roots absent from the dependency tree: ${missing.join(', ')}`);
+  }
+
   return [...packages.values()].sort(
     (left, right) =>
       left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
