@@ -1,7 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { npmSpawnOptions } from './npm-spawn.mjs';
+import { collectWorkspaceClosure } from './third-party-closure.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '..');
 const checkOnly = process.argv.includes('--check');
@@ -58,7 +57,6 @@ const REQUIRED_ASSET_LICENSE_FILES = [
   'apps/desktop/resources/licenses/renderer/SEMI_ICONS_LICENSE.txt',
 ];
 
-const WORKSPACE_PREFIX = '@maka/';
 const ALLOWED_LICENSES = new Set([
   '0BSD',
   'Apache-2.0',
@@ -125,6 +123,9 @@ const MIT_COPYRIGHT_OVERRIDES = new Map([
       'Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)',
     ].join('\n'),
   ],
+  // The published tarball ships no license file; the repository LICENSE is
+  // vendored at apps/desktop/resources/licenses/renderer/ANT_DESIGN_ICONS_LICENSE.txt.
+  ['@ant-design/icons-svg@4.5.0', 'Copyright (c) 2018-present Ant UED, https://xtech.antfin.com/'],
   ['agent-base@6.0.2', 'Copyright (c) 2013 Nathan Rajlich <nathan@tootallnate.net>'],
   ['https-proxy-agent@5.0.1', 'Copyright (c) 2013 Nathan Rajlich <nathan@tootallnate.net>'],
   // Published from TooTallNate/proxy-agents, which keeps its LICENSE at the
@@ -166,94 +167,6 @@ function normalizeText(text) {
     .map((line) => line.trimEnd())
     .join('\n')
     .trim();
-}
-
-function npmWorkspaceTree(workspaceName, omitDev) {
-  const tree = JSON.parse(
-    execFileSync(
-      'npm',
-      ['ls', '--workspace', workspaceName, ...(omitDev ? ['--omit=dev'] : []), '--all', '--json'],
-      npmSpawnOptions({
-        cwd: repoRoot,
-        encoding: 'utf8',
-        maxBuffer: 16 * 1024 * 1024,
-      }),
-    ),
-  );
-  const workspace = tree.dependencies?.[workspaceName];
-  if (!workspace) throw new Error(`npm ls did not return the ${workspaceName} workspace`);
-  return workspace;
-}
-
-function collectInto(packages, dependencies) {
-  for (const [name, dependency] of Object.entries(dependencies ?? {})) {
-    if (!dependency || typeof dependency !== 'object') continue;
-    if (!name.startsWith(WORKSPACE_PREFIX) && typeof dependency.version === 'string') {
-      packages.set(`${name}@${dependency.version}`, { name, version: dependency.version });
-    }
-    collectInto(packages, dependency.dependencies);
-  }
-}
-
-/**
- * Packages the desktop workspace declares as bundled into the renderer.
- *
- * They live in `devDependencies` so electron-builder keeps a second, unread
- * copy of their sources out of `app.asar` — but vite bundles them into
- * `dist-renderer`, which the archive does carry. So they ship, and their
- * notices have to ship with them. Reading the list from the manifest keeps this
- * generator and `packaged-dependency-closure` from drifting apart.
- */
-function rendererBundledRoots() {
-  if (!target.manifestPath) return [];
-  const declared = readJson(target.manifestPath)?.maka?.rendererBundledDependencies;
-  if (!Array.isArray(declared) || declared.length === 0) {
-    throw new Error(
-      `${target.manifestPath}: maka.rendererBundledDependencies must list the renderer roots`,
-    );
-  }
-  return declared;
-}
-
-/**
- * What the packaged application actually carries: the Node production closure
- * that lands in `app.asar/node_modules`, plus everything reachable from the
- * renderer roots, which lands inside the vite bundle. Generating from the
- * production closure alone would drop notices for code that still ships.
- */
-function collectWorkspaceClosure(workspaceName) {
-  const packages = new Map();
-  collectInto(packages, npmWorkspaceTree(workspaceName, true).dependencies);
-
-  const roots = new Set(rendererBundledRoots());
-  if (roots.size === 0) {
-    return [...packages.values()].sort(
-      (left, right) =>
-        left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
-    );
-  }
-  const full = npmWorkspaceTree(workspaceName, false).dependencies ?? {};
-  for (const [name, dependency] of Object.entries(full)) {
-    if (!roots.has(name) || !dependency || typeof dependency !== 'object') continue;
-    if (!name.startsWith(WORKSPACE_PREFIX) && typeof dependency.version === 'string') {
-      packages.set(`${name}@${dependency.version}`, { name, version: dependency.version });
-    }
-    collectInto(packages, dependency.dependencies);
-  }
-  // A workspace root (`@maka/ui`) carries no notice of its own — it is first
-  // party — but its dependencies do, so absence from `packages` is only a
-  // problem for a third-party root.
-  const missing = [...roots].filter(
-    (root) => !root.startsWith(WORKSPACE_PREFIX) && !Object.hasOwn(full, root),
-  );
-  if (missing.length > 0) {
-    throw new Error(`renderer roots absent from the dependency tree: ${missing.join(', ')}`);
-  }
-
-  return [...packages.values()].sort(
-    (left, right) =>
-      left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
-  );
 }
 
 function packageNameFromLockPath(lockPath) {
@@ -320,7 +233,10 @@ function overrideLicenseText(packageKey, selectedLicense) {
 function renderNotice() {
   const lockIndex = buildLockIndex();
   const sections = [];
-  const dependencies = collectWorkspaceClosure(target.workspaceName);
+  const dependencies = collectWorkspaceClosure({
+    workspaceName: target.workspaceName,
+    manifestPath: target.manifestPath,
+  });
   for (const dependency of dependencies) {
     const packageKey = `${dependency.name}@${dependency.version}`;
     const candidates = lockIndex.get(packageKey);
@@ -391,7 +307,11 @@ function renderNotice() {
 ${target.underline}
 
 Generated by scripts/generate-third-party-notices.mjs from the exact
-${target.workspaceName} production dependency closure and package-lock.json.
+${target.workspaceName} ${
+    target.manifestPath
+      ? 'shipped dependency closure (Node production plus the\nbundled renderer)'
+      : 'production dependency closure'
+  } and package-lock.json.
 Do not edit this file by hand.
 
 Policy: every package must resolve to an ASF-compatible SPDX license. Compound

@@ -5,6 +5,7 @@ import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { getRawHeader } from '@electron/asar';
+import { collectWorkspaceClosure } from './third-party-closure.mjs';
 
 // `timeoutMs` is opt-in, for the commands that have actually hung: node-pty
 // under conpty keeps a handle open after its child exits. Everything else runs
@@ -458,7 +459,10 @@ function asarNodeModules(asarPath) {
  * closure, if a transitive package leaked back in, or if the renderer stopped
  * bundling one of these — none of which are visible from `package.json`.
  */
-export async function assertPackagedDependencyClosure(resourcesPath, { readManifest } = {}) {
+export async function assertPackagedDependencyClosure(
+  resourcesPath,
+  { readManifest, collectClosure } = {},
+) {
   const manifest = readManifest
     ? await readManifest()
     : readJson(join(desktopRoot, 'package.json'));
@@ -480,18 +484,28 @@ export async function assertPackagedDependencyClosure(resourcesPath, { readManif
     }
   }
 
-  // Everything the archive ships needs a notice, including what vite bundled
-  // into dist-renderer rather than what npm placed in node_modules.
+  // Validate what ships using what ships: the notice inside the artifact, not
+  // the checkout copy — a package whose shipped notice is stale or empty must
+  // fail here even while the source tree's copy is complete.
   const notices = await readFile(
-    join(desktopRoot, 'resources', 'licenses', 'npm', 'THIRD_PARTY_NOTICES.txt'),
+    join(resourcesPath, 'licenses', 'npm', 'THIRD_PARTY_NOTICES.txt'),
     'utf8',
   );
-  const uncovered = rendererOnly.filter(
-    (name) => !name.startsWith('@maka/') && !notices.includes(`\nPackage: ${name}@`),
-  );
+  // The same closure the generator wrote the notices from — the Node
+  // production closure plus everything reachable from the renderer roots —
+  // so coverage is the complete shipped set, not only the declared roots.
+  const closure = collectClosure
+    ? await collectClosure()
+    : collectWorkspaceClosure({
+        workspaceName: '@maka/desktop',
+        manifestPath: join(desktopRoot, 'package.json'),
+      });
+  const uncovered = closure
+    .filter(({ name, version }) => !notices.includes(`\nPackage: ${name}@${version}\n`))
+    .map(({ name, version }) => `${name}@${version}`);
   if (uncovered.length > 0) {
     throw new Error(
-      `shipped renderer packages missing from THIRD_PARTY_NOTICES.txt: ${uncovered.join(', ')}`,
+      `shipped THIRD_PARTY_NOTICES.txt is missing packages the artifact ships: ${uncovered.join(', ')}`,
     );
   }
 }

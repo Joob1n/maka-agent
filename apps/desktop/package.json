@@ -83,6 +83,7 @@
   },
   "maka": {
     "rendererBundledDependencies": [
+      "@ant-design/icons-svg",
       "@astryxdesign/core",
       "@astryxdesign/theme-neutral",
       "@dnd-kit/core",
@@ -91,7 +92,8 @@
       "@xterm/addon-fit",
       "@xterm/xterm",
       "react",
-      "react-dom"
+      "react-dom",
+      "simple-icons"
     ]
   }
 }
