@@ -133,6 +133,7 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     detailActionBusy,
     supportsApiKey,
     needsOAuth,
+    retired,
     usesGitHubCopilotLogin,
     oauthLoginService,
     supportsRemoteDiscovery,
@@ -294,7 +295,10 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
            machine. The endpoint is not a secret, so it did not need a variant. */
         description={supportsApiKey ? copy.credentialsHelp : copy.credentialsHelpAccount}
       >
-        {issue && (
+        {/* The list row needs a compact status to mark itself with; here the
+            retirement notice below already carries it, in full sentences. Two
+            stacked red banners saying the same thing is not twice as clear. */}
+        {issue && !retired && (
           <Banner
             status={connectionIssueStatus(issue.tone)}
             role="status"
@@ -309,7 +313,9 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
           />
         )}
         {needsOAuth && (
-          usesGitHubCopilotLogin ? (
+          retired ? (
+            <Banner status="error" role="alert" title={copy.oauthRetired} description={copy.oauthRetiredDetail} />
+          ) : usesGitHubCopilotLogin ? (
             <GitHubCopilotReloginNotice hasSecret={hasSecret} onRelogin={refreshAfterRelogin} />
           ) : oauthLoginService ? (
             <OAuthReloginNotice
@@ -502,12 +508,17 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
             connection action runs at a time. `refreshModels` is wrapped
             because it takes an options object: handing it the click event
             would pass a MouseEvent as `opts`. */}
-        <HStack gap={2} vAlign="center" wrap="wrap">
-          <Button variant="secondary" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => runTest()} label={copy.testConnection} />
-          {supportsRemoteDiscovery && (
-            <Button variant="ghost" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => refreshModels()} label={copy.updateModels} />
-          )}
-        </HStack>
+        {/* A retired provider's auth contract marks every action hidden, so
+            the store refuses these calls. Offering the buttons anyway would
+            only produce a failure the user cannot act on. */}
+        {!retired && (
+          <HStack gap={2} vAlign="center" wrap="wrap">
+            <Button variant="secondary" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => runTest()} label={copy.testConnection} />
+            {supportsRemoteDiscovery && (
+              <Button variant="ghost" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => refreshModels()} label={copy.updateModels} />
+            )}
+          </HStack>
+        )}
       </DetailSection>
       {showsCapabilities && (
         <>

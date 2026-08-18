@@ -143,6 +143,8 @@ function messageForReason(
     }
     case 'fake_backend':
       return FAKE_BACKEND_MESSAGE;
+    case 'provider_retired':
+      return `模型连接 "${connection.name}" 的登录方式已从 Maka 移除，无法用于发送。请到 设置 · 模型 改用其他连接。`;
     case 'missing_default_connection':
     case 'connection_missing':
       // These reasons are handled before we reach isConnectionReady,

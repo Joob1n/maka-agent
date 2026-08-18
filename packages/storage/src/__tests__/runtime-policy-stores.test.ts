@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { lstat, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -675,6 +676,137 @@ describe('runtime policy stores', () => {
     });
   });
 
+  /**
+   * A connection that predates its provider's retirement. `create` refuses to
+   * author one now, which is the point — such rows can only arrive by having
+   * been written before retirement, so tests reproduce them the same way:
+   * appended to the persisted catalog rather than through the mutation API.
+   */
+  async function seedRetiredConnection(
+    root: string,
+    stores: Awaited<ReturnType<typeof openInteractiveRuntimePolicyStoresForWrite>>,
+    slug: string,
+    connectionId: string,
+  ): Promise<ConnectionCatalogEntry> {
+    const path = join(root, 'connection-catalog.json');
+    const document = existsSync(path)
+      ? (JSON.parse(await readFile(path, 'utf8')) as {
+          revision: number;
+          connections: Record<string, unknown>[];
+        })
+      : {
+          schemaVersion: 1,
+          revision: 0,
+          defaultTarget: null,
+          connections: [] as Record<string, unknown>[],
+        };
+    document.revision += 1;
+    document.connections.push({
+      connectionId,
+      revision: 1,
+      slug,
+      name: slug,
+      providerType: 'claude-subscription',
+      enabled: true,
+      enabledModelIds: ['claude-opus-5'],
+      models: [],
+    });
+    await writeFile(path, `${JSON.stringify(document)}\n`, 'utf8');
+    const snapshot = await stores.connectionCatalog.getSnapshot();
+    const seeded = snapshot.connections.find(
+      (item: ConnectionCatalogEntry) => item.connectionId === connectionId,
+    );
+    assert.ok(seeded, `${slug} was not readable after seeding`);
+    return seeded;
+  }
+
+  test('refuses to author or default to a retired provider', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      // Decode and delete are the only paths a retired provider may still take.
+      // Authoring one would create a row that can never execute, and committing
+      // it as the default would succeed only for the next read to rewrite it to
+      // null — which reads to the caller as a lost write, not a refusal.
+      await assert.rejects(
+        () =>
+          stores.connectionCatalog.create({
+            expectedCatalogRevision: 0,
+            connection: connectionDraft('new-claude', 'claude-subscription', 'New Claude'),
+          }),
+        isStoreError('invalid_connection_input'),
+      );
+
+      const kept = await seedRetiredConnection(
+        root,
+        stores,
+        'kept-claude',
+        '55555555-5555-4555-8555-555555555555',
+      );
+      const snapshot = await stores.connectionCatalog.getSnapshot();
+      const target = { connectionId: kept.connectionId, modelId: 'claude-opus-5' };
+      assert.deepEqual(
+        await stores.connectionCatalog.setDefaultTarget({
+          expectedCatalogRevision: snapshot.revision,
+          target,
+        }),
+        { kind: 'invalid_default_target', target },
+      );
+    });
+  });
+
+  test('releases a default target that points at a retained retired connection', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      const retiredConnectionId = '33333333-3333-4333-8333-333333333333';
+      const openaiConnectionId = '44444444-4444-4444-8444-444444444444';
+      await writeFile(
+        join(root, 'connection-catalog.json'),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          revision: 2,
+          defaultTarget: { connectionId: retiredConnectionId, modelId: 'claude-opus-5' },
+          connections: [
+            {
+              connectionId: retiredConnectionId,
+              revision: 1,
+              slug: 'claude-subscription',
+              name: 'Claude Subscription',
+              providerType: 'claude-subscription',
+              enabled: true,
+              enabledModelIds: ['claude-opus-5'],
+              models: [],
+            },
+            {
+              connectionId: openaiConnectionId,
+              revision: 1,
+              slug: 'openai',
+              name: 'OpenAI',
+              providerType: 'openai',
+              enabled: true,
+              enabledModelIds: ['gpt-4.1'],
+              models: [],
+            },
+          ],
+        })}\n`,
+        'utf8',
+      );
+
+      const snapshot = await stores.connectionCatalog.getSnapshot();
+
+      // The connection stays — the user needs it visible to delete it and
+      // clear the credential — but it stops being what new Sessions default to.
+      assert.equal(snapshot.defaultTarget, null);
+      assert.deepEqual(
+        snapshot.connections.map(({ connectionId, providerType }) => ({
+          connectionId,
+          providerType,
+        })),
+        [
+          { connectionId: retiredConnectionId, providerType: 'claude-subscription' },
+          { connectionId: openaiConnectionId, providerType: 'openai' },
+        ],
+      );
+    });
+  });
+
   test('rejects a retired Gemini CLI record that collides with a maintained connection identity', async () => {
     await withInteractiveOwner(async ({ root, stores }) => {
       const duplicateConnectionId = '11111111-1111-4111-8111-111111111111';
@@ -771,7 +903,7 @@ describe('runtime policy stores', () => {
   });
 
   test('resolves execution connection material from one mutation cut', async () => {
-    await withInteractiveOwner(async ({ stores }) => {
+    await withInteractiveOwner(async ({ root, stores }) => {
       const disabled = await createConnection(stores, 0, {
         ...connectionDraft('execution-disabled', 'openai', 'Disabled'),
         enabled: false,
@@ -809,6 +941,22 @@ describe('runtime policy stores', () => {
         assert.equal(resolved.kind, 'ready');
         if (resolved.kind === 'ready') assert.deepEqual(resolved.secretMaterial, {});
       }
+
+      // A connection stored before its provider was retired keeps its
+      // credential, so every readiness signal below `provider_retired` is
+      // satisfied and the resolver used to answer `ready` — which is what let a
+      // Session be committed against it.
+      const retired = await seedRetiredConnection(
+        root,
+        stores,
+        'execution-retired',
+        '66666666-6666-4666-8666-666666666666',
+      );
+      const retiredLogin = await stores.operations.beginInteractiveOAuthLogin(retired.connectionId);
+      assert.equal(retiredLogin.kind, 'provider_action_unavailable');
+      assert.deepEqual(await stores.operations.resolveExecutionConnection(retired.slug), {
+        kind: 'provider_retired',
+      });
 
       assert.equal(
         (
@@ -2226,11 +2374,12 @@ describe('runtime policy stores', () => {
   });
 
   test('allows only Copilot OAuth tokens through the public credential setter', async () => {
-    await withInteractiveOwner(async ({ stores }) => {
-      const claude = await createConnection(
+    await withInteractiveOwner(async ({ root, stores }) => {
+      const claude = await seedRetiredConnection(
+        root,
         stores,
-        0,
-        connectionDraft('public-claude', 'claude-subscription', 'Public Claude'),
+        'public-claude',
+        '77777777-7777-4777-8777-777777777777',
       );
       const codex = await createConnection(
         stores,
@@ -2780,11 +2929,11 @@ describe('runtime policy stores', () => {
   });
 
   test('interactive OAuth login commits only against its frozen connection and credential basis', async () => {
-    await withInteractiveOwner(async ({ stores }) => {
+    await withInteractiveOwner(async ({ root, stores }) => {
       const claude = await createConnection(
         stores,
         0,
-        connectionDraft('claude-login', 'claude-subscription', 'Claude login'),
+        connectionDraft('codex-login', 'openai-codex', 'Codex login'),
       );
       const first = await stores.operations.beginInteractiveOAuthLogin(claude.connectionId);
       const second = await stores.operations.beginInteractiveOAuthLogin(claude.connectionId);
@@ -2842,6 +2991,19 @@ describe('runtime policy stores', () => {
         connectionDraft('copilot-import', 'github-copilot', 'Copilot import'),
       );
       assert.deepEqual(await stores.operations.beginInteractiveOAuthLogin(copilot.connectionId), {
+        kind: 'provider_action_unavailable',
+        availability: 'hidden',
+      });
+
+      // A retired provider keeps its stored connection, so the login entry
+      // point is reachable and has to refuse on its own.
+      const retired = await seedRetiredConnection(
+        root,
+        stores,
+        'claude-retired',
+        '88888888-8888-4888-8888-888888888888',
+      );
+      assert.deepEqual(await stores.operations.beginInteractiveOAuthLogin(retired.connectionId), {
         kind: 'provider_action_unavailable',
         availability: 'hidden',
       });

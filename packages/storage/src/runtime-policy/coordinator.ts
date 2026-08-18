@@ -33,6 +33,7 @@ import {
   type UpdateCatalogConnectionInput,
 } from '@maka/core/runtime-policy';
 import { deriveProviderAuthContract, type ProviderAuthAction } from '@maka/core/provider-auth';
+import { isRetiredProvider } from '@maka/core/provider-registry';
 import {
   deriveConnectionSlug,
   effectiveBaseUrl,
@@ -566,6 +567,14 @@ export class RuntimePolicyCoordinator {
       const connection = catalog.connections.find((candidate) => candidate.slug === connectionSlug);
       if (!connection) return deepFreeze({ kind: 'not_found' as const });
       if (!connection.enabled) return deepFreeze({ kind: 'disabled' as const });
+      // Ahead of the credential material: a retired connection keeps its stored
+      // token, so `requiresSecret` is satisfied and every later check passes.
+      // Answering `ready` here is what let Bot, CLI and scheduled-task session
+      // creation persist a session that could only fail once a backend was
+      // built for it.
+      if (isRetiredProvider(connection.providerType)) {
+        return deepFreeze({ kind: 'provider_retired' as const });
+      }
 
       const contract = deriveProviderAuthContract({
         providerType: connection.providerType,
@@ -1521,9 +1530,5 @@ function requiresNetworkProxyCredential(networkProxy: RuntimePolicy['networkProx
 function isInteractiveOAuthLoginProvider(
   providerType: ProviderType,
 ): providerType is InteractiveOAuthLoginProvider {
-  return (
-    providerType === 'claude-subscription' ||
-    providerType === 'openai-codex' ||
-    providerType === 'xai-oauth'
-  );
+  return providerType === 'openai-codex' || providerType === 'xai-oauth';
 }

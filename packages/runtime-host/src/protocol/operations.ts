@@ -242,7 +242,6 @@ export const REMOTE_OWNER_OPERATION_GRANTS = Object.freeze([
   'memory.mutate',
   'memory.query',
   'network-proxy.test',
-  'oauth.account.usage.fetch',
   'oauth.login.cancel',
   'oauth.login.query',
   'oauth.login.start',

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   decodeClientFrame,
   decodeHostFrame,
+  decodeOAuthLoginProjection,
   decodeOAuthPresentationRequest,
   decodeOAuthPresentationResult,
   OAUTH_PRESENTATION_AUTHORIZATION_CODE_MAX_LENGTH,
@@ -66,51 +67,19 @@ test('OAuth login protocol binds attempt identity and closes terminal projection
   );
 });
 
-test('OAuth account usage exposes only a bounded safe quota projection', () => {
-  assert.deepEqual(
-    decodeHostFrame({
-      requestId: 'request',
-      operation: 'oauth.account.usage.fetch',
-      ok: true,
-      result: {
-        kind: 'available',
-        provider: 'claude-subscription',
-        quota: {
-          fiveHour: { utilization: 25, resetsAt: '2026-08-05T12:00:00.000Z' },
-          fetchedAt: 1,
-        },
-      },
-    }),
-    {
-      requestId: 'request',
-      operation: 'oauth.account.usage.fetch',
-      ok: true,
-      result: {
-        kind: 'available',
-        provider: 'claude-subscription',
-        quota: {
-          fiveHour: { utilization: 25, resetsAt: '2026-08-05T12:00:00.000Z' },
-          fetchedAt: 1,
-        },
-      },
-    },
-  );
+test('OAuth account usage is no longer an operation on the wire', () => {
+  // Reporting subscription usage required the retired provider's own client
+  // identity, so the operation went with it rather than staying as a call that
+  // always answers "unavailable".
   assert.throws(
     () =>
       decodeHostFrame({
         requestId: 'request',
         operation: 'oauth.account.usage.fetch',
         ok: true,
-        result: {
-          kind: 'available',
-          provider: 'claude-subscription',
-          quota: {
-            fiveHour: { utilization: 101, resetsAt: '' },
-            fetchedAt: 1,
-          },
-        },
+        result: { kind: 'unavailable', reason: 'unsupported_provider' },
       }),
-    (error: unknown) => error instanceof RuntimeHostProtocolError,
+    RuntimeHostProtocolError,
   );
 });
 
@@ -147,5 +116,34 @@ test('OAuth presentation methods share one closed request and result contract', 
         authorizationCode: 'x'.repeat(OAUTH_PRESENTATION_AUTHORIZATION_CODE_MAX_LENGTH + 1),
       }),
     (error: unknown) => error instanceof RuntimeHostProtocolError,
+  );
+});
+
+test('OAuth login projections refuse a retired provider on the wire', () => {
+  // A Host on an older build can still emit this provider. Accepting it would
+  // let a login the Client can no longer drive reach the projection.
+  assert.throws(
+    () =>
+      decodeOAuthLoginProjection({
+        attemptId: 'attempt',
+        connectionId: 'connection',
+        provider: 'claude-subscription',
+        phase: 'awaiting_authorization',
+      }),
+    RuntimeHostProtocolError,
+  );
+  assert.deepEqual(
+    decodeOAuthLoginProjection({
+      attemptId: 'attempt',
+      connectionId: 'connection',
+      provider: 'openai-codex',
+      phase: 'awaiting_authorization',
+    }),
+    {
+      attemptId: 'attempt',
+      connectionId: 'connection',
+      provider: 'openai-codex',
+      phase: 'awaiting_authorization',
+    },
   );
 });

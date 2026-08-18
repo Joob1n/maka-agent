@@ -19,7 +19,11 @@ export type ApplyPatchProtocol = 'openai-structured' | 'codex-v4a-freeform';
 
 type ProviderRuntimeAdapterDefinition =
   | { kind: 'anthropic'; auth: 'api-key' | 'bearer'; normalizeBaseUrl: boolean }
-  | { kind: 'claude-subscription' }
+  /**
+   * No Runtime adapter claims this provider, so nothing can be sent through it.
+   * Distinct from a provider that was never wired: see `retired`.
+   */
+  | { kind: 'unavailable' }
   | { kind: 'openai'; apiProtocol?: 'openai-chat' | 'openai-responses' }
   | { kind: 'openai-codex' }
   | { kind: 'google'; normalizeBaseUrl?: boolean }
@@ -43,7 +47,7 @@ export type ProviderRuntimeAdapter = ProviderRuntimeAdapterDefinition & {
 export type ProviderModelDiscovery =
   | {
       kind: 'protocol';
-      auth?: 'claude-subscription' | 'github-copilot' | 'oauth-bearer' | 'openai-codex' | 'none';
+      auth?: 'github-copilot' | 'oauth-bearer' | 'openai-codex' | 'none';
       path?: string;
       query?: Readonly<Record<string, string>>;
       responseShape?: 'array-or-data';
@@ -72,6 +76,11 @@ export interface ProviderDefaults {
   status: 'ready' | 'phase3-experimental';
   protocol: 'anthropic' | 'openai' | 'google' | 'cohere';
   runtimeAdapter: ProviderRuntimeAdapter;
+  /**
+   * Maka used to offer this provider and no longer does. The entry stays
+   * registered so stored connections still decode; it just cannot be used.
+   */
+  retired?: true;
   modelDiscovery: ProviderModelDiscovery;
   category: ProviderCategory;
   catalogGroup?: ProviderCatalogGroup;
@@ -1778,7 +1787,8 @@ const providerRegistry = {
   },
   'claude-subscription': {
     label: 'Claude Subscription (Pro / Max OAuth)',
-    description: 'Claude app subscription auth path, hidden behind the internal experimental gate.',
+    description:
+      'Retired. Anthropic Consumer Terms do not permit programmatic use of a Claude subscription.',
     baseUrl: 'https://api.anthropic.com',
     authKind: 'oauth_token',
     backendKind: 'ai-sdk',
@@ -1792,7 +1802,8 @@ const providerRegistry = {
     ],
     status: 'phase3-experimental',
     protocol: 'anthropic',
-    runtimeAdapter: { kind: 'claude-subscription' },
+    runtimeAdapter: { kind: 'unavailable' },
+    retired: true,
     modelDiscovery: {
       kind: 'fallback',
       reason:
@@ -1832,5 +1843,14 @@ function providerTypesByOrder(
 }
 
 export const READY_PROVIDER_TYPES = providerTypesByOrder('readyOrder');
+/**
+ * A provider Maka used to offer and no longer does. Read this rather than
+ * inferring retirement from an unavailable adapter: a provider that was never
+ * wired looks identical from there and is not the same thing.
+ */
+export function isRetiredProvider(providerType: ProviderType): boolean {
+  return PROVIDER_REGISTRY[providerType]?.retired === true;
+}
+
 export const CATALOG_PROVIDER_TYPES = providerTypesByOrder('catalogOrder');
 export const RECOMMENDED_PROVIDER_TYPES = providerTypesByOrder('recommendedOrder');

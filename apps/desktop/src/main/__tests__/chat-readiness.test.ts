@@ -59,17 +59,33 @@ describe('chat readiness guard', () => {
       },
       {
         name: 'OAuth provider requires login token',
-        slug: 'claude-subscription',
+        slug: 'codex-subscription',
         deps: deps({
           connection: connection({
-            slug: 'claude-subscription',
-            name: 'Claude OAuth',
-            providerType: 'claude-subscription',
+            slug: 'codex-subscription',
+            name: 'Codex OAuth',
+            providerType: 'openai-codex',
           }),
           apiKey: null,
         }),
         includes: '等待完成 OAuth 登录',
         reason: 'missing_api_key',
+      },
+      {
+        // Retirement outranks the missing credential: telling this user to sign
+        // in again would point at a sign-in that no longer exists.
+        name: 'retired provider cannot send even with a stored credential',
+        slug: 'claude-subscription',
+        deps: deps({
+          connection: connection({
+            slug: 'claude-subscription',
+            name: 'Claude Subscription',
+            providerType: 'claude-subscription',
+          }),
+          apiKey: 'stored-oauth-token',
+        }),
+        includes: '登录方式已从 Maka 移除',
+        reason: 'provider_retired',
       },
     ];
 

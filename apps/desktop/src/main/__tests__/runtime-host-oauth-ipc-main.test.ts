@@ -45,7 +45,7 @@ test('presents both Host OAuth methods without exposing the authorization URL', 
 });
 
 test('adapts every Host OAuth provider through one Desktop flow', async () => {
-  const provider = 'claude-subscription' as const;
+  const provider = 'openai-codex' as const;
   const handlers = new Map<
     string,
     Parameters<RuntimeHostOAuthIpcDeps['ipcMain']['handle']>[1]
@@ -67,8 +67,8 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
       {
         connectionId: '00000000-0000-4000-8000-000000000001',
         revision: 1,
-        slug: 'claude-subscription',
-        name: 'Claude Code',
+        slug: 'openai-codex',
+        name: 'OpenAI Codex',
         providerType: provider,
         enabled: true,
         enabledModelIds: [...PROVIDER_DEFAULTS[provider].fallbackModels],
@@ -86,14 +86,16 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
     },
     startOAuthLogin: async (nextAttemptId, connectionId) => {
       attemptId = nextAttemptId;
+      // Codex device login presents with `open_external`; the paste-code
+      // presentation this fixture used has no producer, so asserting it proved
+      // the desktop bridge against a flow no provider takes.
       void presentation
-        .requestAuthorizationCode(
-          'https://claude.example/authorize',
+        .openExternal(
+          'https://codex.example/authorize',
           'STATE-HINT',
           new AbortController().signal,
         )
-        .then((authorizationCode) => {
-          assert.equal(authorizationCode, 'authorization-code#state');
+        .then(() => {
           phase = 'authenticated';
         });
       return oauthProjection(nextAttemptId, connectionId, 'awaiting_authorization');
@@ -136,14 +138,6 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
         fetchedAt: 1,
       };
     },
-    fetchOAuthAccountUsage: async () => ({
-      kind: 'available' as const,
-      provider,
-      quota: {
-        fiveHour: { utilization: 20, resetsAt: '2026-08-05T12:00:00.000Z' },
-        fetchedAt: 1,
-      },
-    }),
     setDefaultConnectionTarget: async (expectedCatalogRevision, target) => {
       assert.equal(expectedCatalogRevision, catalog.revision);
       catalog = { ...catalog, revision: catalog.revision + 1, defaultTarget: target };
@@ -188,19 +182,19 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
 
   assert.deepEqual([...handlers.keys()].sort(), [...RUNTIME_HOST_OAUTH_IPC_CHANNELS].sort());
 
-  for (const prefix of ['claude-subscription', 'openai-codex', 'xai-oauth']) {
+  for (const prefix of ['openai-codex', 'xai-oauth']) {
     assert.equal(handlers.has(`${prefix}:get-auth-url`), true);
     assert.equal(handlers.has(`${prefix}:complete-authorization`), true);
     assert.equal(handlers.has(`${prefix}:get-account-state`), true);
     assert.equal(handlers.has(`${prefix}:logout`), true);
   }
-  const authorization = await invoke(handlers, 'claude-subscription:get-auth-url');
+  const authorization = await invoke(handlers, 'openai-codex:get-auth-url');
   assert.deepEqual(authorization, { authRequestId: attemptId, stateHint: 'STATE-HINT' });
-  assert.deepEqual(opened, ['https://claude.example/authorize']);
+  assert.deepEqual(opened, ['https://codex.example/authorize']);
   assert.deepEqual(
     await invoke(
       handlers,
-      'claude-subscription:complete-authorization',
+      'openai-codex:complete-authorization',
       attemptId,
       'authorization-code#state',
     ),
@@ -211,16 +205,11 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
     connectionId: catalog.connections[0]?.connectionId,
     modelId,
   });
-  assert.deepEqual(await invoke(handlers, 'claude-subscription:refresh-quota'), {
-    ok: true,
-  });
-  assert.deepEqual(await invoke(handlers, 'claude-subscription:get-account-state'), {
+  // No quota: reporting it required the retired provider's own client identity,
+  // so the account state carries the runtime state alone.
+  assert.deepEqual(await invoke(handlers, 'openai-codex:get-account-state'), {
     provider,
     runtimeState: 'authenticated',
-    quota: {
-      fiveHour: { utilization: 20, resetsAt: '2026-08-05T12:00:00.000Z' },
-      fetchedAt: 1,
-    },
   });
 });
 
@@ -285,10 +274,6 @@ test('keeps a committed OAuth login successful when model discovery fails', asyn
     fetchConnectionModels: async () => {
       throw new Error('provider temporarily unavailable');
     },
-    fetchOAuthAccountUsage: async () => ({
-      kind: 'unavailable' as const,
-      reason: 'provider_unavailable' as const,
-    }),
     setDefaultConnectionTarget: async () => {
       throw new Error('Default selection must not run after failed discovery');
     },
@@ -327,7 +312,7 @@ function oauthProjection(
   return {
     attemptId,
     connectionId,
-    provider: 'claude-subscription' as const,
+    provider: 'openai-codex' as const,
     phase,
   };
 }

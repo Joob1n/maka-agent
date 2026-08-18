@@ -66,7 +66,6 @@ function providerHostedWebSearchAdapter(
     case 'alibaba':
       return { adapter: 'openai-responses', implemented: false };
     case 'anthropic':
-    case 'claude-subscription':
     case 'MiniMax':
     case 'MiniMax-cn':
     case 'minimax-coding-plan':
@@ -104,7 +103,6 @@ function providerDefaultHostedWebSearchCapability(
     case 'alibaba':
       return /^qwen3\.5-(?:plus|flash)(?:[.-]|$)/i.test(modelId) ? capability : null;
     case 'anthropic':
-    case 'claude-subscription':
       return /^claude-(?:[\d.]+-)*(?:opus|sonnet|haiku|fable)\b/i.test(modelId) ? capability : null;
     case 'MiniMax':
     case 'MiniMax-cn':

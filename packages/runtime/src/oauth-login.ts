@@ -15,27 +15,17 @@ import {
 export { OAuthTokenEndpointError } from './oauth-provider-contracts.js';
 export type { OAuthTokenEndpointErrorCategory } from './oauth-provider-contracts.js';
 
-export type OAuthLoginProvider = 'claude-subscription' | 'xai-oauth';
-export type OAuthInitialTokenProvider = 'claude-subscription' | 'xai-oauth' | 'openai-codex';
+export type OAuthLoginProvider = 'xai-oauth';
+export type OAuthInitialTokenProvider = 'xai-oauth' | 'openai-codex';
 export type OAuthLoginPresentationKind = 'paste-code' | 'loopback';
 
 export const OAUTH_LOGIN_MAX_RESPONSE_BYTES = 64 * 1024;
 export const OAUTH_LOGIN_MAX_TOKEN_CHARS = OAUTH_MAX_TOKEN_CHARS;
 export const OAUTH_LOGIN_DEFAULT_TIMEOUT_MS = 15_000;
 
-const CLAUDE = OAUTH_PROVIDER_CONTRACTS['claude-subscription'];
 const XAI = OAUTH_PROVIDER_CONTRACTS['xai-oauth'];
 
 export const OAUTH_LOGIN_PROVIDER_CONFIG = {
-  'claude-subscription': {
-    clientId: CLAUDE.clientId,
-    authorizationEndpoint: CLAUDE.authorizationEndpoint,
-    tokenEndpoint: CLAUDE.tokenEndpoint,
-    redirectUri: CLAUDE.redirectUri,
-    scope: CLAUDE.scope,
-    tokenUserAgent: CLAUDE.tokenUserAgent,
-    presentation: CLAUDE.presentation,
-  },
   'xai-oauth': {
     clientId: XAI.clientId,
     authorizationEndpoint: XAI.authorizationEndpoint,
@@ -101,32 +91,18 @@ export function buildOAuthLoginAuthorization(
   assertPkceVerifier(input.verifier);
   assertOAuthState(input.state);
   const config = OAUTH_LOGIN_PROVIDER_CONFIG[input.provider];
-  const redirectUri = resolveRedirectUri(input.provider, input.redirectUri);
-  if (input.provider !== 'claude-subscription') {
-    const loopbackConfig = OAUTH_LOGIN_PROVIDER_CONFIG[input.provider];
-    return {
-      authorizationUrl: buildLoopbackAuthorizationUrl({
-        clientId: loopbackConfig.clientId,
-        authorizeEndpoint: loopbackConfig.authorizationEndpoint,
-        redirectUri,
-        scope: loopbackConfig.scope,
-        state: input.state,
-        challenge: pkceChallengeFromVerifier(input.verifier),
-        extras: loopbackConfig.authorizationExtras,
-      }),
-      presentation: loopbackConfig.presentation,
-    };
-  }
-  const url = new URL(config.authorizationEndpoint);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('client_id', config.clientId);
-  url.searchParams.set('redirect_uri', redirectUri);
-  url.searchParams.set('scope', config.scope);
-  url.searchParams.set('code_challenge', pkceChallengeFromVerifier(input.verifier));
-  url.searchParams.set('code_challenge_method', 'S256');
-  url.searchParams.set('state', input.state);
-  url.searchParams.set('code', 'true');
-  return { authorizationUrl: url.toString(), presentation: config.presentation };
+  return {
+    authorizationUrl: buildLoopbackAuthorizationUrl({
+      clientId: config.clientId,
+      authorizeEndpoint: config.authorizationEndpoint,
+      redirectUri: resolveRedirectUri(input.provider, input.redirectUri),
+      scope: config.scope,
+      state: input.state,
+      challenge: pkceChallengeFromVerifier(input.verifier),
+      extras: config.authorizationExtras,
+    }),
+    presentation: config.presentation,
+  };
 }
 
 export interface ExchangeOAuthAuthorizationCodeInput {
@@ -249,22 +225,6 @@ export function decodeOAuthInitialTokenPayload(
     requireOAuthPositiveInteger(record.expires_in, 366 * 24 * 60 * 60),
   );
 
-  if (provider === 'claude-subscription') {
-    const account =
-      record.account === undefined ? undefined : requireOAuthDataRecord(record.account);
-    const tokenType = optionalOAuthBoundedString(record.token_type, 256);
-    const scope = optionalOAuthBoundedString(record.scope, 4 * 1024);
-    const accountUuid = account ? optionalOAuthBoundedString(account.uuid, 1024) : undefined;
-    return {
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      expires_at: expiresAt,
-      ...(tokenType !== undefined ? { token_type: tokenType } : {}),
-      ...(scope !== undefined ? { scope } : {}),
-      ...(accountUuid !== undefined ? { account_uuid: accountUuid } : {}),
-    };
-  }
-
   const idToken = optionalOAuthBoundedString(record.id_token, OAUTH_LOGIN_MAX_TOKEN_CHARS);
   const tokenType = optionalOAuthBoundedString(record.token_type, 256);
   const scope = optionalOAuthBoundedString(record.scope, 4 * 1024);
@@ -290,37 +250,16 @@ function buildTokenRequest(
     code_verifier: input.verifier,
     redirect_uri: redirectUri,
   };
-  const tokenHeaders: Record<string, string> = {
-    'Content-Type':
-      input.provider === 'claude-subscription'
-        ? 'application/json'
-        : 'application/x-www-form-urlencoded',
-  };
-  if ('tokenUserAgent' in config) tokenHeaders['User-Agent'] = config.tokenUserAgent;
-  if (input.provider === 'claude-subscription') {
-    return {
-      method: 'POST',
-      headers: tokenHeaders,
-      body: JSON.stringify({ ...common, state: input.state }),
-    };
-  }
   return {
     method: 'POST',
-    headers: tokenHeaders,
+    // The one remaining login provider sends no product User-Agent; the header
+    // existed for the retired path, which identified itself as another client.
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(common).toString(),
   };
 }
 
 function resolveRedirectUri(provider: OAuthLoginProvider, redirectUri?: string): string {
-  if (provider === 'claude-subscription') {
-    if (
-      redirectUri !== undefined &&
-      redirectUri !== OAUTH_LOGIN_PROVIDER_CONFIG[provider].redirectUri
-    ) {
-      throw new OAuthTokenEndpointError('invalid_response');
-    }
-    return OAUTH_LOGIN_PROVIDER_CONFIG[provider].redirectUri;
-  }
   if (!redirectUri) throw new OAuthTokenEndpointError('invalid_response');
   let parsed: URL;
   try {

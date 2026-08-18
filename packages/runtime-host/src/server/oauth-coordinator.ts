@@ -1,23 +1,20 @@
 import { randomBytes } from 'node:crypto';
-import { constantTimeStringEqual, parsePastedAuthorization } from '@maka/core/oauth-subscription';
-import {
-  buildOAuthLoginAuthorization,
-  exchangeOAuthAuthorizationCode,
-  OAuthTokenEndpointError,
-} from '@maka/runtime/oauth-login';
+import { exchangeOAuthAuthorizationCode, OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
 import { createProxiedFetchTransport } from '@maka/runtime/network/scoped-fetch-transport';
 import {
   exchangeCodexDeviceAuthorizationCode,
   pollCodexDeviceAuthorization,
   startCodexDeviceAuthorization,
 } from '@maka/runtime/codex-oauth-enrollment';
-import { fetchClaudeSubscriptionUsage } from '@maka/runtime/claude-subscription-usage';
 import { OAuthDeviceAuthorizationExpiredError } from '@maka/runtime/oauth-provider-contracts';
 import {
   pollXaiDeviceAuthorization,
   startXaiDeviceAuthorization,
 } from '@maka/runtime/xai-oauth-enrollment';
-import { serializeOAuthSubscriptionTokens } from '@maka/runtime/subscription-credentials';
+import {
+  serializeOAuthSubscriptionTokens,
+  type OAuthSubscriptionTokens,
+} from '@maka/runtime/subscription-credentials';
 import {
   RuntimePolicyStoreError,
   type RuntimePolicyStoresWriter,
@@ -35,10 +32,7 @@ import {
   type OperationOutcome,
 } from '../protocol/index.js';
 import type { RuntimeHostResidency } from './host-kernel.js';
-import {
-  HostOAuthExecutionAuthority,
-  OAuthExecutionCredentialError,
-} from './oauth-execution-authority.js';
+import { HostOAuthExecutionAuthority } from './oauth-execution-authority.js';
 import {
   ClientCapabilityInvocationError,
   type HostClientCapabilityCoordinator,
@@ -78,7 +72,6 @@ export interface HostOAuthCoordinatorInput {
   readonly startCodexAuthorization?: typeof startCodexDeviceAuthorization;
   readonly pollCodexAuthorization?: typeof pollCodexDeviceAuthorization;
   readonly exchangeCodexCode?: typeof exchangeCodexDeviceAuthorizationCode;
-  readonly fetchAccountUsage?: typeof fetchClaudeSubscriptionUsage;
   readonly createFetchTransport?: typeof createProxiedFetchTransport;
   readonly authorizationTimeoutMs?: number;
 }
@@ -117,7 +110,6 @@ export class HostOAuthCoordinator {
     'oauth.login.start': (input, context) => this.#start(input, context.connectionId),
     'oauth.login.query': (input) => this.#query(input.attemptId),
     'oauth.login.cancel': (input) => this.#cancel(input.attemptId),
-    'oauth.account.usage.fetch': (input) => this.#fetchAccountUsage(input.connectionId),
   };
 
   readonly #runtimePolicy: RuntimePolicyStoresWriter;
@@ -135,7 +127,6 @@ export class HostOAuthCoordinator {
   readonly #startCodexAuthorization: typeof startCodexDeviceAuthorization;
   readonly #pollCodexAuthorization: typeof pollCodexDeviceAuthorization;
   readonly #exchangeCodexCode: typeof exchangeCodexDeviceAuthorizationCode;
-  readonly #fetchUsageSnapshot: typeof fetchClaudeSubscriptionUsage;
   readonly #createFetchTransport: typeof createProxiedFetchTransport;
   readonly #authorizationTimeoutMs: number;
   readonly #attempts = new Map<string, LoginAttemptRecord>();
@@ -165,7 +156,6 @@ export class HostOAuthCoordinator {
     this.#startCodexAuthorization = input.startCodexAuthorization ?? startCodexDeviceAuthorization;
     this.#pollCodexAuthorization = input.pollCodexAuthorization ?? pollCodexDeviceAuthorization;
     this.#exchangeCodexCode = input.exchangeCodexCode ?? exchangeCodexDeviceAuthorizationCode;
-    this.#fetchUsageSnapshot = input.fetchAccountUsage ?? fetchClaudeSubscriptionUsage;
     this.#createFetchTransport = input.createFetchTransport ?? createProxiedFetchTransport;
     this.#authorizationTimeoutMs = authorizationTimeout(input.authorizationTimeoutMs);
   }
@@ -184,87 +174,6 @@ export class HostOAuthCoordinator {
   close(): Promise<void> {
     this.#closeTask ??= this.#closeOnce();
     return this.#closeTask;
-  }
-
-  async #fetchAccountUsage(
-    connectionId: string,
-  ): Promise<OperationOutcome<'oauth.account.usage.fetch'>> {
-    const residency = this.#acquireResidency();
-    let transport: ReturnType<typeof createProxiedFetchTransport> | undefined;
-    try {
-      const catalog = await this.#runtimePolicy.connectionCatalog.getSnapshot();
-      const connection = catalog.connections.find(
-        (candidate) => candidate.connectionId === connectionId,
-      );
-      if (!connection) return notFound('OAuth account Connection was not found');
-      if (connection.providerType !== 'claude-subscription') {
-        return {
-          ok: true,
-          result: { kind: 'unavailable', reason: 'unsupported_provider' },
-        };
-      }
-      const resolved = await this.#runtimePolicy.operations.resolveExecutionConnection(
-        connection.slug,
-      );
-      if (resolved.kind !== 'ready' || resolved.connection.connectionId !== connectionId) {
-        return {
-          ok: true,
-          result: { kind: 'unavailable', reason: 'credential_unavailable' },
-        };
-      }
-      const material = resolved.secretMaterial.connection;
-      if (!material) {
-        return {
-          ok: true,
-          result: { kind: 'unavailable', reason: 'credential_unavailable' },
-        };
-      }
-      const proxy = toRuntimePolicyProxy(
-        resolved.networkProxy,
-        resolved.secretMaterial.networkProxy?.secret,
-      );
-      const binding = this.#oauthCredentials.bind({
-        providerType: connection.providerType,
-        connectionSlug: connection.slug,
-        material,
-        createRefreshTransport: () => this.#createFetchTransport(proxy),
-      });
-      const tokens = await binding.resolve();
-      transport = this.#createFetchTransport(proxy);
-      const quota = await this.#fetchUsageSnapshot({
-        accessToken: tokens.access_token,
-        fetchFn: transport.fetch,
-        now: this.#now,
-      });
-      return {
-        ok: true,
-        result: { kind: 'available', provider: connection.providerType, quota },
-      };
-    } catch (error) {
-      if (error instanceof RuntimePolicyStoreError) {
-        return persistenceFailure('OAuth account usage could not read Runtime Policy');
-      }
-      if (error instanceof OAuthExecutionCredentialError) {
-        return {
-          ok: true,
-          result: { kind: 'unavailable', reason: 'credential_unavailable' },
-        };
-      }
-      if (error instanceof OAuthTokenEndpointError) {
-        const reason =
-          error.category === 'invalid_response' || error.category === 'response_too_large'
-            ? 'invalid_response'
-            : 'provider_unavailable';
-        return { ok: true, result: { kind: 'unavailable', reason } };
-      }
-      return {
-        ok: true,
-        result: { kind: 'unavailable', reason: 'provider_unavailable' },
-      };
-    } finally {
-      await transport?.close().catch(() => undefined);
-      residency.release();
-    }
   }
 
   async #start(
@@ -421,12 +330,10 @@ export class HostOAuthCoordinator {
           attempt.ticket.secretMaterial.networkProxy?.secret,
         ),
       );
-      const tokens =
-        attempt.provider === 'xai-oauth'
-          ? await this.#runXaiLogin(attempt, transport.fetch)
-          : attempt.provider === 'openai-codex'
-            ? await this.#runCodexDeviceLogin(attempt, transport.fetch)
-            : await this.#runAuthorizationCodeLogin(attempt, transport.fetch);
+      // Switched rather than defaulted: with the retired provider gone the
+      // union is two wide, and a ternary would route any future third member
+      // into the Codex device flow without a compiler error.
+      const tokens = await this.#runProviderLogin(attempt, transport.fetch);
       attempt.abort.signal.throwIfAborted();
       attempt.cancellationDeferred = true;
       attempt.phase = 'committing';
@@ -458,41 +365,6 @@ export class HostOAuthCoordinator {
         this.#pruneTerminalAttempts();
       }
     }
-  }
-
-  async #runAuthorizationCodeLogin(attempt: ActiveLoginAttempt, fetchFn: typeof fetch) {
-    const provider = attempt.provider;
-    if (provider !== 'claude-subscription') {
-      throw new Error(`Unsupported authorization code provider: ${provider}`);
-    }
-    const verifier = randomOpaqueValue();
-    const state = randomOpaqueValue();
-    const authorization = buildOAuthLoginAuthorization({ provider, verifier, state });
-    const result = await this.#present(attempt, {
-      method: 'request_authorization_code',
-      url: authorization.authorizationUrl,
-      stateHint: state.slice(0, 8),
-    });
-    const pasted = parsePastedAuthorization(result.authorizationCode);
-    if (!pasted || !constantTimeStringEqual(pasted.state, state)) {
-      throw new LoginFailure('authorization_failed');
-    }
-    attempt.abort.signal.throwIfAborted();
-    attempt.cancellationDeferred = true;
-    attempt.phase = 'exchanging';
-    const tokens = await this.#exchangeCode({
-      provider,
-      code: pasted.code,
-      verifier,
-      state,
-      signal: new AbortController().signal,
-      fetchFn,
-      now: this.#now,
-    });
-    if (provider === 'claude-subscription' && tokens.account_uuid === undefined) {
-      throw new LoginFailure('authorization_failed');
-    }
-    return tokens;
   }
 
   async #runCodexDeviceLogin(attempt: ActiveLoginAttempt, fetchFn: typeof fetch) {
@@ -531,6 +403,18 @@ export class HostOAuthCoordinator {
       signal: attempt.abort.signal,
       now: this.#now,
     });
+  }
+
+  #runProviderLogin(
+    attempt: ActiveLoginAttempt,
+    fetchFn: typeof fetch,
+  ): Promise<OAuthSubscriptionTokens> {
+    switch (attempt.provider) {
+      case 'xai-oauth':
+        return this.#runXaiLogin(attempt, fetchFn);
+      case 'openai-codex':
+        return this.#runCodexDeviceLogin(attempt, fetchFn);
+    }
   }
 
   async #runXaiLogin(attempt: ActiveLoginAttempt, fetchFn: typeof fetch) {
