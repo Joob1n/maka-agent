@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, mkdir } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // `timeoutMs` is opt-in, for the commands that have actually hung: node-pty
@@ -74,53 +73,65 @@ export async function assertMissing(path) {
   throw new Error(`Forbidden release resource exists: ${path}`);
 }
 
-async function reserveTcpPort() {
-  const server = createServer();
-  await new Promise((resolvePromise, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolvePromise);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    server.close();
-    throw new Error('Could not reserve a CDP port.');
-  }
-  await new Promise((resolvePromise, reject) => {
-    server.close((error) => (error ? reject(error) : resolvePromise()));
-  });
-  return address.port;
-}
-
 function delay(milliseconds) {
   return new Promise((resolvePromise) => {
     setTimeout(resolvePromise, milliseconds);
   });
 }
 
-async function findRendererTarget(port, child) {
-  const deadline = Date.now() + 30_000;
+/**
+ * The port Chromium actually bound, read from the DevToolsActivePort file it
+ * writes into the user-data directory. The verifier used to reserve a port,
+ * release it, and hand the number to Electron — leaving a window in which
+ * anything else on the runner could take it, and a timeout log that could not
+ * say whether the app was even listening where the poll looked (issue #3196).
+ */
+async function readDevToolsPort(userDataDirectory) {
+  try {
+    const content = await readFile(join(userDataDirectory, 'DevToolsActivePort'), 'utf8');
+    const port = Number.parseInt(content.split('\n')[0] ?? '', 10);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+async function findRendererTarget(userDataDirectory, child) {
+  const startedAt = Date.now();
+  const deadline = startedAt + 30_000;
+  let port = null;
   let lastError;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Packaged Maka exited before its renderer was ready.`);
     }
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      if (response.ok) {
-        const targets = await response.json();
-        const page = targets.find(
-          (target) => target.type === 'page' && target.webSocketDebuggerUrl,
-        );
-        if (page) return page;
+    port ??= await readDevToolsPort(userDataDirectory);
+    if (port !== null) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+        if (response.ok) {
+          const targets = await response.json();
+          const page = targets.find(
+            (target) => target.type === 'page' && target.webSocketDebuggerUrl,
+          );
+          if (page) return page;
+        }
+      } catch (error) {
+        lastError = error;
       }
-    } catch (error) {
-      lastError = error;
     }
     await delay(250);
   }
+  // Say which of the three causes this is, so classifying the failure does not
+  // take a re-run: no port file means the browser never opened an endpoint;
+  // a port plus fetch errors means it bound somewhere the poll could reach
+  // but never answered.
+  const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   throw new Error(
-    `Packaged Maka renderer did not expose CDP within 30 seconds${
-      lastError ? `: ${lastError.message}` : ''
+    `Packaged Maka renderer did not expose CDP within ${elapsedSeconds} seconds: ${
+      port === null
+        ? 'DevToolsActivePort was never written under the user-data directory'
+        : `polled port ${port} from DevToolsActivePort${lastError ? `; last error: ${lastError.message}` : ''}`
     }.`,
   );
 }
@@ -244,7 +255,6 @@ export function isolatedUserEnv(homeDirectory, { temporaryDirectory = homeDirect
 }
 
 export async function smokePackagedRenderer(executable, { workingDirectory } = {}) {
-  const port = await reserveTcpPort();
   const home = join(workingDirectory, 'home');
   const userData = join(workingDirectory, 'user-data');
   const userEnv = isolatedUserEnv(home);
@@ -254,7 +264,11 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
   await mkdir(userEnv.LOCALAPPDATA, { recursive: true });
   const child = spawn(
     executable,
-    [`--remote-debugging-port=${port}`, `--user-data-dir=${userData}`, '--enable-logging=stderr'],
+    // Port 0: Chromium binds a free port itself and records it in the
+    // user-data directory's DevToolsActivePort file, which is where the poll
+    // reads it back — no reserve-then-release window for another process on
+    // the runner to take the number first.
+    ['--remote-debugging-port=0', `--user-data-dir=${userData}`, '--enable-logging=stderr'],
     {
       cwd: workingDirectory,
       env: {
@@ -272,7 +286,7 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
   });
 
   try {
-    const target = await findRendererTarget(port, child);
+    const target = await findRendererTarget(userData, child);
     const deadline = Date.now() + 30_000;
     let rendererState;
     while (Date.now() < deadline) {
