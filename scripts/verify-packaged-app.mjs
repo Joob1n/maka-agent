@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, mkdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // `timeoutMs` is opt-in, for the commands that have actually hung: node-pty
@@ -260,6 +260,14 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
   const userEnv = isolatedUserEnv(home);
   await mkdir(home, { recursive: true });
   await mkdir(userData, { recursive: true });
+  // Chromium removes DevToolsActivePort only on a clean exit, and the
+  // upgrade-lifecycle check reuses one user-data directory across two app
+  // versions with a SIGKILL between them — so a file found here can belong to
+  // the previous instance, pointing the poll at a port nothing listens on
+  // anymore. Deleting it first means whatever appears was written by this
+  // child. This is what the first run of the port-file diagnostics caught:
+  // the poll read a bound-looking port and fetch failed for the full window.
+  await rm(join(userData, 'DevToolsActivePort'), { force: true });
   await mkdir(userEnv.APPDATA, { recursive: true });
   await mkdir(userEnv.LOCALAPPDATA, { recursive: true });
   const child = spawn(
