@@ -441,15 +441,25 @@ const desktopRoot = resolve(import.meta.dirname, '..', 'apps', 'desktop');
 
 function asarNodeModules(asarPath) {
   const { header } = getRawHeader(asarPath);
-  const modules = header.files?.node_modules?.files ?? {};
   const names = new Set();
-  for (const [name, node] of Object.entries(modules)) {
-    if (name.startsWith('@')) {
-      for (const scoped of Object.keys(node.files ?? {})) names.add(`${name}/${scoped}`);
-    } else {
-      names.add(name);
+  // Recursive: npm nests a second copy under a package when versions
+  // conflict (node_modules/foo/node_modules/bar), and a walk that stops at
+  // the top level would certify an archive it has not fully inspected.
+  const collect = (modules) => {
+    for (const [name, node] of Object.entries(modules ?? {})) {
+      if (name.startsWith('.')) continue; // .bin, .package-lock.json
+      if (name.startsWith('@')) {
+        for (const [scoped, scopedNode] of Object.entries(node.files ?? {})) {
+          names.add(`${name}/${scoped}`);
+          collect(scopedNode.files?.node_modules?.files);
+        }
+      } else {
+        names.add(name);
+        collect(node.files?.node_modules?.files);
+      }
     }
-  }
+  };
+  collect(header.files?.node_modules?.files);
   return names;
 }
 

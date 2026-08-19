@@ -88,6 +88,18 @@ describe('assertPackagedDependencyClosure', () => {
     );
   });
 
+  test('rejects a leak hidden inside a nested node_modules', async () => {
+    // npm nests a second copy under a package on version conflict; a walk that
+    // stops at the top level certifies an archive it has not fully inspected.
+    const resources = await makeResources({
+      asarPackages: [...PTY_PACKAGES, '@xterm/headless/node_modules/left-pad'],
+    });
+    await assert.rejects(
+      () => assertPackagedDependencyClosure(resources, options),
+      /app\.asar carries packages outside the production closure: left-pad/,
+    );
+  });
+
   test('rejects any package outside the production closure, transitive ones included', async () => {
     // The old check compared the archive against the declared renderer roots,
     // so a renderer-only transitive package (never a root) could leak back in
