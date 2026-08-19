@@ -98,9 +98,15 @@ async function readDevToolsPort(userDataDirectory) {
 
 async function findRendererTarget(userDataDirectory, child) {
   const startedAt = Date.now();
-  const deadline = startedAt + 30_000;
+  // Generous on purpose: a cold Windows runner scans a first-run executable
+  // before letting it serve, and the port-file diagnostics showed a healthy
+  // app answering /json/list with no page target yet past the old 30-second
+  // line (the step itself had been observed taking 74 seconds). The child
+  // exiting still fails immediately; the workflow timeout is the outer bound
+  // for everything else.
+  const deadline = startedAt + 120_000;
   let port = null;
-  let lastError;
+  let lastState = 'DevToolsActivePort was never written under the user-data directory';
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Packaged Maka exited before its renderer was ready.`);
@@ -115,24 +121,23 @@ async function findRendererTarget(userDataDirectory, child) {
             (target) => target.type === 'page' && target.webSocketDebuggerUrl,
           );
           if (page) return page;
+          lastState = `port ${port} answered with ${targets.length} targets but no debuggable page`;
+        } else {
+          lastState = `port ${port} answered HTTP ${response.status}`;
         }
       } catch (error) {
-        lastError = error;
+        lastState = `port ${port} did not answer: ${error.message}`;
       }
     }
     await delay(250);
   }
-  // Say which of the three causes this is, so classifying the failure does not
-  // take a re-run: no port file means the browser never opened an endpoint;
-  // a port plus fetch errors means it bound somewhere the poll could reach
-  // but never answered.
+  // Say exactly where discovery stalled, so classifying the failure does not
+  // take a re-run: no port file, a port that never answers, an unexpected
+  // HTTP status, and a healthy endpoint with no page target are four
+  // different faults.
   const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   throw new Error(
-    `Packaged Maka renderer did not expose CDP within ${elapsedSeconds} seconds: ${
-      port === null
-        ? 'DevToolsActivePort was never written under the user-data directory'
-        : `polled port ${port} from DevToolsActivePort${lastError ? `; last error: ${lastError.message}` : ''}`
-    }.`,
+    `Packaged Maka renderer did not expose CDP within ${elapsedSeconds} seconds: ${lastState}.`,
   );
 }
 
@@ -295,7 +300,9 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
 
   try {
     const target = await findRendererTarget(userData, child);
-    const deadline = Date.now() + 30_000;
+    // Same headroom as target discovery: a cold runner that was slow to serve
+    // CDP is as slow to mount React, and a wrong deadline fails a good build.
+    const deadline = Date.now() + 120_000;
     let rendererState;
     while (Date.now() < deadline) {
       rendererState = await evaluateRenderer(target.webSocketDebuggerUrl);
