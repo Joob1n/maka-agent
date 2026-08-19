@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { collectWorkspaceClosure } from './third-party-closure.mjs';
+import {
+  ASSET_LICENSED_RENDERER_PACKAGES,
+  collectWorkspaceClosure,
+} from './third-party-closure.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '..');
 const checkOnly = process.argv.includes('--check');
@@ -230,12 +233,53 @@ function overrideLicenseText(packageKey, selectedLicense) {
   return undefined;
 }
 
+/**
+ * The declared closure is only trustworthy if it contains what the renderer
+ * build actually bundled. The vite build records that set — every module plus
+ * every emitted asset's source package — into `bundled-npm-packages.json`, so
+ * a package that enters the bundle through any path (a direct import, a deep
+ * import, a CSS `@import`, a font url()) fails here until it is declared.
+ */
+function validateBundledPackageRecord(closureNames) {
+  const rendererDist = join(repoRoot, 'apps/desktop/dist-renderer');
+  if (!existsSync(rendererDist)) return;
+  const recordPath = join(rendererDist, 'bundled-npm-packages.json');
+  if (!existsSync(recordPath)) {
+    throw new Error(
+      'dist-renderer exists but bundled-npm-packages.json is missing — rebuild the renderer',
+    );
+  }
+  const bundled = readJson(recordPath);
+  const undeclared = bundled.filter((name) => !closureNames.has(name));
+  if (undeclared.length > 0) {
+    throw new Error(
+      `renderer bundles packages outside the declared closure: ${undeclared.join(', ')} — ` +
+        'add the entry root to maka.rendererBundledDependencies',
+    );
+  }
+}
+
 function renderNotice() {
   const lockIndex = buildLockIndex();
   const sections = [];
-  const dependencies = collectWorkspaceClosure({
+  const closure = collectWorkspaceClosure({
     workspaceName: target.workspaceName,
     manifestPath: target.manifestPath,
+  });
+  if (target.manifestPath) {
+    validateBundledPackageRecord(new Set(closure.map(({ name }) => name)));
+  }
+  // Asset-licensed renderer packages (the OFL Geist fonts) ship their license
+  // as a vendored file in the artifact rather than an npm-notice entry, so
+  // they are audited as part of the closure but not rendered here. The source
+  // file electron-builder copies from must exist for that channel to work.
+  const dependencies = closure.filter(({ name }) => {
+    if (!ASSET_LICENSED_RENDERER_PACKAGES.has(name)) return true;
+    const licenseSource = join(repoRoot, 'node_modules', name, 'LICENSE');
+    if (!existsSync(licenseSource)) {
+      throw new Error(`${name}: asset-licensed package has no LICENSE file to package`);
+    }
+    return false;
   });
   for (const dependency of dependencies) {
     const packageKey = `${dependency.name}@${dependency.version}`;

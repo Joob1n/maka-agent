@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream, readFileSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
-import { getRawHeader } from '@electron/asar';
-import { collectWorkspaceClosure } from './third-party-closure.mjs';
+import { extractFile, getRawHeader } from '@electron/asar';
+import {
+  ASSET_LICENSED_RENDERER_PACKAGES,
+  collectProductionNames,
+  collectWorkspaceClosure,
+} from './third-party-closure.mjs';
 
 // `timeoutMs` is opt-in, for the commands that have actually hung: node-pty
 // under conpty keeps a handle open after its child exits. Everything else runs
@@ -435,10 +439,6 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
  */
 const desktopRoot = resolve(import.meta.dirname, '..', 'apps', 'desktop');
 
-function readJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
 function asarNodeModules(asarPath) {
   const { header } = getRawHeader(asarPath);
   const modules = header.files?.node_modules?.files ?? {};
@@ -461,20 +461,22 @@ function asarNodeModules(asarPath) {
  */
 export async function assertPackagedDependencyClosure(
   resourcesPath,
-  { readManifest, collectClosure } = {},
+  { collectClosure, collectPackagedAllowlist } = {},
 ) {
-  const manifest = readManifest
-    ? await readManifest()
-    : readJson(join(desktopRoot, 'package.json'));
-  const rendererOnly = manifest?.maka?.rendererBundledDependencies;
-  if (!Array.isArray(rendererOnly) || rendererOnly.length === 0) {
-    throw new Error('maka.rendererBundledDependencies must list the renderer roots');
-  }
-  const packaged = asarNodeModules(join(resourcesPath, 'app.asar'));
+  const asarPath = join(resourcesPath, 'app.asar');
+  const packaged = asarNodeModules(asarPath);
 
-  const shipped = rendererOnly.filter((name) => packaged.has(name));
-  if (shipped.length > 0) {
-    throw new Error(`app.asar carries renderer-only packages a second time: ${shipped.join(', ')}`);
+  // The archive may carry exactly the Node production closure — that is the
+  // graph electron-builder walks. Comparing against it catches any leak, a
+  // renderer-only transitive package included, not just the declared roots.
+  const allowed = collectPackagedAllowlist
+    ? await collectPackagedAllowlist()
+    : collectProductionNames('@maka/desktop');
+  const leaked = [...packaged].filter((name) => !allowed.has(name));
+  if (leaked.length > 0) {
+    throw new Error(
+      `app.asar carries packages outside the production closure: ${leaked.join(', ')}`,
+    );
   }
   // The PTY stack reaches these from the main process, so their absence would
   // mean the opposite failure — a closure trimmed past what actually runs.
@@ -501,11 +503,41 @@ export async function assertPackagedDependencyClosure(
         manifestPath: join(desktopRoot, 'package.json'),
       });
   const uncovered = closure
+    .filter(({ name }) => !ASSET_LICENSED_RENDERER_PACKAGES.has(name))
     .filter(({ name, version }) => !notices.includes(`\nPackage: ${name}@${version}\n`))
     .map(({ name, version }) => `${name}@${version}`);
   if (uncovered.length > 0) {
     throw new Error(
       `shipped THIRD_PARTY_NOTICES.txt is missing packages the artifact ships: ${uncovered.join(', ')}`,
+    );
+  }
+  // Asset-licensed packages (the OFL Geist fonts) carry their license as a
+  // vendored file instead of an npm-notice entry; that file must ship too.
+  const closureNames = new Set(closure.map(({ name }) => name));
+  for (const [name, licensePath] of ASSET_LICENSED_RENDERER_PACKAGES) {
+    if (!closureNames.has(name)) continue;
+    await access(join(resourcesPath, licensePath)).catch(() => {
+      throw new Error(`shipped license file for ${name} is missing: ${licensePath}`);
+    });
+  }
+
+  // The artifact's own record of what the renderer bundle contains — written
+  // by the vite build from the rollup module graph plus emitted-asset origins.
+  // Every recorded package must be inside the declared closure, so a package
+  // that reaches the bundle through any path fails release verification even
+  // if it never appears under node_modules in the archive.
+  let recordBuffer;
+  try {
+    // asar archive paths always use forward slashes, on Windows too.
+    recordBuffer = extractFile(asarPath, 'dist-renderer/bundled-npm-packages.json');
+  } catch {
+    throw new Error('app.asar does not carry dist-renderer/bundled-npm-packages.json');
+  }
+  const bundled = JSON.parse(recordBuffer.toString('utf8'));
+  const undeclared = bundled.filter((name) => !closureNames.has(name));
+  if (undeclared.length > 0) {
+    throw new Error(
+      `renderer bundle carries packages outside the declared closure: ${undeclared.join(', ')}`,
     );
   }
 }

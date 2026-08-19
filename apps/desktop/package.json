@@ -88,6 +88,8 @@
       "@astryxdesign/theme-neutral",
       "@dnd-kit/core",
       "@dnd-kit/sortable",
+      "@fontsource-variable/geist",
+      "@fontsource-variable/geist-mono",
       "@maka/ui",
       "@xterm/addon-fit",
       "@xterm/xterm",

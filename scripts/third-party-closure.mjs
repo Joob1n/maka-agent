@@ -6,7 +6,7 @@
 // definition — this module is that single definition.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { npmSpawnOptions } from './npm-spawn.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '..');
@@ -62,6 +62,18 @@ export function rendererBundledRoots(manifestPath) {
 }
 
 /**
+ * Renderer-bundled packages whose license ships as a vendored file in the
+ * artifact instead of an entry in the generated npm notices. The Geist fonts
+ * are OFL-1.1 — carried as their own license files next to the other renderer
+ * asset notices — so the notice generator skips them while the security audit
+ * and the bundle-graph check still cover them as shipped packages.
+ */
+export const ASSET_LICENSED_RENDERER_PACKAGES = new Map([
+  ['@fontsource-variable/geist', join('licenses', 'renderer', 'GEIST_LICENSE.txt')],
+  ['@fontsource-variable/geist-mono', join('licenses', 'renderer', 'GEIST_MONO_LICENSE.txt')],
+]);
+
+/**
  * Every third-party `{ name, version }` the workspace ships, sorted. Pass
  * `manifestPath` only for a workspace that bundles a renderer; without it the
  * closure is the production closure alone.
@@ -75,7 +87,15 @@ export function collectWorkspaceClosure({ workspaceName, manifestPath }) {
     const full = npmWorkspaceTree(workspaceName, false).dependencies ?? {};
     for (const [name, dependency] of Object.entries(full)) {
       if (!roots.has(name) || !dependency || typeof dependency !== 'object') continue;
-      if (!name.startsWith(WORKSPACE_PREFIX) && typeof dependency.version === 'string') {
+      if (name.startsWith(WORKSPACE_PREFIX)) {
+        // A workspace root's slot in the full tree carries its dev edges too
+        // (`@maka/ui` declares @types/* and linkedom for its tests), and none
+        // of those are bundle inputs. Its own production closure is what the
+        // renderer can actually reach through it.
+        collectInto(packages, npmWorkspaceTree(name, true).dependencies);
+        continue;
+      }
+      if (typeof dependency.version === 'string') {
         packages.set(`${name}@${dependency.version}`, { name, version: dependency.version });
       }
       collectInto(packages, dependency.dependencies);
@@ -94,4 +114,23 @@ export function collectWorkspaceClosure({ workspaceName, manifestPath }) {
     (left, right) =>
       left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
   );
+}
+
+/**
+ * Every package name that may legitimately appear under the workspace's
+ * packaged `node_modules` — the production closure, workspace packages
+ * included. electron-builder walks exactly this graph, so anything in the
+ * archive outside it is a leak regardless of how it got there.
+ */
+export function collectProductionNames(workspaceName) {
+  const names = new Set();
+  const walk = (dependencies) => {
+    for (const [name, dependency] of Object.entries(dependencies ?? {})) {
+      if (!dependency || typeof dependency !== 'object') continue;
+      names.add(name);
+      walk(dependency.dependencies);
+    }
+  };
+  walk(npmWorkspaceTree(workspaceName, true).dependencies);
+  return names;
 }
