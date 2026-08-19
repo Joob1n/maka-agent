@@ -2007,7 +2007,6 @@ test('Host auxiliary calls preserve resolved DeepSeek reasoning settings', async
     const effects = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Auxiliary telemetry must not drain the Host'),
       newId: () => 'deepseek-title-call',
