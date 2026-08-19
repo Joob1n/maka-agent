@@ -251,6 +251,7 @@ export function SubagentSettingsPage(props: {
             available: null,
             disabled: null,
             missing_connection: copy.status.missingConnection,
+            provider_retired: copy.status.providerRetired,
             connection_disabled: copy.status.connectionDisabled,
             model_disabled: copy.status.modelDisabled,
           }[availability.kind];
