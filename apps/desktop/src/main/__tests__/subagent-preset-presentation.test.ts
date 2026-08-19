@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { LlmConnection } from '@maka/core/llm-connections';
 import type { SubagentPreset } from '@maka/core/subagent-settings';
-import { subagentPresetAvailability } from '../../renderer/settings/subagent-preset-presentation.js';
+import {
+  isSelectableSubagentConnection,
+  subagentPresetAvailability,
+} from '../../renderer/settings/subagent-preset-presentation.js';
 
 const preset: SubagentPreset = {
   id: 'worker',
@@ -42,6 +45,25 @@ test('retirement outranks disabled: there is no switch that repairs it', () => {
     kind: 'provider_retired',
     tone: 'destructive',
   });
+});
+
+test('the editor cannot route a preset through a retained retired connection', () => {
+  // The list badge alone was not enough: the editor's usableConnections /
+  // validConnection / connectionOptions all consumed `enabled`, so a retained
+  // retired row could still be selected and saved into a preset the runtime
+  // admission then refuses as provider_retired.
+  assert.equal(isSelectableSubagentConnection(connection()), false);
+  assert.equal(isSelectableSubagentConnection(connection({ enabled: false })), false);
+  assert.equal(
+    isSelectableSubagentConnection(connection({ slug: 'openai', providerType: 'openai' })),
+    true,
+  );
+  assert.equal(
+    isSelectableSubagentConnection(
+      connection({ slug: 'openai', providerType: 'openai', enabled: false }),
+    ),
+    false,
+  );
 });
 
 test('a live connection with the model enabled stays available', () => {

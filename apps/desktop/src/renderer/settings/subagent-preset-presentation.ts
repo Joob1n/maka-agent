@@ -43,6 +43,16 @@ export type SubagentPresetAvailability = {
   tone: StatusTone;
 };
 
+/**
+ * Whether the editor may route a preset through this connection. One predicate
+ * for `usableConnections`, validation, and the option list, so the editor
+ * cannot save what the runtime admission (`provider_retired`,
+ * `connection_disabled`) is guaranteed to refuse.
+ */
+export function isSelectableSubagentConnection(connection: LlmConnection): boolean {
+  return connection.enabled && !isRetiredProvider(connection.providerType);
+}
+
 export function subagentPresetAvailability(
   preset: SubagentPreset,
   connections: readonly LlmConnection[],
