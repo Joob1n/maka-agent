@@ -9,6 +9,7 @@ import {
   findRendererTarget,
   isPackagedRendererUsable,
   isolatedUserEnv,
+  RENDERER_READY_TIMEOUT_MS,
   RENDERER_STATE_EXPRESSION,
   runCommand,
   stopChild,
@@ -263,7 +264,7 @@ export async function verifyWindowsAutoupdate(
     });
 
     const target = await findRendererTarget(userData, child);
-    const rendererDeadline = Date.now() + 30_000;
+    const rendererDeadline = Date.now() + RENDERER_READY_TIMEOUT_MS;
     for (;;) {
       const state = await evaluateInRenderer(
         target.webSocketDebuggerUrl,
@@ -400,6 +401,7 @@ export async function verifyWindowsAutoupdate(
     step('waiting for the upgraded app to relaunch automatically');
     const relaunchDeadline = Date.now() + 120_000;
     let relaunched = [];
+    let observed = false;
     let probeError;
     for (;;) {
       try {
@@ -407,6 +409,7 @@ export async function verifyWindowsAutoupdate(
           (processInfo) =>
             basename(processInfo.path).toLowerCase() === executableName.toLowerCase(),
         );
+        observed = true;
         probeError = undefined;
         if (relaunched.length > 0) break;
       } catch (error) {
@@ -418,10 +421,15 @@ export async function verifyWindowsAutoupdate(
         probeError = error;
       }
       if (Date.now() >= relaunchDeadline) {
+        // Never having read the process table is a different fault from the
+        // installer failing to relaunch, and saying the second when only the
+        // first is known sends the next reader after the wrong thing.
         throw new Error(
-          `The installer did not relaunch the upgraded app within 120s.${
-            probeError ? `\nLast process probe failed: ${probeError.message}` : ''
-          }`,
+          observed
+            ? `The installer did not relaunch the upgraded app within 120s.${
+                probeError ? `\nThe last probe also failed: ${probeError.message}` : ''
+              }`
+            : `Could not read the process table within 120s, so whether the installer relaunched the upgraded app is unknown.\nLast process probe failed: ${probeError?.message}`,
         );
       }
       await delay(1_000);
@@ -484,7 +492,7 @@ export async function verifyWindowsAutoupdate(
         );
         try {
           const smokeTarget = await findRendererTarget(smokeUserData, smokeChild);
-          const deadline = Date.now() + 30_000;
+          const deadline = Date.now() + RENDERER_READY_TIMEOUT_MS;
           for (;;) {
             const state = await evaluateInRenderer(
               smokeTarget.webSocketDebuggerUrl,

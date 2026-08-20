@@ -80,6 +80,15 @@ function delay(milliseconds) {
 }
 
 /**
+ * One budget for every wait a cold Windows runner can stretch — exposing CDP
+ * and mounting React alike. The runner scans a first-run executable before
+ * letting it serve, and a step that had been observed taking 74 seconds was
+ * failing a 30-second line. Holding it in one place is what keeps a second
+ * launch path from silently keeping the old, too-tight deadline.
+ */
+export const RENDERER_READY_TIMEOUT_MS = 120_000;
+
+/**
  * The port Chromium actually bound, read from the DevToolsActivePort file it
  * writes into the user-data directory. The verifier used to reserve a port,
  * release it, and hand the number to Electron — leaving a window in which
@@ -98,20 +107,20 @@ async function readDevToolsPort(userDataDirectory) {
 
 export async function findRendererTarget(userDataDirectory, child) {
   const startedAt = Date.now();
-  // Generous on purpose: a cold Windows runner scans a first-run executable
-  // before letting it serve, and the port-file diagnostics showed a healthy
-  // app answering /json/list with no page target yet past the old 30-second
-  // line (the step itself had been observed taking 74 seconds). The child
-  // exiting still fails immediately; the workflow timeout is the outer bound
-  // for everything else.
-  const deadline = startedAt + 120_000;
+  const deadline = startedAt + RENDERER_READY_TIMEOUT_MS;
   let port = null;
   let lastState = 'DevToolsActivePort was never written under the user-data directory';
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Packaged Maka exited before its renderer was ready.`);
     }
-    port ??= await readDevToolsPort(userDataDirectory);
+    // Re-read rather than latch the first value: Chromium writes this file at
+    // startup, so a caller that left a predecessor's file in place is polling
+    // a dead port only until the child overwrites it. Callers should still
+    // remove it before spawning — a stale file that is never overwritten
+    // cannot be told from a fresh one — but the poll converges either way.
+    const current = await readDevToolsPort(userDataDirectory);
+    if (current !== null) port = current;
     if (port !== null) {
       try {
         // Per-attempt timeout: undici's default headers timeout is 300 seconds,
@@ -333,9 +342,7 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
 
   try {
     const target = await findRendererTarget(userData, child);
-    // Same headroom as target discovery: a cold runner that was slow to serve
-    // CDP is as slow to mount React, and a wrong deadline fails a good build.
-    const deadline = Date.now() + 120_000;
+    const deadline = Date.now() + RENDERER_READY_TIMEOUT_MS;
     let rendererState;
     while (Date.now() < deadline) {
       rendererState = await evaluateRenderer(target.webSocketDebuggerUrl);

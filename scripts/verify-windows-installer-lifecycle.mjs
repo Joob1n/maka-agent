@@ -21,7 +21,10 @@ function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-export async function listInstalledProcesses(installDirectory, { run = runCommand } = {}) {
+export async function listInstalledProcesses(
+  installDirectory,
+  { run = runCommand, timeoutMs = 10_000 } = {},
+) {
   const root = `${resolve(installDirectory)}${sep}`;
   const script = String.raw`
 $root = [IO.Path]::GetFullPath(${powerShellLiteral(root)})
@@ -42,12 +45,15 @@ $matches | ConvertTo-Json -Compress
   // deadline a lie. A `Get-CimInstance Win32_Process` query hung for the rest
   // of the job during an auto-update relaunch, so the 120s relaunch deadline
   // never fired and the runner cancelled the run an hour later.
+  //
+  // Well under the 60s and 120s budgets above it, so a stalled probe leaves
+  // room for several more attempts rather than consuming the whole window: a
+  // loop that can only try twice cannot survive a stall, which is the entire
+  // point of tolerating one.
   const { stdout } = await run(
     'powershell',
     ['-NoProfile', '-NonInteractive', '-Command', script],
-    {
-      timeoutMs: 30_000,
-    },
+    { timeoutMs },
   );
   if (!stdout.trim()) return [];
   const parsed = JSON.parse(stdout);
@@ -65,10 +71,12 @@ export async function waitForInstalledProcessesToExit(
 ) {
   const deadline = Date.now() + timeoutMs;
   let processes = [];
+  let observed = false;
   let probeError;
   for (;;) {
     try {
       processes = await listProcesses(installDirectory);
+      observed = true;
       probeError = undefined;
       if (processes.length === 0) return;
     } catch (error) {
@@ -79,10 +87,17 @@ export async function waitForInstalledProcessesToExit(
       probeError = error;
     }
     if (Date.now() >= deadline) {
+      // Never having seen the process table is a different fault from seeing
+      // processes that would not exit, and only one of them is about Maka.
+      if (!observed) {
+        throw new Error(
+          `Could not read the process table within ${timeoutMs}ms, so whether installed Maka processes exited is unknown.\nLast process probe failed: ${probeError?.message}`,
+        );
+      }
       const summary = processes.map(({ processId, name }) => `${name} (${processId})`).join(', ');
       throw new Error(
         `Installed Maka processes did not exit within ${timeoutMs}ms: ${summary || '<unknown>'}.${
-          probeError ? `\nLast process probe failed: ${probeError.message}` : ''
+          probeError ? `\nThe last probe also failed: ${probeError.message}` : ''
         }`,
       );
     }
