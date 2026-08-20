@@ -114,7 +114,13 @@ export async function findRendererTarget(userDataDirectory, child) {
     port ??= await readDevToolsPort(userDataDirectory);
     if (port !== null) {
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+        // Per-attempt timeout: undici's default headers timeout is 300 seconds,
+        // so a single hanging attempt against a bound-but-unresponsive endpoint
+        // (a main process stuck in startup) would otherwise blow straight
+        // through the loop's deadline — one run overshot it to 355 seconds.
+        const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+          signal: AbortSignal.timeout(2_000),
+        });
         if (response.ok) {
           const targets = await response.json();
           const page = targets.find(
