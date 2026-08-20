@@ -157,6 +157,12 @@ export function registerRuntimeHostSessionCatalogIpc(
     if (!isPermissionMode(mode)) throw new Error(`Invalid permission mode: ${String(mode)}`);
     return updateConfiguration(deps, sessionId, { permissionMode: mode }, 'mode-change');
   });
+  // Two fields, two channels, one field each. Plan is a temporary
+  // collaboration excursion that Runtime ends by itself on approval or
+  // abandonment; orchestration is the Session's standing default for how a
+  // turn fans out. Runtime resolves the overlap by stripping the subagent and
+  // agent-graph tools while planning, and validates the two independently, so
+  // neither channel has any business writing the other's field.
   ipcMain.handle(
     'sessions:setCollaborationMode',
     async (_event, sessionId: string, mode: unknown) => {
