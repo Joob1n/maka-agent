@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, mkdir, readFile, rm } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 
 // `timeoutMs` is opt-in, for the commands that have actually hung: node-pty
@@ -73,86 +74,54 @@ export async function assertMissing(path) {
   throw new Error(`Forbidden release resource exists: ${path}`);
 }
 
+export async function reserveTcpPort() {
+  const server = createServer();
+  await new Promise((resolvePromise, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolvePromise);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('Could not reserve a CDP port.');
+  }
+  await new Promise((resolvePromise, reject) => {
+    server.close((error) => (error ? reject(error) : resolvePromise()));
+  });
+  return address.port;
+}
+
 function delay(milliseconds) {
   return new Promise((resolvePromise) => {
     setTimeout(resolvePromise, milliseconds);
   });
 }
 
-/**
- * One budget for every wait a cold Windows runner can stretch — exposing CDP
- * and mounting React alike. The runner scans a first-run executable before
- * letting it serve, and a step that had been observed taking 74 seconds was
- * failing a 30-second line. Holding it in one place is what keeps a second
- * launch path from silently keeping the old, too-tight deadline.
- */
-export const RENDERER_READY_TIMEOUT_MS = 120_000;
-
-/**
- * The port Chromium actually bound, read from the DevToolsActivePort file it
- * writes into the user-data directory. The verifier used to reserve a port,
- * release it, and hand the number to Electron — leaving a window in which
- * anything else on the runner could take it, and a timeout log that could not
- * say whether the app was even listening where the poll looked (issue #3196).
- */
-async function readDevToolsPort(userDataDirectory) {
-  try {
-    const content = await readFile(join(userDataDirectory, 'DevToolsActivePort'), 'utf8');
-    const port = Number.parseInt(content.split('\n')[0] ?? '', 10);
-    return Number.isInteger(port) && port > 0 ? port : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function findRendererTarget(userDataDirectory, child) {
-  const startedAt = Date.now();
-  const deadline = startedAt + RENDERER_READY_TIMEOUT_MS;
-  let port = null;
-  let lastState = 'DevToolsActivePort was never written under the user-data directory';
+export async function findRendererTarget(port, child) {
+  const deadline = Date.now() + 30_000;
+  let lastError;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Packaged Maka exited before its renderer was ready.`);
     }
-    // Re-read rather than latch the first value: Chromium writes this file at
-    // startup, so a caller that left a predecessor's file in place is polling
-    // a dead port only until the child overwrites it. Callers should still
-    // remove it before spawning — a stale file that is never overwritten
-    // cannot be told from a fresh one — but the poll converges either way.
-    const current = await readDevToolsPort(userDataDirectory);
-    if (current !== null) port = current;
-    if (port !== null) {
-      try {
-        // Per-attempt timeout: undici's default headers timeout is 300 seconds,
-        // so a single hanging attempt against a bound-but-unresponsive endpoint
-        // (a main process stuck in startup) would otherwise blow straight
-        // through the loop's deadline — one run overshot it to 355 seconds.
-        const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
-          signal: AbortSignal.timeout(2_000),
-        });
-        if (response.ok) {
-          const targets = await response.json();
-          const page = targets.find(
-            (target) => target.type === 'page' && target.webSocketDebuggerUrl,
-          );
-          if (page) return page;
-          lastState = `port ${port} answered with ${targets.length} targets but no debuggable page`;
-        } else {
-          lastState = `port ${port} answered HTTP ${response.status}`;
-        }
-      } catch (error) {
-        lastState = `port ${port} did not answer: ${error.message}`;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (response.ok) {
+        const targets = await response.json();
+        const page = targets.find(
+          (target) => target.type === 'page' && target.webSocketDebuggerUrl,
+        );
+        if (page) return page;
       }
+    } catch (error) {
+      lastError = error;
     }
     await delay(250);
   }
-  // Say exactly where discovery stalled, so classifying the failure does not
-  // take a re-run: no port file, a port that never answers, an unexpected
-  // HTTP status, and a healthy endpoint with no page target are four
-  // different faults.
-  const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
   throw new Error(
-    `Packaged Maka renderer did not expose CDP within ${elapsedSeconds} seconds: ${lastState}.`,
+    `Packaged Maka renderer did not expose CDP within 30 seconds${
+      lastError ? `: ${lastError.message}` : ''
+    }.`,
   );
 }
 
@@ -302,28 +271,17 @@ export function isolatedUserEnv(homeDirectory, { temporaryDirectory = homeDirect
 }
 
 export async function smokePackagedRenderer(executable, { workingDirectory } = {}) {
+  const port = await reserveTcpPort();
   const home = join(workingDirectory, 'home');
   const userData = join(workingDirectory, 'user-data');
   const userEnv = isolatedUserEnv(home);
   await mkdir(home, { recursive: true });
   await mkdir(userData, { recursive: true });
-  // Chromium removes DevToolsActivePort only on a clean exit, and the
-  // upgrade-lifecycle check reuses one user-data directory across two app
-  // versions with a SIGKILL between them — so a file found here can belong to
-  // the previous instance, pointing the poll at a port nothing listens on
-  // anymore. Deleting it first means whatever appears was written by this
-  // child. This is what the first run of the port-file diagnostics caught:
-  // the poll read a bound-looking port and fetch failed for the full window.
-  await rm(join(userData, 'DevToolsActivePort'), { force: true });
   await mkdir(userEnv.APPDATA, { recursive: true });
   await mkdir(userEnv.LOCALAPPDATA, { recursive: true });
   const child = spawn(
     executable,
-    // Port 0: Chromium binds a free port itself and records it in the
-    // user-data directory's DevToolsActivePort file, which is where the poll
-    // reads it back — no reserve-then-release window for another process on
-    // the runner to take the number first.
-    ['--remote-debugging-port=0', `--user-data-dir=${userData}`, '--enable-logging=stderr'],
+    [`--remote-debugging-port=${port}`, `--user-data-dir=${userData}`, '--enable-logging=stderr'],
     {
       cwd: workingDirectory,
       env: {
@@ -341,8 +299,8 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
   });
 
   try {
-    const target = await findRendererTarget(userData, child);
-    const deadline = Date.now() + RENDERER_READY_TIMEOUT_MS;
+    const target = await findRendererTarget(port, child);
+    const deadline = Date.now() + 30_000;
     let rendererState;
     while (Date.now() < deadline) {
       rendererState = await evaluateRenderer(target.webSocketDebuggerUrl);

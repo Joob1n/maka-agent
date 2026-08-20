@@ -9,8 +9,8 @@ import {
   findRendererTarget,
   isPackagedRendererUsable,
   isolatedUserEnv,
-  RENDERER_READY_TIMEOUT_MS,
   RENDERER_STATE_EXPRESSION,
+  reserveTcpPort,
   runCommand,
   stopChild,
 } from './verify-packaged-app.mjs';
@@ -230,6 +230,7 @@ export async function verifyWindowsAutoupdate(
     await access(uninstaller);
 
     step('launching the installed candidate against the loopback feed');
+    const cdpPort = await reserveTcpPort();
     const home = join(temporaryDirectory, 'home');
     const userData = join(temporaryDirectory, 'user-data');
     const userEnv = isolatedUserEnv(home);
@@ -237,9 +238,6 @@ export async function verifyWindowsAutoupdate(
     await mkdir(userData, { recursive: true });
     await mkdir(userEnv.APPDATA, { recursive: true });
     await mkdir(userEnv.LOCALAPPDATA, { recursive: true });
-    // A DevToolsActivePort left by an earlier instance would point the poll at
-    // a dead port; whatever appears after this belongs to the child below.
-    await rm(join(userData, 'DevToolsActivePort'), { force: true });
     const childEnv = {
       ...process.env,
       MAKA_SKIP_SHELL_ENV: '1',
@@ -252,9 +250,11 @@ export async function verifyWindowsAutoupdate(
     delete childEnv.MAKA_UPDATE_MOCK_STATE;
     child = spawn(
       installedExecutable,
-      // Port 0: Chromium binds a free port and records it in DevToolsActivePort,
-      // which is where findRendererTarget reads it back.
-      ['--remote-debugging-port=0', `--user-data-dir=${userData}`, '--enable-logging=stderr'],
+      [
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userData}`,
+        '--enable-logging=stderr',
+      ],
       { cwd: temporaryDirectory, env: childEnv, stdio: ['ignore', 'ignore', 'pipe'] },
     );
     let stderr = '';
@@ -263,8 +263,8 @@ export async function verifyWindowsAutoupdate(
       stderr = `${stderr}${chunk}`.slice(-16_384);
     });
 
-    const target = await findRendererTarget(userData, child);
-    const rendererDeadline = Date.now() + RENDERER_READY_TIMEOUT_MS;
+    const target = await findRendererTarget(cdpPort, child);
+    const rendererDeadline = Date.now() + 30_000;
     for (;;) {
       const state = await evaluateInRenderer(
         target.webSocketDebuggerUrl,
@@ -401,36 +401,13 @@ export async function verifyWindowsAutoupdate(
     step('waiting for the upgraded app to relaunch automatically');
     const relaunchDeadline = Date.now() + 120_000;
     let relaunched = [];
-    let observed = false;
-    let probeError;
     for (;;) {
-      try {
-        relaunched = (await listInstalledProcesses(installDirectory)).filter(
-          (processInfo) =>
-            basename(processInfo.path).toLowerCase() === executableName.toLowerCase(),
-        );
-        observed = true;
-        probeError = undefined;
-        if (relaunched.length > 0) break;
-      } catch (error) {
-        // The Windows process query stalls exactly here — while NSIS is
-        // handing off and relaunching, the process table is in flux — so a
-        // bounded probe that gives up says nothing about the relaunch. This
-        // deadline stays the authority; the last probe failure is reported
-        // with it so a persistent stall is not mistaken for a missing app.
-        probeError = error;
-      }
+      relaunched = (await listInstalledProcesses(installDirectory)).filter(
+        (processInfo) => basename(processInfo.path).toLowerCase() === executableName.toLowerCase(),
+      );
+      if (relaunched.length > 0) break;
       if (Date.now() >= relaunchDeadline) {
-        // Never having read the process table is a different fault from the
-        // installer failing to relaunch, and saying the second when only the
-        // first is known sends the next reader after the wrong thing.
-        throw new Error(
-          observed
-            ? `The installer did not relaunch the upgraded app within 120s.${
-                probeError ? `\nThe last probe also failed: ${probeError.message}` : ''
-              }`
-            : `Could not read the process table within 120s, so whether the installer relaunched the upgraded app is unknown.\nLast process probe failed: ${probeError?.message}`,
-        );
+        throw new Error('The installer did not relaunch the upgraded app within 120s.');
       }
       await delay(1_000);
     }
@@ -465,6 +442,7 @@ export async function verifyWindowsAutoupdate(
       requireWindowsSandbox: true,
       requireDisclaimer: true,
       smokeRenderer: async (executable, { workingDirectory }) => {
+        const smokePort = await reserveTcpPort();
         const smokeHome = join(workingDirectory, 'home');
         const smokeUserData = join(workingDirectory, 'user-data');
         const smokeEnv = isolatedUserEnv(smokeHome);
@@ -472,15 +450,10 @@ export async function verifyWindowsAutoupdate(
         await mkdir(smokeUserData, { recursive: true });
         await mkdir(smokeEnv.APPDATA, { recursive: true });
         await mkdir(smokeEnv.LOCALAPPDATA, { recursive: true });
-        // This directory is shared across the lifecycle's app versions, and
-        // Chromium removes DevToolsActivePort only on a clean exit — a stale
-        // file here pointed the poll at the previous instance's dead port.
-        await rm(join(smokeUserData, 'DevToolsActivePort'), { force: true });
         const smokeChild = spawn(
           executable,
-          // Port 0: the bound port comes back through DevToolsActivePort.
           [
-            '--remote-debugging-port=0',
+            `--remote-debugging-port=${smokePort}`,
             `--user-data-dir=${smokeUserData}`,
             '--enable-logging=stderr',
           ],
@@ -491,8 +464,8 @@ export async function verifyWindowsAutoupdate(
           },
         );
         try {
-          const smokeTarget = await findRendererTarget(smokeUserData, smokeChild);
-          const deadline = Date.now() + RENDERER_READY_TIMEOUT_MS;
+          const smokeTarget = await findRendererTarget(smokePort, smokeChild);
+          const deadline = Date.now() + 30_000;
           for (;;) {
             const state = await evaluateInRenderer(
               smokeTarget.webSocketDebuggerUrl,
