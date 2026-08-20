@@ -400,13 +400,29 @@ export async function verifyWindowsAutoupdate(
     step('waiting for the upgraded app to relaunch automatically');
     const relaunchDeadline = Date.now() + 120_000;
     let relaunched = [];
+    let probeError;
     for (;;) {
-      relaunched = (await listInstalledProcesses(installDirectory)).filter(
-        (processInfo) => basename(processInfo.path).toLowerCase() === executableName.toLowerCase(),
-      );
-      if (relaunched.length > 0) break;
+      try {
+        relaunched = (await listInstalledProcesses(installDirectory)).filter(
+          (processInfo) =>
+            basename(processInfo.path).toLowerCase() === executableName.toLowerCase(),
+        );
+        probeError = undefined;
+        if (relaunched.length > 0) break;
+      } catch (error) {
+        // The Windows process query stalls exactly here — while NSIS is
+        // handing off and relaunching, the process table is in flux — so a
+        // bounded probe that gives up says nothing about the relaunch. This
+        // deadline stays the authority; the last probe failure is reported
+        // with it so a persistent stall is not mistaken for a missing app.
+        probeError = error;
+      }
       if (Date.now() >= relaunchDeadline) {
-        throw new Error('The installer did not relaunch the upgraded app within 120s.');
+        throw new Error(
+          `The installer did not relaunch the upgraded app within 120s.${
+            probeError ? `\nLast process probe failed: ${probeError.message}` : ''
+          }`,
+        );
       }
       await delay(1_000);
     }

@@ -64,16 +64,29 @@ export async function waitForInstalledProcessesToExit(
   } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
-  let processes = await listProcesses(installDirectory);
-  while (processes.length > 0) {
+  let processes = [];
+  let probeError;
+  for (;;) {
+    try {
+      processes = await listProcesses(installDirectory);
+      probeError = undefined;
+      if (processes.length === 0) return;
+    } catch (error) {
+      // A bounded probe that fails says nothing about the processes, so the
+      // loop's own deadline stays the authority — the Windows process query
+      // stalls while an installer is churning the process table, and one
+      // stalled probe must not decide a verification.
+      probeError = error;
+    }
     if (Date.now() >= deadline) {
       const summary = processes.map(({ processId, name }) => `${name} (${processId})`).join(', ');
       throw new Error(
-        `Installed Maka processes did not exit within ${timeoutMs}ms: ${summary || '<unknown>'}.`,
+        `Installed Maka processes did not exit within ${timeoutMs}ms: ${summary || '<unknown>'}.${
+          probeError ? `\nLast process probe failed: ${probeError.message}` : ''
+        }`,
       );
     }
     await sleep(pollIntervalMs);
-    processes = await listProcesses(installDirectory);
   }
 }
 
