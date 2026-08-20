@@ -1,4 +1,4 @@
-import { FAKE_HOLD_OPEN_PROMPT } from '@maka/runtime/fake-backend';
+import { FAKE_HOLD_OPEN_PROMPT } from '@maka/runtime/test-only/fake-backend';
 import { expect, test, COMPOSER_INPUT } from './fixtures';
 
 test('shows only slash commands executable in the current session state', async ({

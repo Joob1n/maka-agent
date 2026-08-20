@@ -757,6 +757,22 @@ function AppShellContent({
   // Active autonomous goal for the current session drives the header
   // kill-switch pill (visible indicator + one-click clear).
   const activeGoal = useSessionGoal(activeId);
+  const pendingGoalControlSessionIdsRef = useRef(new Set<string>());
+  const runGoalControl = useCallback(
+    (
+      sessionId: string,
+      operation: () => Promise<unknown>,
+      reportFailure: (error: unknown) => void,
+    ): void => {
+      const pending = pendingGoalControlSessionIdsRef.current;
+      if (pending.has(sessionId)) return;
+      pending.add(sessionId);
+      void operation()
+        .catch(reportFailure)
+        .finally(() => pending.delete(sessionId));
+    },
+    [],
+  );
   // Set of session ids whose backend / connection is no longer usable —
   // drives the sidebar "已过期" pill (PR108g, paired with the PR108e chat
   // header banner). Derivation is pure (see `stale-sessions.ts`) so the
@@ -2251,6 +2267,10 @@ function AppShellContent({
         );
         return true;
       }
+      if (graphCommand.kind === 'history') {
+        toastApi.info(shellCopy.graphHistoryTitle, shellCopy.graphHistoryDescription);
+        return true;
+      }
       if (graphCommand.kind === 'set_mode') {
         const changed = await setGraphMode(graphCommand.mode === 'graph');
         if (changed) {
@@ -3283,27 +3303,76 @@ function AppShellContent({
                 memoryActive={memoryActive}
                 onOpenMemorySettings={() => openSettingsSection('memory')}
                     goalIndicator={
-                      activeGoal
-                        ? {
-                  condition: activeGoal.condition,
-                  status: activeGoal.status,
-                  iterations: activeGoal.iterations,
-                  maxIterations: activeGoal.maxIterations,
-                            onClear: () => {
-                              void window.maka.goal.clear(activeGoal.sessionId).catch((error) => {
+                  activeGoal
+                    ? (() => {
+                        const common = {
+                          condition: activeGoal.condition,
+                          iterations: activeGoal.iterations,
+                          maxIterations: activeGoal.maxIterations,
+                          setAt: activeGoal.setAt,
+                          tokensSpent: activeGoal.tokensNow,
+                          ...(activeGoal.tokenBudget !== undefined
+                            ? { tokenBudget: activeGoal.tokenBudget }
+                            : {}),
+                          onClear: () => {
+                          void window.maka.goal.clear(activeGoal.sessionId).catch((error) => {
+                            toastApi.error(
+                              shellCopy.goalClearFailedTitle,
+                              localizedShellErrorMessage(
+                                error,
+                                shellCopy.goalClearFailedFallback,
+                                uiLocale,
+                              ),
+                            );
+                          });
+                          },
+                        };
+                        if (activeGoal.status === 'paused') {
+                          return {
+                            ...common,
+                            status: 'paused' as const,
+                            pausedAt: activeGoal.pausedAt,
+                            onResume: () => {
+                              runGoalControl(
+                                activeGoal.sessionId,
+                                () => window.maka.goal.resume(activeGoal.sessionId),
+                                (error) => {
+                                  toastApi.error(
+                                    shellCopy.goalResumeFailedTitle,
+                                    localizedShellErrorMessage(
+                                      error,
+                                      shellCopy.goalResumeFailedFallback,
+                                      uiLocale,
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          };
+                        }
+                        return {
+                          ...common,
+                          status: activeGoal.status,
+                          onPause: () => {
+                            runGoalControl(
+                              activeGoal.sessionId,
+                              () => window.maka.goal.pause(activeGoal.sessionId),
+                              (error) => {
                                 toastApi.error(
-                                  shellCopy.goalClearFailedTitle,
+                                  shellCopy.goalPauseFailedTitle,
                                   localizedShellErrorMessage(
                                     error,
-                                    shellCopy.goalClearFailedFallback,
+                                    shellCopy.goalPauseFailedFallback,
                                     uiLocale,
                                   ),
                                 );
-                              });
-                            },
-                          }
-                        : undefined
-                    }
+                              },
+                            );
+                          },
+                        };
+                      })()
+                    : undefined
+                }
                 messageLoadError={activeId ? messageLoadErrorBySession[activeId] : undefined}
                 messageLoadRetryPending={activeId ? messageRetryPendingBySession[activeId] === true : false}
                 onRetryMessages={activeId ? () => void retryMessages(activeId) : undefined}

@@ -369,7 +369,12 @@ function copyRuntimeDist(source, destination, options = {}) {
   copyTreeFiles(sourceDist, join(destination, 'dist'), (relativePath) => {
     const segments = relativePath.split(sep);
     const file = segments.at(-1) ?? '';
-    if (segments.some((segment) => segment === '__tests__' || segment === '__fixtures__')) {
+    if (
+      segments.some(
+        (segment) =>
+          segment === '__tests__' || segment === '__fixtures__' || segment === 'test-only',
+      )
+    ) {
       return false;
     }
     if (/(?:^|\.)test\.js$/.test(file) || file.endsWith('.d.ts') || file.endsWith('.map')) {

@@ -11,7 +11,7 @@ import {
   classifyTerminalRuntimeLedger,
   commitTerminalRunWithRuntimeFact,
 } from '@maka/runtime/terminal-run-commit';
-import { FakeBackend, FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime/fake-backend';
+import { FakeBackend, FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime/test-only/fake-backend';
 import {
   IMPLEMENTATION_AGENT_DEFINITION,
   LOCAL_READ_AGENT_PROFILE,
@@ -1354,6 +1354,57 @@ test('Agent Graph supervisor stop owns only graph-capable root Turns', async () 
       assert.deepEqual(fixture.coordinator.readRootState(fixture.sessionId), { kind: 'idle' });
     }
     assert.equal(fixture.drainRequested(), false);
+  } finally {
+    backend?.release();
+    await fixture.coordinator.close();
+    await fixture.messages.close();
+    await fixture.dispose();
+  }
+});
+
+test('Agent Graph supervisor stop rejects a stale graph identity inside session admission', async () => {
+  let backend: LinkedChildAuthorityBackend | undefined;
+  let currentGraphId = 'graph-before-rollover';
+  const fixture = await createFailureFixture({
+    registerBackend: (backends) =>
+      backends.register('fake', (context) => {
+        backend = new LinkedChildAuthorityBackend(context.sessionId);
+        return backend;
+      }),
+    agentGraphEpochs: {
+      currentGraphId: async () => currentGraphId,
+      beginNextGraphEpoch: async () => currentGraphId,
+    },
+  });
+  try {
+    await fixture.manager.setOrchestrationMode(fixture.sessionId, 'graph');
+    const started = await fixture.interactiveTurns.handlers['turn.start'](
+      {
+        sessionId: fixture.sessionId,
+        turnId: 'turn-owned-by-graph-before-rollover',
+        content: { text: HOLD_EXTERNAL_PROMPT },
+      },
+      operationContext(fixture.hostEpoch, fixture.acquireResidency),
+    );
+    assert.equal(started.ok, true);
+    await waitUntil(() => backend !== undefined);
+    await backend?.externalHoldStarted.promise;
+
+    currentGraphId = 'graph-after-rollover';
+    await assert.rejects(
+      () =>
+        fixture.coordinator.stopAgentGraphSupervisor(fixture.sessionId, {
+          expectedGraphId: currentGraphId,
+          source: 'stop_button',
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof RuntimeHostedRootConflictError);
+        assert.match(error.message, /graph-after-rollover.*no longer current/);
+        return true;
+      },
+    );
+    assert.equal(backend?.stopCount, 0);
+    assert.equal(fixture.coordinator.readRootState(fixture.sessionId).kind, 'active');
   } finally {
     backend?.release();
     await fixture.coordinator.close();

@@ -161,6 +161,14 @@ maka run --host office --project '<projectId>' "总结这个项目"
 
 每个 TUI 或 CLI 进程只连接一个 Profile。TUI 的首次 SSH 连接可以交互；非交互命令要求提前配置认证。
 
+## 兼容性排查
+
+`RUNTIME_HOST_REMOTE_INCOMPATIBLE` 表示 Client 与远程 Runtime Host 无法安全通信。先比较 Client 与 Host 的 compatibility epoch；当诊断中提供相关信息时，也应检查 Client 和 Host 的 protocol range、composition ID，以及 Host 的 composition revision。
+
+请使用彼此兼容的 Client 和 Host build。更新 Host 后，由 Host 的 operator 重启远程 Runtime Host service，然后重试连接。
+
+Remote Client 不会自动升级或重启 Host、降级 transport、修改 Profile、默认 Host 或 Session，也不会在此诊断中暴露 credential、endpoint、path 或 State Root。
+
 ## 安全边界
 
 - 不要把 credential 放在命令行或 Profile JSON 中。

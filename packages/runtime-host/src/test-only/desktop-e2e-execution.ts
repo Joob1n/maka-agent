@@ -3,10 +3,10 @@ import type {
   BackendCompactHistoryResult,
 } from '@maka/core/backend-types';
 import { buildHistoryCompactCheckpoint } from '@maka/runtime/history-compact-checkpoint';
-import { FakeBackend } from '@maka/runtime/fake-backend';
+import { FakeBackend } from '@maka/runtime/test-only/fake-backend';
 import { type BackendFactoryContext } from '@maka/runtime/session-manager';
-import type { ExecutionRuntimeHostCandidateDependencies } from './server/execution-candidate.js';
-import { createExecutionRuntimeHostComposition } from './server/execution-composition.js';
+import type { ExecutionRuntimeHostCandidateDependencies } from '../server/execution-candidate.js';
+import { createExecutionRuntimeHostComposition } from '../server/execution-composition.js';
 
 /** Fresh Desktop E2E workspaces never reconnect; keep election retry, skip production grace. */
 export const DESKTOP_E2E_IDLE_GRACE_MS = 500;
@@ -25,7 +25,21 @@ export class DesktopE2eBackend extends FakeBackend {
     const checkpoint = buildHistoryCompactCheckpoint({
       sessionId: this.sessionId,
       coveredRuntimeEvents: input.runtimeContext,
-      summary: 'Deterministic Desktop E2E context checkpoint.',
+      // Shaped like a real sectioned checkpoint so the builder's summary
+      // validation (#3029) admits this deterministic fixture.
+      summary: [
+        '## Goal',
+        'Deterministic Desktop E2E context checkpoint.',
+        '',
+        '## Progress',
+        '- deterministic compaction exercised',
+        '',
+        '## Next Steps',
+        '1. continue',
+        '',
+        '## Critical Context',
+        '- (none)',
+      ].join('\n'),
     });
     await recordCheckpoint(checkpoint, input.turnId);
     return {};

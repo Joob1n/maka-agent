@@ -180,6 +180,11 @@ export function isSessionToolProfile(value: unknown): value is SessionToolProfil
   return typeof value === 'string' && (SESSION_TOOL_PROFILES as readonly string[]).includes(value);
 }
 
+export interface SessionExternalOrigin {
+  readonly adapterId: string;
+  readonly sourceSessionId: string;
+}
+
 export interface SessionHeader {
   // Identity
   id: string;
@@ -216,6 +221,8 @@ export interface SessionHeader {
   subagentWorkspace?: SubagentWorkspaceBinding;
   /** Immutable Host publication identity for a cross-Session conversation copy. */
   conversationCopy?: SessionConversationCopy;
+  /** Immutable identity of the external Session imported into this Session. */
+  readonly externalOrigin?: SessionExternalOrigin;
   /** Stable root id for an edit-and-resend version family. */
   revisionRootSessionId?: string;
   /** Immediate previous version in the same conversation slot. */
@@ -312,9 +319,8 @@ export interface SessionSummary {
   llmConnectionSlug: string;
   /**
    * True once the session has user messages — its connection/model is
-   * sticky and the send path will never silently rebind it. Surfaced so
-   * the renderer can project send outcomes (#1038) without a main
-   * round-trip.
+   * sticky and compatibility projections never select a replacement target.
+   * Surfaced so onboarding can project existing-session health (#1038).
    */
   connectionLocked: boolean;
   /** Sticky session default model id for renderer/header display. */

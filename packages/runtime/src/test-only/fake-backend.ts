@@ -16,8 +16,8 @@ import type { UserQuestionResponse } from '@maka/core/user-question';
 import {
   RuntimeInteractionInvariantError,
   type RuntimeUserQuestionClosureReason,
-} from './interaction-authority.js';
-import type { SessionStore } from './session-manager.js';
+} from '../interaction-authority.js';
+import type { SessionStore } from '../session-manager.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export const FAKE_ASK_USER_QUESTION_PROMPT = '__e2e_ask_user_question__';

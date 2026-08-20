@@ -6,8 +6,14 @@ import { afterEach, test } from "node:test";
 import {
   createClientRuntimeHostProfileCatalog,
   LOCAL_RUNTIME_HOST_PROFILE,
+  RuntimeHostRemoteCompatibilityError,
   type ResolvedRuntimeHostProfile,
 } from "@maka/runtime-host/client";
+import {
+  INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
+  RUNTIME_HOST_COMPATIBILITY_EPOCH,
+  RUNTIME_HOST_PROTOCOL_VERSION,
+} from "@maka/runtime-host/protocol";
 import {
   createDesktopRuntimeHostProfileService,
   resolveDesktopRuntimeHostStartup,
@@ -21,6 +27,13 @@ const PROFILE = {
   kind: "remote" as const,
   transport: { kind: "tls" as const, url: "wss://runtime.example.com" },
   rootId: ROOT_ID,
+};
+const READY_PROFILE = {
+  id: "backup",
+  name: "Backup",
+  kind: "remote" as const,
+  transport: { kind: "tls" as const, url: "wss://backup.example.com" },
+  rootId: "b".repeat(64),
 };
 const temporaryDirectories: string[] = [];
 
@@ -217,6 +230,62 @@ test("preserves an enabled remote profile when that Host is unavailable", async 
   assert.equal(result.snapshot.entries.find((entry) => entry.profile.id === "local")?.enabled, true);
 });
 
+test("projects a shared compatibility error through an unavailable enabled remote profile", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, "office-token");
+  await catalog.create(READY_PROFILE, "backup-token");
+  const compatibilityError = new RuntimeHostRemoteCompatibilityError("office", {
+    kind: "incompatible",
+    hostEpoch: "host-epoch",
+    protocolMin: RUNTIME_HOST_PROTOCOL_VERSION + 1,
+    protocolMax: RUNTIME_HOST_PROTOCOL_VERSION + 2,
+    compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH - 1,
+    compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
+    compositionRevision: "host-revision",
+    state: "ready",
+    replacement: "blocked_by_residency",
+  });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: {
+      preferences: {
+        schemaVersion: 2,
+        defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+        enabledRemoteProfileIds: [PROFILE.id, READY_PROFILE.id],
+      },
+      remotes: [
+        { profile: PROFILE, credential: "office-token" },
+        { profile: READY_PROFILE, credential: "backup-token" },
+      ],
+      unavailable: new Map(),
+    },
+    states: () => [
+      connectingLocal(),
+      unavailable({ profile: PROFILE, credential: "office-token" }, compatibilityError),
+      ready({ profile: READY_PROFILE, credential: "backup-token" }),
+    ],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    catalog,
+  });
+
+  const snapshot = await service.getSnapshot();
+  const office = snapshot.entries.find((entry) => entry.profile.id === PROFILE.id);
+  const backup = snapshot.entries.find((entry) => entry.profile.id === READY_PROFILE.id);
+  const local = snapshot.entries.find((entry) => entry.profile.id === LOCAL_RUNTIME_HOST_PROFILE.id);
+
+  assert.equal(office?.enabled, true);
+  assert.equal(office?.readiness, "unavailable");
+  assert.equal(office?.message, compatibilityError.message);
+  assert.equal(local?.enabled, true);
+  assert.equal(local?.readiness, "connecting");
+  assert.equal(backup?.enabled, true);
+  assert.equal(backup?.readiness, "ready");
+  assert.equal(backup?.message, undefined);
+});
+
 test("keeps enablement, default selection, and removal as separate states", async () => {
   const root = await clientRoot();
   await createClientRuntimeHostProfileCatalog(root).create(PROFILE, "token");
@@ -262,5 +331,28 @@ function connecting(target: ResolvedRuntimeHostProfile): RuntimeHostDesktopTarge
     epoch: `epoch-${target.profile.id}`,
     target,
     readiness: "connecting",
+  };
+}
+
+function ready(target: ResolvedRuntimeHostProfile): RuntimeHostDesktopTargetState {
+  return {
+    epoch: `epoch-${target.profile.id}`,
+    target,
+    readiness: "ready",
+    candidate: {
+      client: { hostId: target.profile.kind === "remote" ? target.profile.rootId : ROOT_ID },
+    } as never,
+  };
+}
+
+function unavailable(
+  target: ResolvedRuntimeHostProfile,
+  error: Error,
+): RuntimeHostDesktopTargetState {
+  return {
+    epoch: `epoch-${target.profile.id}`,
+    target,
+    readiness: "unavailable",
+    error,
   };
 }

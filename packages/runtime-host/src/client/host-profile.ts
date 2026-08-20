@@ -17,6 +17,7 @@ import {
   type RuntimeHostConnection,
 } from './connection.js';
 import { RuntimeHostPermanentReconnectError } from './reconnect-lifecycle.js';
+import { RuntimeHostRemoteCompatibilityError } from './remote-compatibility-error.js';
 import { openRuntimeHostSshTunnel, type RuntimeHostSshInteraction } from './ssh-tunnel.js';
 import { waitForRuntimeHostReady } from './wait-for-ready.js';
 
@@ -208,9 +209,7 @@ export async function connectRemoteRuntimeHostProfile(
     throw error;
   }
   if (connected.kind === 'incompatible') {
-    throw new RuntimeHostPermanentReconnectError(
-      `Runtime Host profile ${input.profile.id} is incompatible with this Maka Client`,
-    );
+    throw new RuntimeHostRemoteCompatibilityError(input.profile.id, connected.handshake);
   }
   if (connected.kind !== 'connected') {
     if (connected.kind === 'draining') {

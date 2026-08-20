@@ -900,7 +900,12 @@ function SettingsPageBody(props: {
     case 'archived-tasks':
       return <TasksSettingsPage {...props.archivedTasks} />;
     case 'import-tasks':
-      return <ImportTasksSettingsPage onImported={props.onTaskImported} />;
+      return (
+        <ImportTasksSettingsPage
+          onImported={props.onTaskImported}
+          onOpenImported={props.onOpenSession}
+        />
+      );
     case 'data':
       return (
         <DataSettingsPage

@@ -36,7 +36,7 @@ import {
   FAKE_ASK_USER_QUESTION_PROMPT,
   FAKE_WAIT_FOR_STEERING_PROMPT,
   FakeBackend,
-} from '@maka/runtime/fake-backend';
+} from '@maka/runtime/test-only/fake-backend';
 import { type MakaTool, type MakaToolContext } from '@maka/runtime/tool-runtime';
 import {
   openInteractiveExecutionStoresForRead,
@@ -125,7 +125,7 @@ export class ExecutionFixture {
       stores = await openInteractiveExecutionStoresForWrite(owner.lease);
       const session = await stores.sessionStore.create({
         cwd: this.root,
-        backend: 'fake',
+        backend: 'ai-sdk',
         llmConnectionSlug: 'fake',
         model: 'fake-model',
         permissionMode: 'ask',
@@ -271,7 +271,7 @@ export class ExecutionFixture {
       stores = await openInteractiveExecutionStoresForWrite(owner.lease);
       const backends = new BackendRegistry();
       backends.register(
-        'fake',
+        'ai-sdk',
         (ctx) =>
           new FakeBackend({
             sessionId: ctx.sessionId,
@@ -475,7 +475,7 @@ export class ExecutionFixture {
       const child = await stores.sessionStore.createSubagent({
         cwd: this.root,
         name: `${agentName} ${kind}`,
-        backend: 'fake',
+        backend: 'ai-sdk',
         llmConnectionSlug: 'fake',
         model: 'fake-model',
         permissionMode: 'explore',
@@ -1025,7 +1025,7 @@ export async function withExecutionRoot(
     stores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',

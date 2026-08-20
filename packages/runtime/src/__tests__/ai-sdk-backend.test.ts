@@ -533,7 +533,7 @@ describe('AiSdkBackend Memory Extraction triggers', () => {
           maxSummaryEstimatedTokens: 500,
         },
       },
-      summarizeHistoryCompact: async () => 'AUTOMATIC_MEMORY_SUMMARY',
+      summarizeHistoryCompact: async () => structuredSummary('AUTOMATIC_MEMORY_SUMMARY'),
       recordHistoryCompactCheckpoint: (checkpoint) => {
         recorded.push(checkpoint);
       },
@@ -620,7 +620,7 @@ describe('AiSdkBackend Memory Extraction triggers', () => {
         charsPerToken: 1,
         historyCompact: { enabled: true, mode: 'read_write' },
       },
-      summarizeHistoryCompact: async () => 'must not summarize',
+      summarizeHistoryCompact: async () => structuredSummary('must not summarize'),
       recordHistoryCompactCheckpoint: (checkpoint) => {
         recorded.push(checkpoint);
       },
@@ -687,7 +687,7 @@ describe('AiSdkBackend Memory Extraction triggers', () => {
             maxSummaryEstimatedTokens: 500,
           },
         },
-        summarizeHistoryCompact: async () => 'DENIED_MEMORY_SUMMARY',
+        summarizeHistoryCompact: async () => structuredSummary('DENIED_MEMORY_SUMMARY'),
         recordHistoryCompactCheckpoint: (checkpoint) => {
           recorded.push(checkpoint);
         },
@@ -764,7 +764,7 @@ describe('AiSdkBackend Memory Extraction triggers', () => {
           maxSummaryEstimatedTokens: 500,
         },
       },
-      summarizeHistoryCompact: async () => 'UNAVAILABLE_MEMORY_SUMMARY',
+      summarizeHistoryCompact: async () => structuredSummary('UNAVAILABLE_MEMORY_SUMMARY'),
       recordHistoryCompactCheckpoint: (checkpoint) => {
         recorded.push(checkpoint);
       },
@@ -5255,7 +5255,7 @@ describe('AiSdkBackend model history', () => {
         minRecentTurns: 1,
         charsPerToken: 1,
       },
-      summarizeHistoryCompact: async () => 'MANUAL_V2_HISTORY_COMPACT_SENTINEL',
+      summarizeHistoryCompact: async () => structuredSummary('MANUAL_V2_HISTORY_COMPACT_SENTINEL'),
       recordHistoryCompactCheckpoint: (checkpoint) => {
         recorded.push(checkpoint);
       },
@@ -5299,7 +5299,7 @@ describe('AiSdkBackend model history', () => {
     assert.equal(recorded.length, 1);
     assert.equal(
       recorded[0]?.version === 2 ? recorded[0].summary : undefined,
-      'MANUAL_V2_HISTORY_COMPACT_SENTINEL',
+      structuredSummary('MANUAL_V2_HISTORY_COMPACT_SENTINEL'),
     );
     assert.deepEqual(recorded[0]?.coverage.eventCount, 2);
     assert.equal(recorded[0]?.memoryExtractionBoundary, undefined);
@@ -5329,6 +5329,7 @@ describe('AiSdkBackend model history', () => {
       sessionId: 'session-1',
       coveredRuntimeEvents: oldEvents.slice(0, 1),
       summary: 'MANUAL_V2_PREVIOUS_SUMMARY',
+      summaryFormat: 'legacy_freeform',
       charsPerToken: 1,
     });
     const summaryInputs: Array<{ previous?: string; newlyFoldedIds: string[] }> = [];
@@ -5357,7 +5358,7 @@ describe('AiSdkBackend model history', () => {
             input.previousCheckpoint?.version === 2 ? input.previousCheckpoint.summary : undefined,
           newlyFoldedIds: (input.newlyFoldedRuntimeEvents ?? []).map((event) => event.id),
         });
-        return 'MANUAL_V2_ROLLED_SUMMARY';
+        return structuredSummary('MANUAL_V2_ROLLED_SUMMARY');
       },
       recordHistoryCompactCheckpoint: (checkpoint) => {
         recorded.push(checkpoint);
@@ -5410,6 +5411,7 @@ describe('AiSdkBackend model history', () => {
       sessionId: 'session-1',
       coveredRuntimeEvents: oldEvents,
       summary: 'MANUAL_V2_REUSED_SUMMARY',
+      summaryFormat: 'legacy_freeform',
       charsPerToken: 1,
     });
     let summarizeCalls = 0;
@@ -5434,7 +5436,7 @@ describe('AiSdkBackend model history', () => {
       loadHistoryCompactCheckpoint: () => previous,
       summarizeHistoryCompact: async () => {
         summarizeCalls += 1;
-        return 'must not resummarize an already covered fold';
+        return structuredSummary('must not resummarize an already covered fold');
       },
       recordHistoryCompactCheckpoint: () => {
         recordCalls += 1;
@@ -5485,6 +5487,7 @@ describe('AiSdkBackend model history', () => {
       sessionId: 'session-1',
       coveredRuntimeEvents: oldEvents,
       summary: 'OVERSIZED_PREVIOUS_SUMMARY '.repeat(100),
+      summaryFormat: 'legacy_freeform',
       charsPerToken: 1,
     });
 
@@ -5518,7 +5521,7 @@ describe('AiSdkBackend model history', () => {
         loadHistoryCompactCheckpoint: () => previous,
         summarizeHistoryCompact: async () => {
           summarizeCalls += 1;
-          return 'REFITTED_SUMMARY';
+          return structuredSummary('REFITTED_SUMMARY');
         },
         recordHistoryCompactCheckpoint: (checkpoint) => {
           recorded.push(checkpoint);
@@ -5566,7 +5569,7 @@ describe('AiSdkBackend model history', () => {
         charsPerToken: 1,
         historyCompact: { enabled: true, maxBlockEstimatedTokens: 100, maxEstimatedTokens: 10_000 },
       },
-      summarizeHistoryCompact: async () => 'TINY_SUMMARY',
+      summarizeHistoryCompact: async () => structuredSummary('TINY_SUMMARY'),
       recordHistoryCompactCheckpoint: () => {
         recordCalls += 1;
       },
@@ -5624,7 +5627,7 @@ describe('AiSdkBackend model history', () => {
         charsPerToken: 1,
         historyCompact: { enabled: true },
       },
-      summarizeHistoryCompact: async () => 'LARGER_SUMMARY '.repeat(100),
+      summarizeHistoryCompact: async () => structuredSummary('LARGER_SUMMARY '.repeat(100)),
       recordHistoryCompactCheckpoint: () => {
         recordCalls += 1;
       },
@@ -5716,6 +5719,65 @@ describe('AiSdkBackend model history', () => {
     assert.equal(result.contextBudget?.compactionDecisions?.[0]?.failOpenReason, 'output_length');
     assert.deepEqual(result.contextBudget?.historyCompactWriteSkippedReasonCounts, {
       output_length: 1,
+    });
+  });
+
+  test('the checkpoint write gate rejects a malformed summary from any producer', async () => {
+    // #3029: the summarizer validates its own completions, but the WRITE gate
+    // must enforce the invariant even for a producer that skipped that path —
+    // a malformed summary never replaces folded history.
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => completionModel(),
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+      contextBudget: {
+        name: 'manual-v2-write-gate-test',
+        maxHistoryEstimatedTokens: 10_000,
+        charsPerToken: 1,
+        historyCompact: { enabled: true },
+      },
+      // Returns (not throws) a section-less fragment, bypassing the
+      // summarizer's own generate-time validation.
+      summarizeHistoryCompact: async () => '这次会话主要讨论了以下内容，然后：',
+      recordHistoryCompactCheckpoint: () => {
+        throw new Error('must not persist');
+      },
+    });
+
+    const result = await backend.compactHistory({
+      turnId: 'turn-compact',
+      runId: 'run-1',
+      runtimeContext: [
+        runtimeTextEvent({
+          id: 'write-gate-old',
+          turnId: 'old',
+          role: 'user',
+          author: 'user',
+          text: 'old '.repeat(100),
+        }),
+        runtimeTextEvent({
+          id: 'write-gate-recent',
+          turnId: 'recent',
+          role: 'user',
+          author: 'user',
+          text: 'recent',
+        }),
+      ],
+    });
+
+    assert.equal(
+      result.contextBudget?.compactionDecisions?.[0]?.failOpenReason,
+      'malformed_summary_missing_section',
+    );
+    assert.deepEqual(result.contextBudget?.historyCompactWriteSkippedReasonCounts, {
+      malformed_summary_missing_section: 1,
     });
   });
 
@@ -13828,6 +13890,13 @@ async function runArchiveGatedReplay(input: {
       event.type === 'token_usage',
   );
   return { prompt, readRuntimeEventIds, usage };
+}
+
+// The checkpoint write gate validates summary structure (#3029), so stub
+// summaries must be shaped like real checkpoints while keeping their
+// sentinel text greppable.
+function structuredSummary(body: string): string {
+  return `## Goal\n${body}\n\n## Progress\n- done\n\n## Next Steps\n1. continue\n\n## Critical Context\n- (none)`;
 }
 
 function archiveGatedTurnEvents(suffix: 'a' | 'b', path: string, result: unknown): RuntimeEvent[] {

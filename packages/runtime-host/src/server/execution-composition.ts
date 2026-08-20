@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import {
+  describeChatConfigurationReason,
+  NO_REAL_CONNECTION_CODE,
+} from '@maka/core/connection-error-copy';
 import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
 import { generalizedErrorMessage } from '@maka/core/redaction';
 import { emptyPlanSessionState } from '@maka/core/plan';
@@ -24,7 +28,6 @@ import {
   createFilesystemWorkerLaunchSpecProvider,
   FilesystemWorkerClient,
 } from '@maka/runtime/filesystem-worker';
-import { FakeBackend } from '@maka/runtime/fake-backend';
 import { isOAuthEnrollmentProviderEnabled } from '@maka/runtime/oauth-provider-contracts';
 import {
   loadHistoryCompactCheckpointsFromRunLedger,
@@ -38,6 +41,11 @@ import {
 } from '@maka/runtime/agent-swarm-status-tool';
 import { SessionActivityRegistry } from '@maka/runtime/goal-turn-lifecycle';
 import { ShellRunProcessManager } from '@maka/runtime/shell-run-manager';
+import {
+  resolveShellPlan,
+  resolveTurnShellPlan,
+  validateShellPreference,
+} from '@maka/runtime/shell-detect';
 import { type MakaTool } from '@maka/runtime/tool-runtime';
 import { type RuntimeHostedRootAuthority } from '@maka/runtime/message-authority';
 import {
@@ -90,9 +98,7 @@ import { HostAgentGraphExecutionCoordinator } from './agent-graph-execution-coor
 import { HostScheduledTaskCoordinator } from './scheduled-task-coordinator.js';
 import { recoverClientCapabilityOutcomes } from './client-capability-recovery.js';
 import { HostConnectionEffectCoordinator } from './connection-effect-coordinator.js';
-import { HostConfigurationChangeService } from './configuration-change-service.js';
-import { HostSessionCatalogChangeService } from './session-catalog-change-service.js';
-import { HostScheduledTaskChangeService } from './scheduled-task-change-service.js';
+import { HostChangeFeed } from './host-change-feed.js';
 import { HostConfigurationCoordinator } from './configuration-coordinator.js';
 import { HostContextCoordinator } from './context-coordinator.js';
 import { HostClientCapabilityCoordinator } from './client-capability-coordinator.js';
@@ -138,7 +144,6 @@ import { HostNetworkProxyCoordinator } from './network-proxy-coordinator.js';
 import { HostOAuthExecutionAuthority } from './oauth-execution-authority.js';
 import { HostOAuthCoordinator, type HostOAuthCoordinatorInput } from './oauth-coordinator.js';
 import { HostPlanCoordinator } from './plan-coordinator.js';
-import { HostProjectCatalogChangeService } from './project-catalog-change-service.js';
 import {
   HostProjectDirectoryAuthority,
   type PublishedProjectDirectoryRoot,
@@ -286,12 +291,28 @@ export async function createExecutionRuntimeHostComposition(
     });
     await stores.messageReceiptStore.beginHostEpoch(context.hostEpoch);
     const backends = new BackendRegistry();
-    backends.register('fake', (backendContext) => new FakeBackend(backendContext));
+    // `fake` is a retired backend kind: this build never writes it, but a
+    // session or Automation persisted by an older one still can, and activation
+    // dispatches straight off that durable value. Registering an explicit
+    // refusal — rather than the test backend, or a read-path rewrite of the
+    // durable header — is what turns "no factory for kind=fake" into the
+    // product's existing answer for these rows: this task came from the retired
+    // local simulation, configure a real model and start a new one.
+    backends.register('fake', () => {
+      throw new Error(
+        `${NO_REAL_CONNECTION_CODE}:fake_backend: ${describeChatConfigurationReason('fake_backend')}`,
+      );
+    });
     const runtimePolicyActivation = new RuntimePolicyActivationGate();
     const runtimePolicy = new HostRuntimePolicyCoordinator(
       runtimePolicyStores,
       runtimePolicyActivation,
       applyRuntimePolicyMutationEffects,
+      async (input) => {
+        if (input.operation.kind === 'set_shell') {
+          await validateShellPreference(input.operation.value);
+        }
+      },
     );
     const sessionAdmission = new SessionAdmissionGate();
     const memoryExtractionLane = new MemoryExtractionSessionLane();
@@ -365,6 +386,8 @@ export async function createExecutionRuntimeHostComposition(
       sessionAdmission,
       acquireResidency: () => context.acquireResidency('runtime-resource'),
       requestDrain: context.requestDrain,
+      resolveShell: async () =>
+        resolveShellPlan((await runtimePolicyStores.runtimePolicy.getSnapshot()).policy.shell),
       onProjectionChanged: (update) =>
         requireContinuity(continuity).enqueueRuntimeResourceChanged(update),
     });
@@ -414,15 +437,12 @@ export async function createExecutionRuntimeHostComposition(
           initiatingConnectionId: string,
         ) => Promise<string[]>)
       | undefined;
-    const configurationChanges = new HostConfigurationChangeService();
-    const sessionCatalogChanges = new HostSessionCatalogChangeService();
-    const scheduledTaskChanges = new HostScheduledTaskChangeService();
-    const projectCatalogChanges = new HostProjectCatalogChangeService();
+    const hostChanges = new HostChangeFeed();
     const projectMembership = new HostProjectMembershipGate();
     const workspaceResolver = new HostWorkspaceResolver(
       openedProjectCatalog,
       projectMembership,
-      () => projectCatalogChanges.publish(),
+      () => hostChanges.publishProjectCatalog(),
     );
     const skills = new HostSkillCatalogCoordinator(
       new SkillCatalogRepository({
@@ -462,8 +482,8 @@ export async function createExecutionRuntimeHostComposition(
     );
     const projects = new HostProjectCatalogCoordinator(
       openedProjectCatalog,
-      projectCatalogChanges,
-      sessionCatalogChanges,
+      { publish: () => hostChanges.publishProjectCatalog() },
+      { publish: (sessionId: string) => hostChanges.publishSessionCatalog(sessionId) },
       projectMembership,
       context.requestDrain,
       new HostProjectDirectoryAuthority(options.projectDirectoryRoots),
@@ -526,7 +546,7 @@ export async function createExecutionRuntimeHostComposition(
       sessionAdmission,
       context.requestDrain,
       createSessionTranscriptReader({ stores, canonicalPermissionOutcomes }),
-      (sessionId) => sessionCatalogChanges.publish(sessionId),
+      (sessionId) => hostChanges.publishSessionCatalog(sessionId),
     );
     const continuityCoordinator = continuity;
     unsubscribeTranscriptChanges = stores.sessionStore.subscribeTranscriptChanges((sessionId) =>
@@ -774,6 +794,7 @@ export async function createExecutionRuntimeHostComposition(
         const runProfile = hostedExecutionRunProfile(header.toolProfile);
         return createInteractiveRunComposer({
           runtimePolicy,
+          shell: resolveTurnShellPlan(runtimePolicy.policy.shell),
           skills,
           memory: requireMemory(memory),
           taskLedger,
@@ -835,6 +856,7 @@ export async function createExecutionRuntimeHostComposition(
           });
           return createInteractiveRunComposer({
             runtimePolicy,
+            shell: resolveTurnShellPlan(runtimePolicy.policy.shell),
             skills,
             memory: requireMemory(memory),
             taskLedger,
@@ -880,15 +902,24 @@ export async function createExecutionRuntimeHostComposition(
       requestDrain: context.requestDrain,
     });
     sessionEffects = sessionEffectCoordinator;
-    const resolveChildTools = async (sessionId: string): Promise<readonly MakaTool[]> => {
+    const resolveChildTools = async (sessionId: string) => {
       const header = await stores.sessionStore.readHeader(sessionId);
+      const shell = resolveTurnShellPlan(
+        (await runtimePolicyStores.runtimePolicy.getSnapshot()).policy.shell,
+      );
+      const childTools = createHostChildAgentToolComposition({
+        taskLedger,
+        builtinTools: { ...builtinTools, shell },
+        hostTools,
+        worktreePatchWriteBackAvailable: true,
+      }).childTools;
       const { surface } = await resolveInteractiveToolSurface({
         connectionSlug: header.llmConnectionSlug,
         modelId: header.model,
         hostTools: [],
-        childTools: childAgentTools.childTools,
+        childTools,
       });
-      return surface.childTools ?? [];
+      return { tools: surface.childTools ?? [], shell };
     };
     const subagentCatalog = createConfiguredSubagentCatalog({
       getPresets: async () =>
@@ -953,7 +984,6 @@ export async function createExecutionRuntimeHostComposition(
       canonicalPermissionOutcomes,
       shellRuns,
       planStore: openedPlanStore,
-      childTools: childAgentTools.childTools,
       resolveChildTools,
       worktreeChildExecutor,
       listArtifactsForTurn: (sessionId, turnId) =>
@@ -997,10 +1027,12 @@ export async function createExecutionRuntimeHostComposition(
     graphClient = new HostAgentGraphCoordinator({
       authority: graphCoordinator,
       continuity: continuityCoordinator,
-      stopExecution: (rootSessionId) =>
+      stopExecution: (rootSessionId, expectedGraphId) =>
         requireGraphCoordinator(graphCoordinator).stopExecution(rootSessionId, {
+          expectedGraphId,
           stopSupervisor: () =>
             requireRootCoordinator(rootCoordinator).stopAgentGraphSupervisor(rootSessionId, {
+              expectedGraphId,
               source: 'stop_button',
             }),
           withSupervisorWakesSuppressed: (operation) =>
@@ -1021,7 +1053,7 @@ export async function createExecutionRuntimeHostComposition(
       observeBackendInvalidation(manager.refreshIdleBackends());
     };
     const registerConfigurationMutation = (): void => {
-      configurationChanges.publish();
+      hostChanges.publishConfiguration();
       registerBackendInvalidation();
     };
     clientCapabilities = new HostClientCapabilityCoordinator({
@@ -1036,7 +1068,7 @@ export async function createExecutionRuntimeHostComposition(
       isProviderEnabled: isOAuthEnrollmentProviderEnabled,
       acquireResidency: () => context.acquireResidency('oauth'),
       invalidateBackends: () => {
-        configurationChanges.publish();
+        hostChanges.publishConfiguration();
         return manager.refreshIdleBackends();
       },
       onFatal: (error) => {
@@ -1235,7 +1267,13 @@ export async function createExecutionRuntimeHostComposition(
       runtimePolicy: runtimePolicyStores,
       nativeEffects: clientCapabilities,
       createSession: (input) => sessionCatalog.createForHost(input),
-      changes: scheduledTaskChanges,
+      changes: {
+        publish: (
+          revision: number,
+          reason: Parameters<HostChangeFeed['publishScheduledTask']>[1],
+          taskId: string,
+        ) => hostChanges.publishScheduledTask(revision, reason, taskId),
+      },
       acquireResidency: () => context.acquireResidency('scheduled-task'),
       requestDrain: context.requestDrain,
     });
@@ -1608,10 +1646,7 @@ export async function createExecutionRuntimeHostComposition(
       workspaceExecution: requireWorkspaceExecution(workspaceExecution),
       continuity: continuityCoordinator,
       clientCapabilities,
-      configurationChanges,
-      projectCatalogChanges,
-      sessionCatalogChanges,
-      scheduledTaskChanges,
+      hostChanges,
       releaseConnection: (connectionId: string) => {
         for (const module of domainModules) module.releaseConnection?.(connectionId);
       },

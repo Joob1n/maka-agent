@@ -98,6 +98,7 @@ export type {
 } from './message-receipt-store.js';
 export type {
   ProbeSessionRemovalResult,
+  ExternalSessionImportLookupResult,
   SessionCatalogPageCursor,
   SessionCatalogPageResult,
   SessionCatalogRecord,
@@ -321,8 +322,16 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
     sessionStore: {
       ready: () => run(() => sessionStore.ready()),
       create: (input, initialBoundary) => run(() => sessionStore.create(input, initialBoundary)),
-      createImportedSession: (input, messages) =>
-        run(() => sessionStore.createImportedSession(input, messages)),
+      createImportedSession: (input, messages, externalOrigin) =>
+        run(() => sessionStore.createImportedSession(input, messages, externalOrigin)),
+      lookupExternalSessionImports: (adapterId, sourceSessionIds, recentSessionIdLimit) =>
+        run(() =>
+          sessionStore.lookupExternalSessionImports(
+            adapterId,
+            sourceSessionIds,
+            recentSessionIdLimit,
+          ),
+        ),
       probeStableSessionCreate: (sessionId, requestFingerprint) =>
         run(() => sessionStore.probeStableSessionCreate(sessionId, requestFingerprint)),
       createStableSession: (request, initialBoundary) =>

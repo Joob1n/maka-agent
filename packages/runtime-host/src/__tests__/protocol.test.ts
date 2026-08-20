@@ -62,6 +62,14 @@ describe('Runtime Host bootstrap protocol', () => {
     );
   });
 
+  test('publishes a new compatibility epoch for external Session import state', () => {
+    // Epoch 25 added authoritative live run state. Requiring importState on
+    // external catalog items is another closed wire-schema change, so Clients
+    // and Hosts from epoch 25 must fail the handshake instead of decoding each
+    // other's catalog responses asymmetrically.
+    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 25);
+  });
+
   test('selects the highest mutually supported protocol and rejects a gap', () => {
     assert.equal(negotiateProtocol({ min: 0, max: 0 }, { min: 0, max: 0 }), 0);
     assert.equal(negotiateProtocol({ min: 1, max: 3 }, { min: 2, max: 4 }), 3);

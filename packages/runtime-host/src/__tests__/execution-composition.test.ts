@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { parseNoRealConnectionError } from '@maka/core/connection-error-copy';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,7 +10,7 @@ import type {
   AgentGraphIntentClaimRequest,
 } from '@maka/core/agent-graph-control';
 import type { ShellRunRecord } from '@maka/core/shell-run';
-import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '@maka/runtime/fake-backend';
+import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '@maka/runtime/test-only/fake-backend';
 import { LOCAL_READ_AGENT_DEFINITION } from '@maka/runtime/agent-catalog';
 import { SessionManager } from '@maka/runtime/session-manager';
 import { fingerprintAgentGraphRunnableIntent } from '@maka/runtime/stream-graph-admission';
@@ -80,7 +81,7 @@ test('production composition closes long-term memory after a later startup failu
     const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -120,14 +121,14 @@ test('production recovery preserves legacy Automation history and closes an orph
     const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const historical = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
     });
     const pending = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -348,7 +349,7 @@ test('production composition commits automatic titles through Host-owned Session
     try {
       const session = await manager.createSession({
         cwd: root,
-        backend: 'fake',
+        backend: 'ai-sdk',
         llmConnectionSlug: 'fake',
         model: 'fake-model',
         permissionMode: 'ask',
@@ -378,12 +379,51 @@ test('production composition commits automatic titles through Host-owned Session
   });
 });
 
+test('a legacy fake-backend session is refused with the product reason, not a registry error', async () => {
+  await withCompositionRoot(async ({ root, owner }) => {
+    const { composition, manager } = await createCapturedExecutionComposition(owner);
+    try {
+      // Written by an older build: this one never produces `fake`, but the
+      // durable header survives and activation dispatches straight off it.
+      const legacy = await manager.createSession({
+        cwd: root,
+        backend: 'fake',
+        llmConnectionSlug: 'fake',
+        model: 'fake-model',
+        permissionMode: 'ask',
+      });
+      const failure = await composition.handlers['turn.start'](
+        {
+          sessionId: legacy.id,
+          turnId: 'turn-legacy-fake',
+          content: { text: 'resume a retired local simulation' },
+        },
+        {
+          hostEpoch: 'execution-composition-test',
+          connectionId: 'legacy-fake-client',
+          surface: 'tui',
+          principal: 'local_os_user',
+          acquireResidency: () => ({ release() {} }),
+        },
+      ).then(
+        (result) => result,
+        (error: unknown) => error,
+      );
+      const message = failure instanceof Error ? failure.message : JSON.stringify(failure);
+      assert.doesNotMatch(message, /No backend factory registered/);
+      assert.equal(parseNoRealConnectionError(message).reason, 'fake_backend');
+    } finally {
+      await composition.close();
+    }
+  });
+});
+
 test('production composition orphans ownerless ShellRuns before serving Resource queries', async () => {
   await withCompositionRoot(async ({ root, owner }) => {
     const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -431,7 +471,7 @@ test('production Skill catalog resolves a Graph child durable tool surface', asy
     const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const parent = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -599,7 +639,7 @@ test('Skill capability previews omit unavailable Tavily search surfaces', async 
     const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: connection.slug,
       model: 'fake-model',
       permissionMode: 'bypass',
@@ -656,7 +696,7 @@ test('production composition validates graph stop before aborting a claimed chil
     const claims = createAgentGraphControlStore(root);
     const parent = await stores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -755,7 +795,10 @@ test('production composition validates graph stop before aborting a claimed chil
         acquireResidency: () => ({ release() {} }),
       };
       const invalidStop = await composition.handlers['agent.graph.stop'](
-        { rootSessionId: abortedClaim.targetSessionId },
+        {
+          rootSessionId: abortedClaim.targetSessionId,
+          expectedGraphId: abortedClaim.graphId,
+        },
         clientContext,
       );
       assert.equal(invalidStop.ok, false);
@@ -868,7 +911,14 @@ async function createCapturedExecutionComposition(owner: InteractiveRootOwner): 
     return originalRecover.call(this, stores);
   };
   try {
-    const composition = await createExecutionRuntimeHostComposition(compositionContext(owner));
+    // The production composition no longer registers a test backend of its
+    // own; the deterministic one arrives through the same `primaryBackendFactory`
+    // seam the Desktop E2E run uses.
+    const composition = await createExecutionRuntimeHostComposition(
+      compositionContext(owner),
+      {},
+      { primaryBackendFactory: (backendContext) => new FakeBackend(backendContext) },
+    );
     await composition.recover();
     if (!manager) throw new Error('Production execution composition did not construct Runtime');
     return { composition, manager };
@@ -889,7 +939,7 @@ async function createClaimedGraphChild(input: {
   const child = await input.stores.sessionStore.createSubagent({
     cwd: input.root,
     name: `Graph operator ${input.suffix}`,
-    backend: 'fake',
+    backend: 'ai-sdk',
     llmConnectionSlug: 'fake',
     model: 'fake-model',
     permissionMode: 'explore',

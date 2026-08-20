@@ -420,6 +420,7 @@ const updateMockState =
 const updateService = createAppUpdateService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
+  testFeedUrl: process.env.MAKA_UPDATE_TEST_FEED,
   mockLatestVersion: process.env.MAKA_UPDATE_MOCK_VERSION,
   mockState: updateMockState,
   onStatusChange: (status) =>
@@ -456,10 +457,16 @@ runtimeHostManager = await startRuntimeHostDesktopManager(
     rootPath: workspaceRoot,
     clientInstanceId: runtimeHostClientInstanceId,
     generation: runtimeHostGeneration,
+    // The Desktop E2E composition lives behind its own entry module, which
+    // release packaging drops: picking it here is what keeps FakeBackend and
+    // the E2E bootstrap out of the shipped Runtime Host.
     candidateEntrypoint: new URL(
-      import.meta.resolve("@maka/runtime-host/execution-candidate-main"),
+      import.meta.resolve(
+        isE2e
+          ? "@maka/runtime-host/test-only/execution-candidate-e2e-main"
+          : "@maka/runtime-host/execution-candidate-main",
+      ),
     ),
-    ...(isE2e ? { desktopE2e: true } : {}),
     ipcMain,
     workspaceRoot,
     attachmentApprovals,

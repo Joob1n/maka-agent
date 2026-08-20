@@ -76,6 +76,7 @@ test('repairs imported transcript turns into provider-neutral canonical history'
         permissionMode: 'ask',
       },
       messages,
+      { adapterId: 'test', sourceSessionId: 'source-session-1' },
     );
     assert.equal(session.transcriptLedgerVersion, 0);
     const repair = new RuntimeLedgerRepair({

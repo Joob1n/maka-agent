@@ -135,7 +135,6 @@ export interface DesktopRuntimeHostCandidateStartInput
   readonly connectTimeoutMs?: number;
   readonly handshakeTimeoutMs?: number;
   readonly candidateEntrypoint: string | URL;
-  readonly desktopE2e?: boolean;
   readonly generation?: string;
   readonly takeoverHostEpoch?: string;
   readonly signal?: AbortSignal;
@@ -695,7 +694,6 @@ function connectInput(
     ...(input.handshakeTimeoutMs === undefined
       ? {}
       : { handshakeTimeoutMs: input.handshakeTimeoutMs }),
-    ...(input.desktopE2e ? { desktopE2e: true } : {}),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   };
 }

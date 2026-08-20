@@ -1,4 +1,4 @@
-import { FAKE_HOLD_OPEN_PROMPT } from '@maka/runtime/fake-backend';
+import { FAKE_HOLD_OPEN_PROMPT } from '@maka/runtime/test-only/fake-backend';
 import { test, expect, COMPOSER_INPUT } from './fixtures';
 import type { Page } from '@playwright/test';
 

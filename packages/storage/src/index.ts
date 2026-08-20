@@ -1,6 +1,8 @@
 export {
   SessionNotFoundError,
   SessionReadMarkerMessageNotFoundError,
+  EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_RECENT_SESSION_IDS,
+  EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_SOURCE_IDS,
   assertSafeSessionId,
   createSessionStore,
   createUserMessage,
@@ -12,6 +14,7 @@ export {
 export type {
   CreateStableSessionRequest,
   CreateStableSessionResult,
+  ExternalSessionImportLookupResult,
   ProbeStableSessionCreateResult,
   SessionAuthorityStore,
   SessionCatalogPageCursor,
