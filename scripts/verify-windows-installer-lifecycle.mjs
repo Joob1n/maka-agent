@@ -37,7 +37,18 @@ $matches = @(
 )
 $matches | ConvertTo-Json -Compress
 `;
-  const { stdout } = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+  // Bounded because this probe runs inside deadline-bounded poll loops, and a
+  // loop only checks its deadline between probes: an unbounded one makes the
+  // deadline a lie. A `Get-CimInstance Win32_Process` query hung for the rest
+  // of the job during an auto-update relaunch, so the 120s relaunch deadline
+  // never fired and the runner cancelled the run an hour later.
+  const { stdout } = await run(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    {
+      timeoutMs: 30_000,
+    },
+  );
   if (!stdout.trim()) return [];
   const parsed = JSON.parse(stdout);
   return Array.isArray(parsed) ? parsed : [parsed];
