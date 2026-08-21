@@ -192,3 +192,145 @@ test('repairs imported transcript turns into provider-neutral canonical history'
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * The Claude Code adapter records a turn the transcript stops inside as
+ * `aborted` with `abortSource: 'external_session_snapshot'`, rather than
+ * emitting no terminal state at all.
+ *
+ * The difference is only visible here. An adapter-level assertion can show
+ * which `turn_state` was emitted, but not what the Ledger does with it — and
+ * what it does is the whole reason the choice matters: an uncorroborated
+ * terminal is refused and the repair path writes `failed`, so a transcript
+ * that was merely cut short would import as internal corruption.
+ */
+test('an imported snapshot cutoff survives materialization as aborted', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-snapshot-cutoff-'));
+  const sessions = createSessionStore(root);
+  const runs = createSqliteAgentRunStore(root);
+  const runtimeEvents = createSqliteRuntimeStore(join(root, 'runtime.sqlite'));
+  let sequence = 0;
+  const newId = () => `cutoff-${++sequence}`;
+
+  try {
+    const ts = Date.now() + 86_400_000;
+    const cutoffMessages: StoredMessage[] = [
+      { type: 'user', id: 'c-user', turnId: 'turn-cut', ts, text: 'read the file' },
+      {
+        type: 'assistant',
+        id: 'c-assistant',
+        turnId: 'turn-cut',
+        ts,
+        text: 'Reading it now.',
+        contentOrder: ['text'],
+        modelId: 'claude-opus-5',
+      },
+      {
+        type: 'tool_call',
+        id: 'c-tool',
+        turnId: 'turn-cut',
+        ts,
+        toolName: 'Read',
+        args: { path: '/repo/a.ts' },
+      },
+      // No tool_result: the transcript ends between the call and its answer.
+      {
+        type: 'turn_state',
+        id: 'c-state',
+        turnId: 'turn-cut',
+        ts,
+        status: 'aborted',
+        abortedAt: ts,
+        abortSource: 'external_session_snapshot',
+        partialOutputRetained: true,
+      },
+    ];
+    const session = await sessions.createImportedSession(
+      {
+        cwd: '/repo',
+        llmConnectionSlug: 'anthropic',
+        model: 'claude-opus-5',
+        permissionMode: 'ask',
+      },
+      cutoffMessages,
+      { adapterId: 'claude-code', sourceSessionId: 'cut-1' },
+    );
+    const repair = new RuntimeLedgerRepair({
+      runStore: runs,
+      runtimeEventStore: runtimeEvents,
+      readMessages: (sessionId) => sessions.readMessages(sessionId),
+      appendMessage: (sessionId, message) => sessions.appendMessage(sessionId, message),
+      appendTurnState: async () => undefined,
+      newId,
+      now: () => 100,
+    });
+
+    await repair.materializeTranscriptLedger(session);
+
+    const [run] = await runs.listSessionRuns(session.id);
+    assert.ok(run);
+    // `cancelled`, not `failed`: the Ledger accepted the recorded abort. Before
+    // the adapter emitted one, this same transcript materialized as
+    // `failed / missing_terminal_event`.
+    assert.equal(run.status, 'cancelled');
+    assert.notEqual(run.failureClass, 'missing_terminal_event');
+  } finally {
+    await runtimeEvents.close?.();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an imported turn with no terminal state is repaired to failed', async () => {
+  // The behaviour the adapter now avoids, pinned so the reason for emitting a
+  // cutoff cannot quietly stop being true.
+  const root = await mkdtemp(join(tmpdir(), 'maka-missing-terminal-'));
+  const sessions = createSessionStore(root);
+  const runs = createSqliteAgentRunStore(root);
+  const runtimeEvents = createSqliteRuntimeStore(join(root, 'runtime.sqlite'));
+  let sequence = 0;
+  const newId = () => `missing-${++sequence}`;
+
+  try {
+    const ts = Date.now() + 86_400_000;
+    const session = await sessions.createImportedSession(
+      {
+        cwd: '/repo',
+        llmConnectionSlug: 'anthropic',
+        model: 'claude-opus-5',
+        permissionMode: 'ask',
+      },
+      [
+        { type: 'user', id: 'm-user', turnId: 'turn-missing', ts, text: 'read the file' },
+        {
+          type: 'assistant',
+          id: 'm-assistant',
+          turnId: 'turn-missing',
+          ts,
+          text: 'Reading it now.',
+          contentOrder: ['text'],
+          modelId: 'claude-opus-5',
+        },
+      ],
+      { adapterId: 'claude-code', sourceSessionId: 'missing-1' },
+    );
+    const repair = new RuntimeLedgerRepair({
+      runStore: runs,
+      runtimeEventStore: runtimeEvents,
+      readMessages: (sessionId) => sessions.readMessages(sessionId),
+      appendMessage: (sessionId, message) => sessions.appendMessage(sessionId, message),
+      appendTurnState: async () => undefined,
+      newId,
+      now: () => 100,
+    });
+
+    await repair.materializeTranscriptLedger(session);
+
+    const [run] = await runs.listSessionRuns(session.id);
+    assert.ok(run);
+    assert.equal(run.status, 'failed');
+    assert.equal(run.failureClass, 'missing_terminal_event');
+  } finally {
+    await runtimeEvents.close?.();
+    await rm(root, { recursive: true, force: true });
+  }
+});
