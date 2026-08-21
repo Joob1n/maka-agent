@@ -166,7 +166,10 @@
 }
 
 .maka-sidebar-footer-row-primary {
-  flex: 1;
+  /* `auto` rather than `1 1 0`: the settings row asks for the width its label
+     needs and gives back the rest, so the stamp shrinks into what is left
+     instead of the label being clipped first. */
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -180,7 +183,15 @@
 /* A label, not a control: it takes no pointer events and no focus, so tabbing
    through the rail still goes Settings -> update button as it did before. */
 .maka-sidebar-build-stamp {
-  flex: none;
+  /* The stamp yields first. At the 180px minimum width with an update button
+     present, something has to give, and it should be the label a user is
+     reading rather than the row they are aiming at — Settings keeps its text
+     and its hit target, the stamp ellipsises, and its `title` still carries
+     the full build. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-tertiary);
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
