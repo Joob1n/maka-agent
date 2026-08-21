@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, mkdir, readFile, readdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
-import { extractFile, getRawHeader } from '@electron/asar';
 import {
   ASSET_LICENSED_RENDERER_PACKAGES,
   collectProductionNames,
@@ -480,8 +480,20 @@ export function bareImportedPackages(source) {
 // they are resolvable without appearing in the packaged closure.
 const RUNTIME_PROVIDED_PACKAGES = new Set(['electron']);
 
+// Loaded on first use, not at module load. `verify-windows-harness.test.mjs`
+// imports this module in the CI step that deliberately runs before `npm ci`
+// ("on Node alone"), so a top-level import of a declared dependency would
+// fail there even though the dependency is correctly declared.
+const requirePeer = createRequire(import.meta.url);
+let asarApi;
+function asar() {
+  asarApi ??= requirePeer('@electron/asar');
+  return asarApi;
+}
+
+
 function asarNodeModules(asarPath) {
-  const { header } = getRawHeader(asarPath);
+  const { header } = asar().getRawHeader(asarPath);
   const names = new Set();
   // Recursive: npm nests a second copy under a package when versions
   // conflict (node_modules/foo/node_modules/bar), and a walk that stops at
@@ -579,9 +591,9 @@ export async function assertPackagedDependencyClosure(
   // only when something loads it — a lazily loaded main module would reach a
   // user rather than a build.
   const unresolvable = new Map();
-  for (const path of asarFilesUnder(getRawHeader(asarPath).header, 'dist')) {
+  for (const path of asarFilesUnder(asar().getRawHeader(asarPath).header, 'dist')) {
     if (!/\.(?:js|cjs|mjs)$/.test(path)) continue;
-    for (const name of bareImportedPackages(extractFile(asarPath, path).toString('utf8'))) {
+    for (const name of bareImportedPackages(asar().extractFile(asarPath, path).toString('utf8'))) {
       if (packaged.has(name) || allowed.has(name) || RUNTIME_PROVIDED_PACKAGES.has(name)) continue;
       if (!unresolvable.has(name)) unresolvable.set(name, path);
     }
@@ -599,7 +611,7 @@ export async function assertPackagedDependencyClosure(
   let recordBuffer;
   try {
     // asar archive paths always use forward slashes, on Windows too.
-    recordBuffer = extractFile(asarPath, 'dist-renderer/bundled-npm-packages.json');
+    recordBuffer = asar().extractFile(asarPath, 'dist-renderer/bundled-npm-packages.json');
   } catch {
     throw new Error('app.asar does not carry dist-renderer/bundled-npm-packages.json');
   }
