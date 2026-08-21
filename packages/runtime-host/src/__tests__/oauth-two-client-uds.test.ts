@@ -117,20 +117,12 @@ test('OAuth enrollment presents only on the initiating Client over the real endp
         openExternal: async () => {
           presentations.push('desktop');
         },
-        requestAuthorizationCode: async () => {
-          presentations.push('desktop');
-          throw new Error('Wrong Client presentation was selected');
-        },
       }),
     );
     await second.replaceClientCapabilities(
       createOAuthPresentationClientProvider({
         openExternal: async () => {
           presentations.push('tui');
-        },
-        requestAuthorizationCode: async () => {
-          presentations.push('tui');
-          throw new Error('Device authorization must present through openExternal');
         },
       }),
     );
@@ -219,9 +211,6 @@ async function assertProviderDisabledOverUds(
           acquireResidency: () => context.acquireResidency('oauth'),
           invalidateBackends: async () => undefined,
           onFatal: () => context.requestDrain(),
-          exchangeCode: async () => {
-            throw new Error('Disabled enrollment must not exchange credentials');
-          },
         });
         return {
           handlers: {
@@ -249,10 +238,6 @@ async function assertProviderDisabledOverUds(
       createOAuthPresentationClientProvider({
         openExternal: async () => {
           presentations += 1;
-        },
-        requestAuthorizationCode: async () => {
-          presentations += 1;
-          return 'unused-code';
         },
       }),
     );

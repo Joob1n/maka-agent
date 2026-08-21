@@ -14,9 +14,8 @@ import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 // connection detail sheet's 重新登录 affordance drive the same
 // getAuthUrl -> openAuthUrl -> refresh -> completeAuthorization sequence with
 // one authRequestId lifecycle, one synchronous pending-action guard, and
-// cancellation-on-unmount. Claude's paste-code flow is deliberately NOT
-// routed through this hook -- it needs a manual authorization-code step and
-// its own experimental gate, so it keeps its bespoke card.
+// cancellation-on-unmount. Every OAuth provider hands authorization to the
+// browser, so this is the only login shape the renderer drives.
 //
 // GitHub Copilot rides the same controller through the `direct` account
 // flow (#1042): importing an existing GitHub login is one bridge call, so

@@ -38,8 +38,8 @@ import { runtimeHostOAuthLoginBridge } from './runtime-host-settings-bridge.js';
 // Maps an OAuth model-connection provider type to the browser-assisted login
 // service that can re-run its authorization from inside the connection dialog. Only
 // the browser-assisted services (Codex and xAI) are one-button-drivable
-// here; Claude's paste-code flow and plain API-key providers return null so the
-// notice falls back to prose instead of rendering a dead button.
+// here; plain API-key providers return null so the notice falls back to
+// prose instead of rendering a dead button.
 export interface OAuthLoginService {
   bridge: OAuthLoginFlowBridge;
   display: { name: string; shortName: string };

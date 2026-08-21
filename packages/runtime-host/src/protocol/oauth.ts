@@ -10,7 +10,6 @@ import { defineOperation } from './operation-spec.js';
 
 export const OAUTH_PRESENTATION_SERVICE_ID = 'oauth_presentation';
 export const OAUTH_PRESENTATION_SERVICE_VERSION = '1';
-export const OAUTH_PRESENTATION_AUTHORIZATION_CODE_MAX_LENGTH = 16_384;
 export const OAUTH_PRESENTATION_URL_MAX_LENGTH = 8_192;
 export const OAUTH_PRESENTATION_STATE_HINT_MAX_LENGTH = 1_024;
 export const OAUTH_LOGIN_PROVIDERS = ['openai-codex', 'xai-oauth'] as const;
@@ -50,28 +49,18 @@ const ATTEMPT_ERRORS = [...COMMON_ERRORS, 'not_found'] as const;
 export type OAuthLoginProvider = (typeof OAUTH_LOGIN_PROVIDERS)[number];
 export type OAuthLoginPhase = (typeof OAUTH_LOGIN_PHASES)[number];
 export type OAuthLoginFailureCode = (typeof OAUTH_LOGIN_FAILURE_CODES)[number];
-export type OAuthPresentationMethod = 'open_external' | 'request_authorization_code';
+// One member today: every live enrolment is a device flow that opens a browser.
+// The method still travels on the wire and is still validated on arrival, so a
+// peer that offers anything else is refused rather than silently presented.
+export type OAuthPresentationMethod = 'open_external';
 
-export type OAuthPresentationRequest =
-  | {
-      readonly method: 'open_external';
-      readonly url: string;
-      readonly stateHint?: string;
-    }
-  | {
-      readonly method: 'request_authorization_code';
-      readonly url: string;
-      readonly stateHint: string;
-    };
+export type OAuthPresentationRequest = {
+  readonly method: 'open_external';
+  readonly url: string;
+  readonly stateHint?: string;
+};
 
-export type OAuthPresentationResult =
-  | { readonly kind: 'presented' }
-  | { readonly kind: 'authorization_code'; readonly authorizationCode: string };
-
-export type OAuthPresentationResultForMethod<Method extends OAuthPresentationMethod> =
-  Method extends 'open_external'
-    ? Extract<OAuthPresentationResult, { readonly kind: 'presented' }>
-    : Extract<OAuthPresentationResult, { readonly kind: 'authorization_code' }>;
+export type OAuthPresentationResult = { readonly kind: 'presented' };
 
 export interface OAuthLoginProjection {
   readonly attemptId: string;
@@ -178,59 +167,21 @@ export function decodeOAuthPresentationRequest(
           }),
     };
   }
-  if (method === 'request_authorization_code') {
-    const input = requireExactRecord(value, 'OAuth presentation input', ['url', 'stateHint']);
-    return {
-      method,
-      url: requireString(input.url, 'OAuth presentation URL', OAUTH_PRESENTATION_URL_MAX_LENGTH),
-      stateHint: requireString(
-        input.stateHint,
-        'OAuth presentation state hint',
-        OAUTH_PRESENTATION_STATE_HINT_MAX_LENGTH,
-      ),
-    };
-  }
   throw invalidProtocolFrame('Invalid OAuth presentation method');
 }
 
 export function decodeOAuthPresentationResult(
-  method: 'open_external',
-  value: unknown,
-): OAuthPresentationResultForMethod<'open_external'>;
-export function decodeOAuthPresentationResult(
-  method: 'request_authorization_code',
-  value: unknown,
-): OAuthPresentationResultForMethod<'request_authorization_code'>;
-export function decodeOAuthPresentationResult(
-  method: OAuthPresentationMethod,
-  value: unknown,
-): OAuthPresentationResult;
-export function decodeOAuthPresentationResult(
   method: OAuthPresentationMethod,
   value: unknown,
 ): OAuthPresentationResult {
-  if (method === 'open_external') {
-    const result = requireExactRecord(value, 'OAuth presentation result', ['kind']);
-    if (result.kind !== 'presented') {
-      throw invalidProtocolFrame('Invalid OAuth presentation result');
-    }
-    return { kind: result.kind };
+  if (method !== 'open_external') {
+    throw invalidProtocolFrame('Invalid OAuth presentation method');
   }
-  const result = requireExactRecord(value, 'OAuth presentation result', [
-    'kind',
-    'authorizationCode',
-  ]);
-  if (result.kind !== 'authorization_code') {
+  const result = requireExactRecord(value, 'OAuth presentation result', ['kind']);
+  if (result.kind !== 'presented') {
     throw invalidProtocolFrame('Invalid OAuth presentation result');
   }
-  return {
-    kind: result.kind,
-    authorizationCode: requireString(
-      result.authorizationCode,
-      'OAuth presentation authorization code',
-      OAUTH_PRESENTATION_AUTHORIZATION_CODE_MAX_LENGTH,
-    ),
-  };
+  return { kind: result.kind };
 }
 
 function oauthLoginProvider(value: unknown): OAuthLoginProvider {

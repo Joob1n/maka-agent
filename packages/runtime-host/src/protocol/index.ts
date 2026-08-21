@@ -72,7 +72,10 @@ export const RUNTIME_HOST_REGISTRATION_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_HOST_PROTOCOL_VERSION = 0 as const;
 // Increment when the same protocol version no longer guarantees safe Client-Host
 // interoperability. Mismatches are rejected before domain commands are admitted.
-export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 31 as const;
+export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 32 as const;
+// 32: `request_authorization_code` leaves the OAuth presentation wire. An older
+// Client still offers it and an older Host still asks for it, and neither side
+// can carry the authorization code the other expects.
 // 31: `claude-subscription` leaves `OAUTH_LOGIN_PROVIDERS` and the
 // `oauth.account.usage.fetch` operation is removed with the provider that
 // needed its client identity. An older peer still offers both.

@@ -22,9 +22,7 @@ export type SubscriptionActionResult =
   | { ok: false; reason: SubscriptionActionFailureReason; message: string };
 
 export type SubscriptionActionFailureReason =
-  | 'invalid_paste_code' // user pasted malformed code or wrong state
   | 'authorization_pending' // no startAuthorization called yet
-  | 'authorization_expired' // verifier TTL passed before paste
   | 'authorization_denied' // provider account owner rejected device authorization
   | 'authorization_cancelled' // caller cancelled an in-flight authorization
   | 'token_exchange_failed' // /oauth/token returned non-200
@@ -49,22 +47,19 @@ export type SubscriptionActionFailureReason =
  * the URL up by the same request id. This way a malicious or
  * compromised renderer cannot ask main to open an arbitrary URL.
  *
- * `stateHint` is the first 8 chars of the OAuth state. The
- * renderer surfaces it so the user knows which paste-code modal
- * belongs to which authorization attempt.
+ * `stateHint` is the short code the provider's device page asks the
+ * user to confirm. The renderer surfaces it so the user knows which
+ * code belongs to which authorization attempt.
  *
  * No token-shaped fields. No URL field.
  */
 export interface AuthorizationUrlPayload {
-  /** First 8 chars of state, shown as a hint in the paste modal. */
+  /** Short code the user must recognise on the provider page (device flows). */
   stateHint: string;
   /** Authorization request ID, opaque to the renderer; used to scope
    *  the eventual openAuthUrl / completeAuthorization / cancel calls. */
   authRequestId: string;
 }
-
-/** 32 random bytes encode to the RFC 7636 minimum 43-character verifier. */
-export const PKCE_VERIFIER_LENGTH_BYTES = 32;
 
 /** Base64url-encode bytes per RFC 4648 §5. */
 export function base64urlEncode(bytes: Uint8Array): string {
@@ -82,60 +77,10 @@ export function base64urlEncode(bytes: Uint8Array): string {
   return standard.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** Injected digest keeps PKCE derivation platform-independent. */
+/** Injected digest keeps hashing platform-independent. */
 export interface Sha256Digest {
   digest(input: string): Uint8Array;
 }
-
-export function pkceCodeChallenge(verifier: string, sha256: Sha256Digest): string {
-  return base64urlEncode(sha256.digest(verifier));
-}
-
-/** Parse the strict base64url-safe `<code>#<state>` callback payload. */
-export interface PastedAuthorization {
-  code: string;
-  state: string;
-}
-
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
-
-export function parsePastedAuthorization(raw: unknown): PastedAuthorization | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const hashIdx = trimmed.indexOf('#');
-  if (hashIdx <= 0 || hashIdx === trimmed.length - 1) return null;
-  const code = trimmed.slice(0, hashIdx);
-  const state = trimmed.slice(hashIdx + 1);
-  if (!BASE64URL_RE.test(code)) return null;
-  if (!BASE64URL_RE.test(state)) return null;
-  return { code, state };
-}
-
-/** Constant-time comparison for equal-length OAuth state values. */
-export function constantTimeStringEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
-/**
- * Default TTL for a pending PKCE authorization (10 minutes). The
- * user has to:
- *   1. Start the login.
- *   2. Sign in with the provider.
- *   3. Copy the redirect code.
- *   4. Paste it back into Maka.
- * 10 minutes is generous but not so long that an abandoned attempt
- * stays valid forever.
- *
- * Tests pin this; if a future PR adjusts it, the change should be
- * explicit in PR description.
- */
-export const PENDING_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Token-refresh skew. We refresh when `expires_at - now <= 5min`

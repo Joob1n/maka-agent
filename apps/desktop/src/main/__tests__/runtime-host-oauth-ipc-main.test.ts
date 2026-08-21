@@ -10,7 +10,7 @@ import {
 } from '../runtime-host-oauth-ipc-main.js';
 import { RuntimeHostOAuthPresentation } from '../runtime-host-oauth-presentation.js';
 
-test('presents both Host OAuth methods without exposing the authorization URL', async () => {
+test('presents the Host OAuth handoff without exposing the authorization URL', async () => {
   const opened: string[] = [];
   const presentation = new RuntimeHostOAuthPresentation(async (url) => {
     opened.push(url);
@@ -26,22 +26,7 @@ test('presents both Host OAuth methods without exposing the authorization URL', 
     stateHint: 'DEVICE-CODE',
   });
 
-  const pasted = presentation.expect('code-attempt');
-  const code = presentation.requestAuthorizationCode(
-    'https://auth.example/authorize',
-    'STATE-HINT',
-    new AbortController().signal,
-  );
-  assert.deepEqual(await pasted.presented, {
-    method: 'request_authorization_code',
-    stateHint: 'STATE-HINT',
-  });
-  assert.equal(presentation.submitAuthorizationCode('code-attempt', 'code#state'), true);
-  assert.equal(await code, 'code#state');
-  assert.deepEqual(opened, [
-    'https://auth.example/device',
-    'https://auth.example/authorize',
-  ]);
+  assert.deepEqual(opened, ['https://auth.example/device']);
 });
 
 test('adapts every Host OAuth provider through one Desktop flow', async () => {
@@ -86,9 +71,8 @@ test('adapts every Host OAuth provider through one Desktop flow', async () => {
     },
     startOAuthLogin: async (nextAttemptId, connectionId) => {
       attemptId = nextAttemptId;
-      // Codex device login presents with `open_external`; the paste-code
-      // presentation this fixture used has no producer, so asserting it proved
-      // the desktop bridge against a flow no provider takes.
+      // Codex device login presents through `open_external`: the browser
+      // carries the authorization and the Host writes the credential back.
       void presentation
         .openExternal(
           'https://codex.example/authorize',

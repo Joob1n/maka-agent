@@ -7,7 +7,6 @@ import {
   decodeOAuthLoginProjection,
   decodeOAuthPresentationRequest,
   decodeOAuthPresentationResult,
-  OAUTH_PRESENTATION_AUTHORIZATION_CODE_MAX_LENGTH,
 } from '../protocol/index.js';
 
 test('OAuth login protocol binds attempt identity and closes terminal projections', () => {
@@ -83,7 +82,7 @@ test('OAuth account usage is no longer an operation on the wire', () => {
   );
 });
 
-test('OAuth presentation methods share one closed request and result contract', () => {
+test('OAuth presentation keeps one closed request and result contract', () => {
   assert.deepEqual(
     decodeOAuthPresentationRequest('open_external', {
       url: 'https://auth.example/authorize',
@@ -95,25 +94,24 @@ test('OAuth presentation methods share one closed request and result contract', 
       stateHint: 'ABCD-1234',
     },
   );
-  assert.deepEqual(
-    decodeOAuthPresentationResult('request_authorization_code', {
-      kind: 'authorization_code',
-      authorizationCode: 'code#state',
-    }),
-    { kind: 'authorization_code', authorizationCode: 'code#state' },
-  );
+  assert.deepEqual(decodeOAuthPresentationResult('open_external', { kind: 'presented' }), {
+    kind: 'presented',
+  });
+  // The paste-code presentation is gone from the wire, so a peer still
+  // offering it is refused rather than decoded into a method nothing serves.
   assert.throws(
     () =>
-      decodeOAuthPresentationRequest('request_authorization_code', {
+      decodeOAuthPresentationRequest('request_authorization_code' as 'open_external', {
         url: 'https://auth.example/authorize',
+        stateHint: 'ABCD-1234',
       }),
     (error: unknown) => error instanceof RuntimeHostProtocolError,
   );
   assert.throws(
     () =>
-      decodeOAuthPresentationResult('request_authorization_code', {
+      decodeOAuthPresentationResult('request_authorization_code' as 'open_external', {
         kind: 'authorization_code',
-        authorizationCode: 'x'.repeat(OAUTH_PRESENTATION_AUTHORIZATION_CODE_MAX_LENGTH + 1),
+        authorizationCode: 'code#state',
       }),
     (error: unknown) => error instanceof RuntimeHostProtocolError,
   );

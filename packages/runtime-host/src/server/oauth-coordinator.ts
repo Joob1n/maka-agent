@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { exchangeOAuthAuthorizationCode, OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
+import { OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
 import { createProxiedFetchTransport } from '@maka/runtime/network/scoped-fetch-transport';
 import {
   exchangeCodexDeviceAuthorizationCode,
@@ -28,7 +28,6 @@ import {
   type OAuthLoginProvider,
   type OAuthPresentationRequest,
   type OAuthPresentationResult,
-  type OAuthPresentationResultForMethod,
   type OperationOutcome,
 } from '../protocol/index.js';
 import type { RuntimeHostResidency } from './host-kernel.js';
@@ -42,9 +41,6 @@ import type { RuntimePolicyActivationGate } from './runtime-policy-activation-ga
 import { toRuntimePolicyProxy } from './runtime-policy-proxy.js';
 
 const MAX_TERMINAL_ATTEMPTS = 256;
-const DEFAULT_AUTHORIZATION_TIMEOUT_MS = 10 * 60_000;
-const MAX_AUTHORIZATION_TIMEOUT_MS = 60 * 60_000;
-const PRESENTATION_TIMEOUT_MARGIN_MS = 5_000;
 
 export class HostOAuthFatalError extends Error {
   constructor(
@@ -66,14 +62,12 @@ export interface HostOAuthCoordinatorInput {
   readonly invalidateBackends: () => Promise<void>;
   readonly onFatal: (error: HostOAuthFatalError) => void;
   readonly now?: () => number;
-  readonly exchangeCode?: typeof exchangeOAuthAuthorizationCode;
   readonly startXaiAuthorization?: typeof startXaiDeviceAuthorization;
   readonly pollXaiAuthorization?: typeof pollXaiDeviceAuthorization;
   readonly startCodexAuthorization?: typeof startCodexDeviceAuthorization;
   readonly pollCodexAuthorization?: typeof pollCodexDeviceAuthorization;
   readonly exchangeCodexCode?: typeof exchangeCodexDeviceAuthorizationCode;
   readonly createFetchTransport?: typeof createProxiedFetchTransport;
-  readonly authorizationTimeoutMs?: number;
 }
 
 type OAuthLoginAdmission = Extract<
@@ -121,14 +115,12 @@ export class HostOAuthCoordinator {
   readonly #invalidateBackends: () => Promise<void>;
   readonly #onFatal: (error: HostOAuthFatalError) => void;
   readonly #now: () => number;
-  readonly #exchangeCode: typeof exchangeOAuthAuthorizationCode;
   readonly #startXaiAuthorization: typeof startXaiDeviceAuthorization;
   readonly #pollXaiAuthorization: typeof pollXaiDeviceAuthorization;
   readonly #startCodexAuthorization: typeof startCodexDeviceAuthorization;
   readonly #pollCodexAuthorization: typeof pollCodexDeviceAuthorization;
   readonly #exchangeCodexCode: typeof exchangeCodexDeviceAuthorizationCode;
   readonly #createFetchTransport: typeof createProxiedFetchTransport;
-  readonly #authorizationTimeoutMs: number;
   readonly #attempts = new Map<string, LoginAttemptRecord>();
   #activeAttempt: ActiveLoginAttempt | undefined;
   /**
@@ -150,14 +142,12 @@ export class HostOAuthCoordinator {
     this.#invalidateBackends = input.invalidateBackends;
     this.#onFatal = input.onFatal;
     this.#now = input.now ?? Date.now;
-    this.#exchangeCode = input.exchangeCode ?? exchangeOAuthAuthorizationCode;
     this.#startXaiAuthorization = input.startXaiAuthorization ?? startXaiDeviceAuthorization;
     this.#pollXaiAuthorization = input.pollXaiAuthorization ?? pollXaiDeviceAuthorization;
     this.#startCodexAuthorization = input.startCodexAuthorization ?? startCodexDeviceAuthorization;
     this.#pollCodexAuthorization = input.pollCodexAuthorization ?? pollCodexDeviceAuthorization;
     this.#exchangeCodexCode = input.exchangeCodexCode ?? exchangeCodexDeviceAuthorizationCode;
     this.#createFetchTransport = input.createFetchTransport ?? createProxiedFetchTransport;
-    this.#authorizationTimeoutMs = authorizationTimeout(input.authorizationTimeoutMs);
   }
 
   beginDrain(): void {
@@ -449,14 +439,6 @@ export class HostOAuthCoordinator {
     });
   }
 
-  #present(
-    attempt: ActiveLoginAttempt,
-    request: Extract<OAuthPresentationRequest, { readonly method: 'open_external' }>,
-  ): Promise<OAuthPresentationResultForMethod<'open_external'>>;
-  #present(
-    attempt: ActiveLoginAttempt,
-    request: Extract<OAuthPresentationRequest, { readonly method: 'request_authorization_code' }>,
-  ): Promise<OAuthPresentationResultForMethod<'request_authorization_code'>>;
   async #present(
     attempt: ActiveLoginAttempt,
     request: OAuthPresentationRequest,
@@ -471,9 +453,6 @@ export class HostOAuthCoordinator {
         method,
         input,
         signal: attempt.abort.signal,
-        ...(method === 'request_authorization_code'
-          ? { timeoutMs: this.#authorizationTimeoutMs + PRESENTATION_TIMEOUT_MARGIN_MS }
-          : {}),
       });
     } catch (error) {
       if (error instanceof ClientCapabilityInvocationError) {
@@ -554,18 +533,6 @@ function loginFailureCode(error: unknown): OAuthLoginFailureCode {
 
 function randomOpaqueValue(): string {
   return randomBytes(32).toString('base64url');
-}
-
-function authorizationTimeout(value: number | undefined): number {
-  const timeoutMs = value ?? DEFAULT_AUTHORIZATION_TIMEOUT_MS;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs <= 0 ||
-    timeoutMs > MAX_AUTHORIZATION_TIMEOUT_MS
-  ) {
-    throw new Error('OAuth authorization timeout is invalid');
-  }
-  return timeoutMs;
 }
 
 function isCommitOutcomeUnknown(error: unknown): error is RuntimePolicyStoreError {

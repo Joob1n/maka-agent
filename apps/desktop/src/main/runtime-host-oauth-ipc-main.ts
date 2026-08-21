@@ -58,7 +58,6 @@ export interface RuntimeHostOAuthIpcDeps {
 
 interface ActiveOAuthAttempt {
   readonly provider: OAuthLoginProvider;
-  readonly presentationMethod: OAuthExternalPresentation['method'];
 }
 
 /** Adapts the existing Desktop OAuth UI to the Host's provider-neutral OAuth operations. */
@@ -88,7 +87,6 @@ export function registerRuntimeHostOAuthIpc(deps: RuntimeHostOAuthIpcDeps): void
         const presented = await waitForPresentation(deps.client, attemptId, expectation.presented);
         activeAttempts.set(attemptId, {
           provider,
-          presentationMethod: presented.method,
         });
         return { authRequestId: attemptId, stateHint: presented.stateHint };
       } catch (error) {
@@ -110,21 +108,12 @@ export function registerRuntimeHostOAuthIpc(deps: RuntimeHostOAuthIpcDeps): void
     });
     deps.ipcMain.handle(
       channel('complete-authorization'),
-      async (_event, attemptId: unknown, authorizationCode: unknown) => {
+      async (_event, attemptId: unknown) => {
         if (typeof attemptId !== 'string') {
           return actionFailure('OAuth authorization is not active', 'authorization_pending');
         }
-        const attempt = providerAttempt(activeAttempts, attemptId, provider);
-        if (!attempt) {
+        if (!providerAttempt(activeAttempts, attemptId, provider)) {
           return actionFailure('OAuth authorization is not active', 'authorization_pending');
-        }
-        if (attempt.presentationMethod === 'request_authorization_code') {
-          if (typeof authorizationCode !== 'string' || authorizationCode.length === 0) {
-            return actionFailure('OAuth authorization code is required', 'invalid_paste_code');
-          }
-          if (!deps.presentation.submitAuthorizationCode(attemptId, authorizationCode)) {
-            return actionFailure('OAuth authorization is not active', 'authorization_pending');
-          }
         }
         try {
           const terminal = await waitForTerminal(deps.client, attemptId);
@@ -295,7 +284,6 @@ function providerDisabled() {
 function actionFailure(
   message: string,
   reason:
-    | 'invalid_paste_code'
     | 'authorization_pending'
     | 'authorization_cancelled'
     | 'authorization_denied'
