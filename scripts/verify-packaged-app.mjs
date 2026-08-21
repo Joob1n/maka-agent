@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs';
 import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import {
   ASSET_LICENSED_RENDERER_PACKAGES,
   collectProductionNames,
@@ -440,6 +440,14 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
 const desktopRoot = resolve(import.meta.dirname, '..', 'apps', 'desktop');
 
 /** Every file path under `prefix` inside the archive, depth first. */
+// Archive paths are stored `/`-joined, but `@electron/asar` resolves a lookup
+// by splitting it on `path.sep`. On Windows that turns `dist/main/x.js` into a
+// single name and the file is reported missing, so the lookup — and only the
+// lookup — is localized before it crosses the API.
+export function asarLookupPath(archivePath, separator = sep) {
+  return separator === '/' ? archivePath : archivePath.split('/').join(separator);
+}
+
 function asarFilesUnder(header, prefix) {
   const root = prefix.split('/').reduce((node, part) => node?.files?.[part], header);
   const paths = [];
@@ -490,7 +498,6 @@ function asar() {
   asarApi ??= requirePeer('@electron/asar');
   return asarApi;
 }
-
 
 function asarNodeModules(asarPath) {
   const { header } = asar().getRawHeader(asarPath);
@@ -593,7 +600,9 @@ export async function assertPackagedDependencyClosure(
   const unresolvable = new Map();
   for (const path of asarFilesUnder(asar().getRawHeader(asarPath).header, 'dist')) {
     if (!/\.(?:js|cjs|mjs)$/.test(path)) continue;
-    for (const name of bareImportedPackages(asar().extractFile(asarPath, path).toString('utf8'))) {
+    for (const name of bareImportedPackages(
+      asar().extractFile(asarPath, asarLookupPath(path)).toString('utf8'),
+    )) {
       if (packaged.has(name) || allowed.has(name) || RUNTIME_PROVIDED_PACKAGES.has(name)) continue;
       if (!unresolvable.has(name)) unresolvable.set(name, path);
     }
@@ -610,8 +619,10 @@ export async function assertPackagedDependencyClosure(
   // if it never appears under node_modules in the archive.
   let recordBuffer;
   try {
-    // asar archive paths always use forward slashes, on Windows too.
-    recordBuffer = asar().extractFile(asarPath, 'dist-renderer/bundled-npm-packages.json');
+    recordBuffer = asar().extractFile(
+      asarPath,
+      asarLookupPath('dist-renderer/bundled-npm-packages.json'),
+    );
   } catch {
     throw new Error('app.asar does not carry dist-renderer/bundled-npm-packages.json');
   }

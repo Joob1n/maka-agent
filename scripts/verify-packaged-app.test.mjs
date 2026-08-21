@@ -4,7 +4,37 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { createPackage } from '@electron/asar';
-import { assertPackagedDependencyClosure } from './verify-packaged-app.mjs';
+import { asarLookupPath, assertPackagedDependencyClosure } from './verify-packaged-app.mjs';
+
+describe('asarLookupPath', () => {
+  // The archive stores `/`-joined paths, but `@electron/asar` resolves a lookup
+  // by splitting it on `path.sep`. Passing an archive path straight through
+  // therefore works on macOS and Linux and silently finds nothing on Windows,
+  // which is how this shipped green from a mac and failed the Windows lane.
+  test('leaves archive paths alone where the separator already matches', () => {
+    assert.equal(asarLookupPath('dist/main/app-ipc-main.js', '/'), 'dist/main/app-ipc-main.js');
+  });
+
+  test('localizes every segment for a Windows separator', () => {
+    assert.equal(asarLookupPath('dist/main/app-ipc-main.js', '\\'), 'dist\\main\\app-ipc-main.js');
+  });
+
+  test('resolves a real archive path under a Windows separator', () => {
+    // Mirrors `@electron/asar`'s own descent so the assertion fails on any
+    // platform rather than only on the one that has the bug.
+    const header = {
+      files: { dist: { files: { main: { files: { 'app-ipc-main.js': { size: 1 } } } } } },
+    };
+    const descend = (path, separator) =>
+      path
+        .split(separator)
+        .filter(Boolean)
+        .reduce((node, part) => node?.files?.[part], header);
+
+    assert.ok(descend(asarLookupPath('dist/main/app-ipc-main.js', '\\'), '\\'));
+    assert.equal(descend('dist/main/app-ipc-main.js', '\\'), undefined);
+  });
+});
 
 // The closure assertion must judge the artifact by its own contents. These
 // fixtures build a real `resources/` layout — an actual asar carrying both a
