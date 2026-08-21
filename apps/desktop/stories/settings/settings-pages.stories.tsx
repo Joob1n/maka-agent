@@ -1178,6 +1178,7 @@ function SettingsStoryFrame(props: SettingsStoryProps) {
           onOpenSession={noop}
           archivedTasks={archivedTasks}
           onTaskImported={noop}
+          onRemoteHostAdded={noop}
         />
       </div>
     </>

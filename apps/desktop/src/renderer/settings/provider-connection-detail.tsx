@@ -426,7 +426,14 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
       {/* The rows draw the closing rule themselves; without them the section
           still needs one. Two rules with a gap between them read as an empty
           row, so only ever one. */}
-      {!supportsApiKey && !showsEndpoint && <Divider />}
+      {!supportsApiKey && !showsEndpoint && !retired && <Divider />}
+      {/* Everything below writes to the connection, and a retired one accepts
+          no writes: the catalog refuses a model or request-body change, and the
+          credential vault refuses a request header. Rendering the editors would
+          offer work that either fails or — worse, before the vault refused it —
+          saves something that can never reach a request. What remains is the
+          retirement notice above and the deletion below. */}
+      {!retired && (
       <DetailSection title={copy.advancedRequest} description={copy.advancedRequestHelp}>
         <VStack gap={0}>
               <SettingsExpandableRow
@@ -497,6 +504,8 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
               <Divider />
         </VStack>
       </DetailSection>
+      )}
+      {!retired && (
       <DetailSection title={copy.modelManagement} description={copy.modelManagementHelp}>
         <EnabledModelManager
           modelChoices={modelChoices}
@@ -510,19 +519,15 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
             connection action runs at a time. `refreshModels` is wrapped
             because it takes an options object: handing it the click event
             would pass a MouseEvent as `opts`. */}
-        {/* A retired provider's auth contract marks every action hidden, so
-            the store refuses these calls. Offering the buttons anyway would
-            only produce a failure the user cannot act on. */}
-        {!retired && (
-          <HStack gap={2} vAlign="center" wrap="wrap">
-            <Button variant="secondary" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => runTest()} label={copy.testConnection} />
-            {supportsRemoteDiscovery && (
-              <Button variant="ghost" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => refreshModels()} label={copy.updateModels} />
-            )}
-          </HStack>
-        )}
+        <HStack gap={2} vAlign="center" wrap="wrap">
+          <Button variant="secondary" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => runTest()} label={copy.testConnection} />
+          {supportsRemoteDiscovery && (
+            <Button variant="ghost" isDisabled={allActionsBusy || !hasUsableCredential} clickAction={() => refreshModels()} label={copy.updateModels} />
+          )}
+        </HStack>
       </DetailSection>
-      {showsCapabilities && (
+      )}
+      {showsCapabilities && !retired && (
         <>
           <Divider />
           <DetailSection title={copy.capabilities} description={copy.capabilitiesHelp}>

@@ -81,5 +81,3 @@ function assertNever(state: never): never {
   void state;
   throw new Error('getOnboardingHeroCopy: unexhausted OnboardingState variant');
 }
-
-

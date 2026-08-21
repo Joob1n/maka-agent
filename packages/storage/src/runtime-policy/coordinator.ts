@@ -324,6 +324,7 @@ export class RuntimePolicyCoordinator {
         if (!connection) {
           return deepFreeze({ kind: 'connection_not_found' as const });
         }
+        assertConnectionIsWritable(connection);
         const required = connectionCredentialLocator(
           connection.connectionId,
           PROVIDER_DEFAULTS[connection.providerType].authKind,
@@ -635,9 +636,11 @@ export class RuntimePolicyCoordinator {
       );
       const updates = decodeRequestHeaderUpdates(rawUpdates);
       const catalog = await this.catalog.read(root);
-      if (!findConnection(catalog, { connectionId })) {
+      const connection = findConnection(catalog, { connectionId });
+      if (!connection) {
         return deepFreeze({ kind: 'connection_not_found' as const });
       }
+      assertConnectionIsWritable(connection);
 
       const locator = connectionRequestHeadersLocator(connectionId);
       const vault = await this.vault.read(root);
@@ -1513,6 +1516,22 @@ function sameCredentialLocator(actual: CredentialLocator, expected: CredentialLo
     (actual.scope !== 'connection' ||
       (expected.scope === 'connection' && actual.connectionId === expected.connectionId))
   );
+}
+
+/**
+ * A retired provider's connection is a tombstone: it may be decoded, queried
+ * and deleted, and nothing else. Every write a connection owns funnels through
+ * here rather than growing its own guard — the catalog update, the credential
+ * vault, and the request-header replacement are siblings, and guarding them one
+ * at a time is what left the last two open.
+ */
+function assertConnectionIsWritable(connection: { readonly providerType: ProviderType }): void {
+  if (isRetiredProvider(connection.providerType)) {
+    throw codecError(
+      'invalid_connection_input',
+      `"${connection.providerType}" is retired; its connections can only be read or deleted`,
+    );
+  }
 }
 
 function ticketLabel(kind: ConnectionTicketKind): string {

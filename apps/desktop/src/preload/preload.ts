@@ -22,6 +22,8 @@ import type {
   DesktopRuntimeHostProfileSnapshot,
   DesktopRuntimeHostSshTerminalEvent,
   DesktopRuntimeHostSshTerminalSnapshot,
+  DesktopRuntimeHostOnboardingInput,
+  DesktopRuntimeHostOnboardingSnapshot,
   DesktopNewTaskCatalog,
   DesktopNewTaskHost,
   DesktopNewTaskHostRef,
@@ -1026,6 +1028,9 @@ const makaBridge = {
     setDefault(profileId: string) {
       return ipcRenderer.invoke('runtime-host-profiles:set-default', profileId);
     },
+    resolvePairingRecovery() {
+      return ipcRenderer.invoke('runtime-host-profiles:resolve-pairing-recovery');
+    },
     subscribeChanges(handler: (event: DesktopRuntimeHostProfileChangedEvent) => void) {
       const listener = (
         _event: Electron.IpcRendererEvent,
@@ -1064,6 +1069,28 @@ const makaBridge = {
       ) => handler(payload);
       ipcRenderer.on('runtime-host-ssh-terminal:event', listener);
       return () => ipcRenderer.off('runtime-host-ssh-terminal:event', listener);
+    },
+  },
+  runtimeHostOnboarding: {
+    getSnapshot(): Promise<DesktopRuntimeHostOnboardingSnapshot> {
+      return ipcRenderer.invoke('runtime-host-onboarding:getSnapshot');
+    },
+    start(input: DesktopRuntimeHostOnboardingInput): Promise<DesktopRuntimeHostOnboardingSnapshot> {
+      return ipcRenderer.invoke('runtime-host-onboarding:start', input);
+    },
+    cancel(): Promise<boolean> {
+      return ipcRenderer.invoke('runtime-host-onboarding:cancel');
+    },
+    reset(): Promise<void> {
+      return ipcRenderer.invoke('runtime-host-onboarding:reset');
+    },
+    subscribe(handler: (snapshot: DesktopRuntimeHostOnboardingSnapshot) => void) {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        snapshot: DesktopRuntimeHostOnboardingSnapshot,
+      ) => handler(snapshot);
+      ipcRenderer.on('runtime-host-onboarding:changed', listener);
+      return () => ipcRenderer.off('runtime-host-onboarding:changed', listener);
     },
   },
   newTasks: {

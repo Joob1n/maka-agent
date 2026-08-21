@@ -776,6 +776,69 @@ describe('runtime policy stores', () => {
     });
   });
 
+  test('refuses every connection-owned write against a retained retired row', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      // The catalog update guard alone did not establish the tombstone: the
+      // credential vault and the request-header replacement are sibling writes
+      // that reach the same connection, and both committed against a retired
+      // row until they shared one refusal. Each is exercised here because each
+      // is separately reachable from a remote client.
+      const kept = await seedRetiredConnection(
+        root,
+        stores,
+        'sealed-claude',
+        '77777777-7777-4777-8777-777777777777',
+      );
+
+      await assert.rejects(
+        () =>
+          stores.operations.replaceConnectionRequestHeaders(kept.connectionId, [
+            { name: 'X-Tenant', value: 'tenant-a' },
+          ]),
+        isStoreError('invalid_connection_input'),
+      );
+
+      await assert.rejects(
+        () =>
+          stores.credentialVault.set({
+            locator: {
+              scope: 'connection',
+              connectionId: kept.connectionId,
+              kind: 'request_headers',
+            },
+            expected: null,
+            secret: JSON.stringify({ 'X-Tenant': 'tenant-a' }),
+          }),
+        isStoreError('invalid_connection_input'),
+      );
+
+      await assert.rejects(
+        () =>
+          stores.credentialVault.set({
+            locator: { scope: 'connection', connectionId: kept.connectionId, kind: 'oauth_token' },
+            expected: null,
+            secret: 'refreshed-token',
+          }),
+        isStoreError('invalid_connection_input'),
+      );
+
+      // Reading and deleting stay open — that is the whole point of retaining
+      // the row, and a refusal that strands the credential would be worse than
+      // the writes it prevents.
+      const snapshot = await stores.connectionCatalog.getSnapshot();
+      const still = snapshot.connections.find((item) => item.slug === 'sealed-claude');
+      assert.ok(still, 'refused writes must leave the row readable');
+      assert.equal(
+        (
+          await stores.connectionCatalog.remove({
+            expected: { connectionId: kept.connectionId, revision: still.revision },
+          })
+        ).kind,
+        'committed',
+      );
+    });
+  });
+
   test('refuses to edit a retained retired connection back toward usable', async () => {
     await withInteractiveOwner(async ({ root, stores }) => {
       // The row is kept so its credential stays visible and deletable, and
@@ -2471,7 +2534,12 @@ describe('runtime policy stores', () => {
               expected: null,
               secret: 'public-oauth-must-be-rejected',
             }),
-          isStoreError('invalid_credential_input'),
+          // Both are refused, for different reasons and at different points:
+          // the retired connection is refused as a whole before its credential
+          // kind is considered, so it reports the connection as the problem.
+          isStoreError(
+            connection === claude ? 'invalid_connection_input' : 'invalid_credential_input',
+          ),
         );
         assert.equal(
           (
