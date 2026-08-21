@@ -6,8 +6,7 @@ import { createOneShotActionGuard, teardownPendingAuthorization } from './oauth-
 import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 
 
-// Shared browser-assisted OAuth login-flow controller (device-code
-// polling / loopback PKCE depending on the provider).
+// Shared browser-assisted OAuth login-flow controller (device-code polling).
 //
 // Extracted from the SubscriptionLoginModal `startLogin` flow so BOTH the
 // OAuth catalog login modals (Codex / xAI) AND the model
@@ -205,7 +204,7 @@ export function useOAuthLoginFlow(params: {
       }
       const refreshed = await refresh();
       if (!oauthLoginFlowMountedRef.current || !refreshed) return;
-      // Loopback / polling -- wait for the backend to complete.
+      // Wait for the backend to finish polling the provider.
       const result = await bridge.completeAuthorization(payload.authRequestId);
       if (!oauthLoginFlowMountedRef.current) return;
       authRequestIdRef.current = null;
