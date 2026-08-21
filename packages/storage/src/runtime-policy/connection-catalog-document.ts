@@ -214,6 +214,18 @@ export class ConnectionCatalogDocumentOwner {
     const changes = decodeConnectionInput(() =>
       normalizeConnectionCatalogEntryUpdateForProvider(input.changes, previous.providerType),
     );
+    // A retired row may be read and deleted, and it may stay exactly as it is
+    // — but it may not be edited back toward usable. Re-enabling is the one
+    // that matters (a disabled retired connection would become a default
+    // candidate again), and refusing the whole update rather than that single
+    // field keeps this a boundary rather than a field-by-field allow list: a
+    // retired connection has no edit worth committing.
+    if (isRetiredProvider(previous.providerType)) {
+      throw codecError(
+        'invalid_connection_input',
+        `"${previous.providerType}" is retired and its connections cannot be edited`,
+      );
+    }
     const endpointChanged = previous.baseUrl !== changes.baseUrl;
     const testBasisChanged =
       endpointChanged ||

@@ -776,6 +776,49 @@ describe('runtime policy stores', () => {
     });
   });
 
+  test('refuses to edit a retained retired connection back toward usable', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      // The row is kept so its credential stays visible and deletable, and
+      // create and set-default already refuse. Update was the way back in: a
+      // retired connection could be re-enabled and become a default candidate
+      // again, at which point every downstream refusal is the only thing left
+      // between it and a Session. Read and delete remain the exceptions.
+      const kept = await seedRetiredConnection(
+        root,
+        stores,
+        'editable-claude',
+        '66666666-6666-4666-8666-666666666666',
+      );
+
+      await assert.rejects(
+        () =>
+          stores.connectionCatalog.update({
+            expected: { connectionId: kept.connectionId, revision: kept.revision },
+            changes: {
+              name: kept.name,
+              enabled: true,
+              enabledModelIds: [...kept.enabledModelIds],
+            },
+          }),
+        isStoreError('invalid_connection_input'),
+      );
+
+      // Still readable and still deletable afterwards — refusing the edit must
+      // not strand the credential this retirement deliberately retains.
+      const snapshot = await stores.connectionCatalog.getSnapshot();
+      const still = snapshot.connections.find((item) => item.slug === 'editable-claude');
+      assert.ok(still, 'a refused edit must leave the row readable');
+      assert.equal(
+        (
+          await stores.connectionCatalog.remove({
+            expected: { connectionId: kept.connectionId, revision: still.revision },
+          })
+        ).kind,
+        'committed',
+      );
+    });
+  });
+
   test('releases a default target that points at a retained retired connection', async () => {
     await withInteractiveOwner(async ({ root, stores }) => {
       const retiredConnectionId = '33333333-3333-4333-8333-333333333333';
