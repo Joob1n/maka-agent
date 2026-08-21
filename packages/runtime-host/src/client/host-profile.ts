@@ -8,7 +8,6 @@ import {
   isCanonicalRuntimeHostWebSocketPath,
   RUNTIME_HOST_PROTOCOL_VERSION,
   requireHostRootId,
-  type ClientSurface,
 } from '../protocol/index.js';
 import {
   connectRemoteRuntimeHost,
@@ -17,6 +16,7 @@ import {
   type RuntimeHostConnection,
 } from './connection.js';
 import { RuntimeHostPermanentReconnectError } from './reconnect-lifecycle.js';
+import { RuntimeHostRemoteCompatibilityError } from './remote-compatibility-error.js';
 import { openRuntimeHostSshTunnel, type RuntimeHostSshInteraction } from './ssh-tunnel.js';
 import { waitForRuntimeHostReady } from './wait-for-ready.js';
 
@@ -154,7 +154,6 @@ export async function connectRemoteRuntimeHostProfile(
   input: {
     readonly profile: RemoteRuntimeHostProfile;
     readonly credential: string;
-    readonly surface: ClientSurface;
     readonly clientInstanceId: string;
     readonly signal?: AbortSignal;
     readonly connectTimeoutMs?: number;
@@ -188,7 +187,6 @@ export async function connectRemoteRuntimeHostProfile(
     credential: input.credential,
     expectedRootId: input.profile.rootId,
     compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
-    surface: input.surface,
     protocol: {
       min: RUNTIME_HOST_PROTOCOL_VERSION,
       max: RUNTIME_HOST_PROTOCOL_VERSION,
@@ -208,9 +206,7 @@ export async function connectRemoteRuntimeHostProfile(
     throw error;
   }
   if (connected.kind === 'incompatible') {
-    throw new RuntimeHostPermanentReconnectError(
-      `Runtime Host profile ${input.profile.id} is incompatible with this Maka Client`,
-    );
+    throw new RuntimeHostRemoteCompatibilityError(input.profile.id, connected.handshake);
   }
   if (connected.kind !== 'connected') {
     if (connected.kind === 'draining') {

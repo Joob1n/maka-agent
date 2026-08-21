@@ -17,6 +17,7 @@ import type { ProviderRuntimeAdapter } from '@maka/core/llm-connections';
 import type { ThinkingLevel } from '@maka/core/model-thinking';
 import {
   resolveThinkingLevel,
+  supportsRelayFastServiceTier,
   thinkingOptionsForModel,
   thinkingVariantsForConnection,
   type ThinkingOptions,
@@ -465,7 +466,7 @@ export function buildProviderOptions(
       return buildFamilyWire(connection, modelId, level, thinkingOptions);
     case 'volcengine-ark':
       return {
-        [connection.providerType]: {
+        [toCamelCase(connection.providerType)]: {
           thinking: { type: level === 'off' ? 'disabled' : 'enabled' },
           ...(level && level !== 'off' ? { reasoningEffort: level } : {}),
         },
@@ -492,7 +493,7 @@ export function buildProviderOptions(
     case 'cloudflare-workers-ai':
       return level
         ? {
-            [connection.providerType]:
+            [toCamelCase(connection.providerType)]:
               level === 'off'
                 ? thinkingOptions?.offBehavior === 'cloudflare-chat-template-thinking-false'
                   ? { chat_template_kwargs: { thinking: false } }
@@ -519,6 +520,13 @@ function buildFamilyWire(
 ): SharedV4ProviderOptions {
   const { adapter, wire, reasoningReplay } = resolveModelRuntime(connection, modelId);
   const reasoningEffort = level ? (level === 'off' ? 'none' : level) : undefined;
+  const serviceTier =
+    wire === 'openai-responses' &&
+    reasoningReplay.kind === 'responses' &&
+    reasoningReplay.contract.adapter === 'openai' &&
+    supportsRelayFastServiceTier(connection.providerType, modelId)
+      ? connection.relayModelProfiles?.[modelId]?.serviceTier
+      : undefined;
   // Provider selection and reasoning continuation are independent. The OpenAI
   // provider reads its provider-options namespace; the Open Responses provider
   // consumes a provider-native reasoningEffort through the same namespace,
@@ -536,8 +544,13 @@ function buildFamilyWire(
       // sends `xhigh` to high, not max). The SDK resolves providerOptions
       // under the raw provider `name` — no camelCase alias, unlike
       // openai-compatible — so key by the same name getAIModel passes.
-      return reasoningEffort
-        ? { [openAiCompatibleProviderName(adapter, connection)]: { reasoningEffort } }
+      return reasoningEffort || serviceTier
+        ? {
+            [openAiCompatibleProviderName(adapter, connection)]: {
+              ...(reasoningEffort ? { reasoningEffort } : {}),
+              ...(serviceTier ? { serviceTier } : {}),
+            },
+          }
         : {};
     }
     return {
@@ -547,17 +560,24 @@ function buildFamilyWire(
           ? { forceReasoning: true }
           : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
       },
     };
   }
-  if (!reasoningEffort) return {};
+  if (!reasoningEffort && !serviceTier) return {};
   switch (adapter.kind) {
     case 'openai-compatible':
       return {
-        [openAiCompatibleProviderOptionsKey(adapter, connection)]: { reasoningEffort },
+        [openAiCompatibleProviderOptionsKey(adapter, connection)]: {
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        },
       };
     case 'openai':
-      return { openai: { reasoningEffort } };
+      return {
+        openai: {
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        },
+      };
     case 'anthropic':
       // Anthropic-protocol models declare no `none` effort, so an off
       // choice only exists where an explicit case wires it.
@@ -581,7 +601,7 @@ function buildFamilyWire(
       if (copilotProtocol === 'anthropic-messages') {
         return level !== 'off' ? { anthropic: { effort: level } } : {};
       }
-      return { 'github-copilot': { reasoningEffort } };
+      return { githubCopilot: { reasoningEffort } };
     }
     default:
       return {};
@@ -609,18 +629,21 @@ function toCamelCase(name: string): string {
 }
 
 /**
- * The providerOptions key for an openai-compatible model. The SDK still
- * accepts the raw provider name but flags dashed keys as deprecated (a
- * `type: 'deprecated'` warning on every doGenerate result); its canonical
- * key is the camelCase alias. Only the custom-relay path keys options by
- * the connection slug, so only that path camelCases — built-in adapter
- * namespaces stay as they were.
+ * The providerOptions key for an openai-compatible model: the camelCase
+ * alias of the identity passed to `createOpenAICompatible`. The SDK
+ * resolves both spellings — known options and passthrough fields alike —
+ * but flags dashed keys as deprecated (a `type: 'deprecated'` warning on
+ * every doGenerate result), so the camelCase alias is the canonical key.
+ *
+ * The same alias also selects the SDK's *response* metadata namespace:
+ * once options are keyed `zaiCodingPlan`, provider metadata comes back as
+ * `providerMetadata.zaiCodingPlan`, not `providerMetadata['zai-coding-plan']`.
+ * A metadata reader keyed by the raw `connection.providerType` would
+ * silently read nothing for dashed providers.
  */
 function openAiCompatibleProviderOptionsKey(
   adapter: ProviderRuntimeAdapter,
   connection: RuntimeExecutionConnection,
 ): string {
-  return adapter.kind === 'openai-compatible' && adapter.name === 'connection'
-    ? toCamelCase(connection.slug)
-    : connection.providerType;
+  return toCamelCase(openAiCompatibleProviderName(adapter, connection));
 }

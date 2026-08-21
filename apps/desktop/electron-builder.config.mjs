@@ -6,7 +6,15 @@ export default {
   directories: {
     output: 'release',
   },
-  files: ['dist/**/*', 'dist-renderer/**/*', 'package.json', '!**/__tests__/**'],
+  files: [
+    'dist/**/*',
+    'dist-renderer/**/*',
+    'package.json',
+    '!**/__tests__/**',
+    // FakeBackend and the Desktop E2E candidate bootstrap live under
+    // `test-only/`; they must not reach a packaged app.
+    '!**/test-only/**',
+  ],
   extraResources: [
     {
       from: '../../node_modules/dugite/git',

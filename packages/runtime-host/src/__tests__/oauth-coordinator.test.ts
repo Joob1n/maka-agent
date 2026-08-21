@@ -823,7 +823,6 @@ function operationContext(connectionId: string, acquireResidency: () => { releas
   return {
     hostEpoch: 'host-epoch',
     connectionId,
-    surface: 'desktop' as const,
     principal: 'local_os_user' as const,
     acquireResidency,
   };

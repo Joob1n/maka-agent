@@ -44,7 +44,6 @@ import type { SearchErrorReason, SearchRequest, SearchResult } from '@maka/core/
 import type { SessionChangedEvent, SessionSummary, TurnRecord } from '@maka/core/session';
 import type { ThinkingLevel } from '@maka/core/model-thinking';
 import type { E2eFixtureState } from '@maka/core/e2e-fixture';
-import type { ExternalSessionSummary } from '@maka/core/external-session';
 import type {
   GitReviewReadResult,
   GitReviewSource,
@@ -84,6 +83,7 @@ import type {
   OperationInput,
   OperationOutput,
 } from '@maka/runtime-host/protocol';
+import type { AgentGraphEpochDirectory } from '@maka/runtime-host/client';
 import type {
   RendererRuntimeHostCommandOperation,
   RendererRuntimeHostQueryOperation,
@@ -95,6 +95,7 @@ import type { ExternalSessionImportIpcResult } from './external-session-import-r
 import type { DesktopSessionSummary } from '../shared/desktop-session-projection.js';
 export type { DesktopSessionSummary } from '../shared/desktop-session-projection.js';
 import type { DesktopConnectionSnapshot } from '../shared/desktop-connection-snapshot.js';
+import type { DesktopExternalSessionCatalogItem } from './external-session-catalog.js';
 import type {
   DesktopDiagnosticCopyResult,
   DesktopErrorDiagnosticInput,
@@ -496,15 +497,18 @@ export interface MakaBridge {
     subscribeChanges(handler: (event: DeepResearchChangedEvent) => void): () => void;
   };
   graphs: {
+    listEpochs(rootSessionId: string): Promise<AgentGraphEpochDirectory>;
+    listCurrentEpochs(rootSessionId: string): Promise<AgentGraphEpochDirectory>;
     getSnapshot(
       rootSessionId: string,
-      options?: AgentGraphClientSnapshotOptions,
+      options?: AgentGraphClientSnapshotOptions & { graphId?: string },
     ): Promise<AgentGraphClientSnapshot>;
     inspectOperator(
       rootSessionId: string,
       operatorId: string,
+      graphId?: string,
     ): Promise<AgentGraphOperatorInspection>;
-    stop(rootSessionId: string): Promise<void>;
+    stop(rootSessionId: string, expectedGraphId: string): Promise<void>;
     subscribe(
       rootSessionId: string,
       handler: () => void,
@@ -589,7 +593,16 @@ export interface MakaBridge {
     setFlagged(sessionId: string, isFlagged: boolean, options?: { revisionFamily?: boolean }): Promise<void>;
     rename(sessionId: string, name: string, options?: { revisionFamily?: boolean }): Promise<void>;
     setPermissionMode(sessionId: string, mode: PermissionMode): Promise<DesktopSessionSummary>;
+    /**
+     * Enter or leave Plan — a temporary collaboration excursion Runtime ends
+     * by itself once a proposal is approved or abandoned.
+     */
     setCollaborationMode(sessionId: string, mode: CollaborationMode): Promise<DesktopSessionSummary>;
+    /**
+     * The Session's standing default for how a turn fans out. Independent of
+     * Plan: different field, different lifetime, and Runtime resolves the
+     * overlap by stripping the tools Swarm and Graph need while planning.
+     */
     setOrchestrationMode(sessionId: string, mode: OrchestrationMode): Promise<DesktopSessionSummary>;
     getPlanState(sessionId: string): Promise<PlanSessionState>;
     subscribePlanChanges(sessionId: string, handler: () => void): () => void;
@@ -631,8 +644,11 @@ export interface MakaBridge {
   };
   externalSessions: {
     listSources(host?: DesktopRuntimeHostRef): Promise<{ adapterIds: string[] }>;
-    list(input: { adapterId: string; includeArchived?: boolean; cursor?: string }, host?: DesktopRuntimeHostRef): Promise<{
-      sessions: ExternalSessionSummary[];
+    list(
+      input: { adapterId: string; includeArchived?: boolean; cursor?: string },
+      host?: DesktopRuntimeHostRef,
+    ): Promise<{
+      sessions: DesktopExternalSessionCatalogItem[];
       nextCursor: string | null;
     }>;
     import(input: {
@@ -707,8 +723,21 @@ export interface MakaBridge {
   goal: {
     /** The session's current goal (null when none is set). */
     get(sessionId: string): Promise<import('@maka/runtime/goal-state').GoalState | null>;
+    /**
+     * Arm a goal for this session. It drives the session from the next turn
+     * on; arming alone starts nothing. Rejects when the session already has an
+     * unfinished goal.
+     */
+    arm(
+      sessionId: string,
+      goal: import('../shared/goal-arm').GoalArmRequest,
+    ): Promise<import('@maka/runtime/goal-state').GoalState>;
     /** Clear the active goal, stopping autonomous continuation. */
     clear(sessionId: string): Promise<void>;
+    /** Pause the active goal without spending a model turn. */
+    pause(sessionId: string): Promise<void>;
+    /** Resume a paused goal without spending a model turn. */
+    resume(sessionId: string): Promise<void>;
   };
   connections: {
     getSnapshot(sessionId?: string, host?: DesktopRuntimeHostRef): Promise<DesktopConnectionSnapshot>;

@@ -167,6 +167,14 @@ maka run --host office --project '<projectId>' "Summarize this project"
 
 Each TUI or CLI process connects to one Profile. TUI may interact with SSH during its initial connection; non-interactive commands require preconfigured authentication.
 
+## Compatibility troubleshooting
+
+`RUNTIME_HOST_REMOTE_INCOMPATIBLE` means the Client and remote Runtime Host cannot safely communicate. Compare the Client and Host compatibility epochs first. When the diagnostic reports them, also inspect the Client and Host protocol ranges and composition IDs (including the Host composition revision).
+
+Use compatible Client and Host builds. After updating the Host, the operator must restart its remote Runtime Host service, then retry the connection.
+
+Remote Clients never auto-upgrade or restart the Host, downgrade the transport, mutate the Profile, change the default Host or Session, or expose credentials, endpoints, paths, or State Roots in this diagnostic.
+
 ## Security boundaries
 
 - Do not put credentials on the command line or in Profile JSON.
