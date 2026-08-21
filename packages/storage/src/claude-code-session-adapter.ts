@@ -126,7 +126,12 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
     } catch {
       return [];
     }
-    const files: Array<{ path: string; sessionId: string }> = [];
+    // Keyed by session id: the same id can legitimately exist under more than
+    // one project directory after a workspace move or a resumed session. Two
+    // files with one id are two candidates for the same source session, and
+    // list and read must pick the same one or a user selects one summary and
+    // imports the other.
+    const bySessionId = new Map<string, { path: string; sessionId: string; mtimeMs: number }>();
     for (const project of projects) {
       let entries: string[];
       try {
@@ -143,10 +148,26 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
         // The id reaches a path join, so the resolved file must still be under
         // the projects root — a crafted id must not read outside it.
         if (!resolve(path).startsWith(resolve(root))) continue;
-        files.push({ path, sessionId });
+        let mtimeMs: number;
+        try {
+          mtimeMs = (await stat(path)).mtimeMs;
+        } catch {
+          continue;
+        }
+        const existing = bySessionId.get(sessionId);
+        // Newest wins, and the path breaks a tie so the choice does not depend
+        // on directory iteration order. A resumed session's continuation is
+        // the copy a user means when they pick that id.
+        if (
+          !existing ||
+          mtimeMs > existing.mtimeMs ||
+          (mtimeMs === existing.mtimeMs && path < existing.path)
+        ) {
+          bySessionId.set(sessionId, { path, sessionId, mtimeMs });
+        }
       }
     }
-    return files;
+    return [...bySessionId.values()].map(({ path, sessionId }) => ({ path, sessionId }));
   }
 
   async #parse(path: string, sessionId: string): Promise<ParsedTranscript | undefined> {
@@ -275,6 +296,10 @@ export default ClaudeCodeSessionAdapter;
  *  state, the same as any other turn whose end nothing vouches for. */
 const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 
+/** Names the cutoff for a turn the transcript simply stops inside, so a reader
+ *  can tell an imported snapshot's edge from a user's Stop or a provider abort. */
+const EXTERNAL_SNAPSHOT_ABORT_SOURCE = 'external_session_snapshot';
+
 interface TurnAccumulator {
   turnId: string;
   lastTs: number;
@@ -286,10 +311,50 @@ interface TurnAccumulator {
   aborted?: boolean;
 }
 
+/**
+ * One semantic event per source record, before any of it becomes a message.
+ *
+ * A transcript is an append log, not a list of distinct events. Two shapes
+ * break a naive one-line-one-message walk, and both occur in ordinary resume
+ * and recovery histories:
+ *
+ * - **A record can be written twice.** Replaying it emits the prompt, turn, or
+ *   tool identity twice. Measured: 3 repeats across 1130 local transcripts —
+ *   rare, and unrecoverable once persisted as canonical history.
+ * - **One assistant response is split across records sharing `message.id`,
+ *   and the pieces can be separated by the `tool_result` of a call the earlier
+ *   piece made.** Measured: 374 occurrences across 30 transcripts. Emitting
+ *   each piece as its own assistant message turned one reply into four.
+ *
+ * Folding must not flatten the second shape into its first record's position:
+ * a later `tool_use` sharing that id was issued *after* the result in between,
+ * and moving it earlier would invert cause and effect. So the visible prose of
+ * a response is emitted once, at its first appearance, while each tool call
+ * stays where the log put it. Verified against the corpus: `text` and
+ * `thinking` each appear at most once per `message.id`, so emitting them once
+ * loses nothing.
+ */
+function normalizeRecords(records: readonly TranscriptRecord[]): readonly TranscriptRecord[] {
+  const seenUuids = new Set<string>();
+  const normalized: TranscriptRecord[] = [];
+  for (const record of records) {
+    const uuid = typeof record.uuid === 'string' ? record.uuid : undefined;
+    if (uuid) {
+      if (seenUuids.has(uuid)) continue;
+      seenUuids.add(uuid);
+    }
+    normalized.push(record);
+  }
+  return normalized;
+}
+
 export function convertTranscript(
   sessionId: string,
-  records: readonly TranscriptRecord[],
+  rawRecords: readonly TranscriptRecord[],
 ): readonly StoredMessage[] {
+  const records = normalizeRecords(rawRecords);
+  // Prose already emitted for an assistant response, keyed by `message.id`.
+  const emittedProse = new Set<string>();
   const messages: StoredMessage[] = [];
   let turn: TurnAccumulator | undefined;
   let sequence = 0;
@@ -302,12 +367,23 @@ export function convertTranscript(
 
   const closeTurn = (): void => {
     if (!turn) return;
-    // No terminal `turn_state` is emitted for a turn nothing corroborates.
-    // Measured across 1130 local transcripts, 13.9% of turns end this way —
-    // no assistant reply at all, or stopped at `tool_use` with the result
-    // never arriving. Those are genuinely unfinished: a killed process, a
-    // crash, or a session still open. Emitting `completed` for them would put
-    // a false terminal state on 1 in 7 imported turns.
+    // Every turn gets a terminal state, and which one depends on what the
+    // transcript actually says.
+    //
+    // Leaving one out is not the same as preserving "unfinished". Without a
+    // `turn_state`, `deriveTurnRecords` falls back to `inferLegacyTurnStatus`,
+    // which answers `completed` for any turn holding an assistant message
+    // (`session.ts:1250`) and marks it `inferred`. The Ledger then refuses
+    // that uncorroborated terminal and the repair path persists
+    // `failed / missing_terminal_event` — an internal-corruption verdict on a
+    // transcript that was merely cut short. Measured: 13.9% of turns across
+    // 1130 local transcripts end with no assistant reply or at a `tool_use`
+    // whose result never arrived.
+    //
+    // So an unfinished turn is recorded as what it is: a snapshot that ended
+    // mid-turn, with an `abortSource` naming the import rather than a user or
+    // a provider. `end_turn`, interrupt notices and API errors keep their own
+    // evidence and are unaffected.
     if (turn.aborted) {
       messages.push({
         type: 'turn_state',
@@ -336,6 +412,17 @@ export function convertTranscript(
         turnId: turn.turnId,
         ts: turn.lastTs,
         status: 'completed',
+        partialOutputRetained: true,
+      });
+    } else {
+      messages.push({
+        type: 'turn_state',
+        id: id('turn-state'),
+        turnId: turn.turnId,
+        ts: turn.lastTs,
+        status: 'aborted',
+        abortedAt: turn.lastTs,
+        abortSource: EXTERNAL_SNAPSHOT_ABORT_SOURCE,
         partialOutputRetained: true,
       });
     }
@@ -413,7 +500,13 @@ export function convertTranscript(
       const stop = stringOf(message?.stop_reason);
       if (stop && TERMINAL_STOP_REASONS.has(stop)) turn.terminalStop = stop;
 
-      const thinking = thinkingText(message);
+      // One response's prose belongs to the response, not to each record that
+      // carries part of it. A fragment with no id is its own response.
+      const responseId = stringOf(message?.id);
+      const proseAlreadyEmitted = responseId !== undefined && emittedProse.has(responseId);
+      if (responseId !== undefined) emittedProse.add(responseId);
+
+      const thinking = proseAlreadyEmitted ? '' : thinkingText(message);
       if (thinking) {
         messages.push({
           type: 'assistant',
@@ -426,7 +519,7 @@ export function convertTranscript(
           modelId,
         });
       }
-      const text = claudeAssistantText(record);
+      const text = proseAlreadyEmitted ? undefined : claudeAssistantText(record);
       if (text) {
         messages.push({
           type: 'assistant',

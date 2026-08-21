@@ -35,7 +35,7 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
-  test('a turn stopped at tool_use with no result gets no terminal state', async () => {
+  test('a turn stopped at tool_use with no result is recorded as a snapshot cutoff', async () => {
     // The process died between the call and its result. Reporting `completed`
     // here is the failure mode this adapter exists to avoid.
     await withClaudeHome(async (home) => {
@@ -44,17 +44,21 @@ describe('ClaudeCodeSessionAdapter', () => {
         assistantRecord({ toolUse: { id: 'toolu_1', name: 'Read' }, stopReason: 'tool_use' }),
       ]);
       const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000002');
-      assert.equal(terminalState(messages), undefined);
+      const state = terminalState(messages);
+      assert.equal(state?.status, 'aborted');
+      assert.equal(state?.abortSource, 'external_session_snapshot');
       // The call itself still imports — the conversation is real up to the cut.
       assert.equal(messages.filter((m) => m.type === 'tool_call').length, 1);
     });
   });
 
-  test('a prompt with no answer at all gets no terminal state', async () => {
+  test('a prompt with no answer at all is recorded as a snapshot cutoff', async () => {
     await withClaudeHome(async (home) => {
       await seed(home, 'aaaaaaaa-0000-4000-8000-000000000003', [userRecord('are you there?')]);
       const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000003');
-      assert.equal(terminalState(messages), undefined);
+      const state = terminalState(messages);
+      assert.equal(state?.status, 'aborted');
+      assert.equal(state?.abortSource, 'external_session_snapshot');
       assert.equal(messages.filter((m) => m.type === 'user').length, 1);
     });
   });
@@ -114,7 +118,11 @@ describe('ClaudeCodeSessionAdapter', () => {
         assistantRecord({ text: 'Here is the beg', stopReason: 'max_tokens' }),
       ]);
       const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000011');
-      assert.equal(terminalState(messages), undefined);
+      const state = terminalState(messages);
+      // Cut off, not completed — and named as the snapshot's edge rather than
+      // as a user Stop.
+      assert.equal(state?.status, 'aborted');
+      assert.equal(state?.abortSource, 'external_session_snapshot');
     });
   });
 
@@ -158,6 +166,69 @@ describe('ClaudeCodeSessionAdapter', () => {
       ]);
       const messageIds = new Set(messages.map((m) => m.id));
       for (const turnId of turnIds) assert.equal(messageIds.has(turnId), false);
+    });
+  });
+
+  test('a record written twice emits one message, not two', async () => {
+    // A transcript is an append log: resume and recovery can replay a line.
+    // Persisting both copies duplicates the prompt in canonical history, and
+    // re-importing produces the same result — it is not recoverable after the
+    // fact.
+    await withClaudeHome(async (home) => {
+      const prompt = { ...userRecord('build the thing'), uuid: 'u-1' };
+      await seed(home, 'aaaaaaaa-0000-4000-8000-000000000014', [
+        prompt,
+        prompt,
+        assistantRecord({ text: 'Done.', stopReason: 'end_turn' }),
+      ]);
+      const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000014');
+      assert.equal(messages.filter((m) => m.type === 'user').length, 1);
+      assert.equal(new Set(messages.map((m) => m.turnId)).size, 1);
+    });
+  });
+
+  test('one response split across records emits its prose once and keeps calls in place', async () => {
+    // The real shape, measured 374 times across 30 local transcripts: text and
+    // a first tool_use, then the result of that call, then a second tool_use
+    // carrying the same `message.id`. The second call was issued after the
+    // result, so folding it back to the first record's position would invert
+    // cause and effect.
+    await withClaudeHome(async (home) => {
+      const fragment = (blocks: Parameters<typeof assistantFragment>[1]) =>
+        assistantFragment('msg_shared', blocks);
+      // Each fragment repeats the response's text, which is what a naive walk
+      // turns into three separate replies.
+      await seed(home, 'aaaaaaaa-0000-4000-8000-000000000015', [
+        userRecord('read both files'),
+        fragment([{ type: 'text', text: 'Reading them now.' }]),
+        fragment([
+          { type: 'text', text: 'Reading them now.' },
+          { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} },
+        ]),
+        toolResultRecord('toolu_1', 'first file'),
+        fragment([
+          { type: 'text', text: 'Reading them now.' },
+          { type: 'tool_use', id: 'toolu_2', name: 'Read', input: {} },
+        ]),
+        toolResultRecord('toolu_2', 'second file'),
+        assistantRecord({ text: 'Both read.', stopReason: 'end_turn' }),
+      ]);
+      const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000015');
+
+      // The split response contributes one visible reply, not three.
+      const texts = messages.filter(
+        (m): m is Extract<StoredMessage, { type: 'assistant' }> => m.type === 'assistant',
+      );
+      assert.deepEqual(
+        texts.map((m) => m.text),
+        ['Reading them now.', 'Both read.'],
+      );
+
+      // Both calls survive, and each still precedes its own result.
+      const order = messages
+        .filter((m) => m.type === 'tool_call' || m.type === 'tool_result')
+        .map((m) => (m.type === 'tool_call' ? `call:${m.id}` : `result:${m.toolUseId}`));
+      assert.deepEqual(order, ['call:toolu_1', 'result:toolu_1', 'call:toolu_2', 'result:toolu_2']);
     });
   });
 
@@ -273,6 +344,24 @@ function toolResultRecord(toolUseId: string, text: string): Record<string, unkno
     message: {
       role: 'user',
       content: [{ type: 'tool_result', tool_use_id: toolUseId, content: text }],
+    },
+  };
+}
+
+function assistantFragment(
+  messageId: string,
+  content: readonly Record<string, unknown>[],
+): Record<string, unknown> {
+  return {
+    type: 'assistant',
+    cwd: CWD,
+    timestamp: '2026-08-01T00:00:01.000Z',
+    message: {
+      role: 'assistant',
+      id: messageId,
+      model: 'claude-opus-5',
+      content,
+      stop_reason: 'tool_use',
     },
   };
 }
