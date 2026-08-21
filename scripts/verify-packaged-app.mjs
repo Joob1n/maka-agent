@@ -439,6 +439,47 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
  */
 const desktopRoot = resolve(import.meta.dirname, '..', 'apps', 'desktop');
 
+/** Every file path under `prefix` inside the archive, depth first. */
+function asarFilesUnder(header, prefix) {
+  const root = prefix.split('/').reduce((node, part) => node?.files?.[part], header);
+  const paths = [];
+  const walk = (node, path) => {
+    for (const [name, child] of Object.entries(node?.files ?? {})) {
+      const next = `${path}/${name}`;
+      if (child.files) walk(child, next);
+      else paths.push(next);
+    }
+  };
+  walk(root, prefix);
+  return paths;
+}
+
+// Line-bounded on purpose: a lazy cross-line match reads the word `from`
+// inside a comment as an import and reports the prose that follows it. A
+// multi-line `import {` list is covered by its closing line.
+const BARE_IMPORT_PATTERNS = [
+  /^[ \t]*(?:import|export)[ \t]+(?:[^'"\n]*?[ \t]+from[ \t]+)?['"]([^'"\n]+)['"]/gm,
+  /^[ \t]*\}[ \t]+from[ \t]+['"]([^'"\n]+)['"]/gm,
+  /\b(?:import|require)\([ \t]*['"]([^'"\n]+)['"][ \t]*\)/g,
+];
+
+/** Package names the given module text imports by name, ignoring builtins. */
+export function bareImportedPackages(source) {
+  const names = new Set();
+  for (const pattern of BARE_IMPORT_PATTERNS) {
+    for (const [, specifier] of source.matchAll(pattern)) {
+      if (/^[./]|^node:/.test(specifier)) continue;
+      const segments = specifier.split('/');
+      names.add(specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0]);
+    }
+  }
+  return names;
+}
+
+// Provided by the Electron runtime rather than the archive's node_modules, so
+// they are resolvable without appearing in the packaged closure.
+const RUNTIME_PROVIDED_PACKAGES = new Set(['electron']);
+
 function asarNodeModules(asarPath) {
   const { header } = getRawHeader(asarPath);
   const names = new Set();
@@ -529,6 +570,25 @@ export async function assertPackagedDependencyClosure(
     await access(join(resourcesPath, licensePath)).catch(() => {
       throw new Error(`shipped license file for ${name} is missing: ${licensePath}`);
     });
+  }
+
+  // Matching node_modules against the closure proves no package leaked in or
+  // was trimmed out; it says nothing about whether the shipped code can
+  // resolve what it imports. A module that imports a package the archive no
+  // longer carries throws ERR_MODULE_NOT_FOUND only in the packaged app, and
+  // only when something loads it — a lazily loaded main module would reach a
+  // user rather than a build.
+  const unresolvable = new Map();
+  for (const path of asarFilesUnder(getRawHeader(asarPath).header, 'dist')) {
+    if (!/\.(?:js|cjs|mjs)$/.test(path)) continue;
+    for (const name of bareImportedPackages(extractFile(asarPath, path).toString('utf8'))) {
+      if (packaged.has(name) || allowed.has(name) || RUNTIME_PROVIDED_PACKAGES.has(name)) continue;
+      if (!unresolvable.has(name)) unresolvable.set(name, path);
+    }
+  }
+  if (unresolvable.size > 0) {
+    const detail = [...unresolvable].map(([name, path]) => `${name} (${path})`).join(', ');
+    throw new Error(`app.asar ships code importing packages it does not carry: ${detail}`);
   }
 
   // The artifact's own record of what the renderer bundle contains — written

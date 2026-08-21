@@ -134,3 +134,23 @@ export function collectProductionNames(workspaceName) {
   walk(npmWorkspaceTree(workspaceName, true).dependencies);
   return names;
 }
+
+/**
+ * Package names a stylesheet imports by name. Vite inlines a CSS `@import` at
+ * transform time, so the imported file never becomes a module and a package of
+ * pure rules leaves no trace in the bundle record — reading the source is what
+ * finds it. Relative, absolute, remote and data URLs are first-party or
+ * already-resolved and are not package references.
+ */
+export function bareCssImportSpecifiers(css) {
+  // `@import "pkg"`, `@import url("pkg")`, with or without a layer/media
+  // suffix. Relative and absolute URLs are first-party or already-resolved
+  // assets, so only bare specifiers are of interest here.
+  const names = new Set();
+  for (const [, quoted] of css.matchAll(/@import\s+(?:url\(\s*)?['"]([^'"]+)['"]/g)) {
+    if (/^[./]|^https?:|^data:/.test(quoted)) continue;
+    const segments = quoted.split('/');
+    names.add(quoted.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0]);
+  }
+  return [...names];
+}

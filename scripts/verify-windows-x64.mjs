@@ -100,6 +100,7 @@ export async function verifyPackagedWindowsApp(
     // version".
     requireWindowsSandbox = expectedVersion == null,
     requireDisclaimer = expectedVersion == null,
+    requireDependencyClosure = expectedVersion == null,
   } = {},
 ) {
   const desktopManifest = JSON.parse(await readFile(join(desktopRoot, 'package.json'), 'utf8'));
@@ -116,10 +117,12 @@ export async function verifyPackagedWindowsApp(
     requireWindowsSandbox,
     requireDisclaimer,
   });
-  // Same seam the sandbox check uses: a baseline install predates this
-  // classification, so requiring it of a previously released build would fail
-  // a release that was correct when it shipped.
-  if (expectedVersion === undefined) await assertPackagedDependencyClosure(resources);
+  // Defaulted like the sandbox and disclaimer gates above, and overridable for
+  // the same reason: a baseline install predates this classification, so
+  // requiring it of a previously released build would fail a release that was
+  // correct when it shipped — but a caller that knows it is verifying a current
+  // build (the auto-update check's upgraded install) can ask for it back.
+  if (requireDependencyClosure) await assertPackagedDependencyClosure(resources);
   await requirePath(join(resources, 'git', 'cmd', 'git.exe'));
 
   step('reading the executable architecture');

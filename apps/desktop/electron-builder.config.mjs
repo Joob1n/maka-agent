@@ -34,6 +34,14 @@ export default {
     // FakeBackend and the Desktop E2E candidate bootstrap live under
     // `test-only/`; they must not reach a packaged app.
     '!**/test-only/**',
+    // `build:main` emits renderer sources as tsc side-files so main's tests can
+    // import a few helpers. The main process reaches exactly one of them at
+    // runtime — the cursor overlay engine — while the rest import `react`,
+    // `@maka/ui` and `@astryxdesign/core`, which the renderer now bundles
+    // instead of shipping under `node_modules`. Shipping those files would put
+    // ESM in the archive whose static imports cannot resolve.
+    '!dist/renderer/**',
+    'dist/renderer/computer-use-overlay/**',
   ],
   extraResources: [
     {

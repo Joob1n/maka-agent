@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, resolve } from 'node:path';
 import {
   ASSET_LICENSED_RENDERER_PACKAGES,
+  bareCssImportSpecifiers,
   collectWorkspaceClosure,
+  WORKSPACE_PREFIX,
 } from './third-party-closure.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '..');
@@ -240,6 +242,51 @@ function overrideLicenseText(packageKey, selectedLicense) {
  * a package that enters the bundle through any path (a direct import, a deep
  * import, a CSS `@import`, a font url()) fails here until it is declared.
  */
+/**
+ * First-party stylesheets that ship inside the renderer bundle.
+ *
+ * Vite inlines a CSS `@import` at transform time — the imported file never
+ * becomes a module — so the bundle recorder cannot see a package reached only
+ * that way unless its CSS also emits an asset. A pure-rules stylesheet
+ * (`normalize.css`, an icon font using `data:` URIs) would therefore ship its
+ * rules inside `dist-renderer/assets/*.css` with no notice and nothing failing.
+ * Reading the sources closes that: whatever a first-party stylesheet imports by
+ * package name has to be in the shipped closure, which is what puts it in the
+ * notices. A third-party stylesheet importing another package needs no scan —
+ * that package is its dependency, so the closure already reaches it.
+ */
+const FIRST_PARTY_STYLE_ROOTS = ['apps/desktop/src/renderer', 'packages/ui/src'];
+
+function firstPartyStylesheets(directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return firstPartyStylesheets(path);
+    return entry.isFile() && entry.name.endsWith('.css') ? [path] : [];
+  });
+}
+
+function validateFirstPartyCssImports(closureNames) {
+  const undeclared = new Map();
+  for (const root of FIRST_PARTY_STYLE_ROOTS) {
+    for (const path of firstPartyStylesheets(join(repoRoot, root))) {
+      for (const name of bareCssImportSpecifiers(readFileSync(path, 'utf8'))) {
+        if (name.startsWith(WORKSPACE_PREFIX) || closureNames.has(name)) continue;
+        undeclared.set(name, path);
+      }
+    }
+  }
+  if (undeclared.size > 0) {
+    const detail = [...undeclared]
+      .map(([name, path]) => `${name} (${path.slice(repoRoot.length + 1)})`)
+      .join(', ');
+    throw new Error(
+      `stylesheets import packages outside the shipped closure: ${detail} — ` +
+        'add the package to maka.rendererBundledDependencies so its notice ships with its rules',
+    );
+  }
+}
+
 function validateBundledPackageRecord(closureNames) {
   const rendererDist = join(repoRoot, 'apps/desktop/dist-renderer');
   if (!existsSync(rendererDist)) return;
@@ -267,7 +314,9 @@ function renderNotice() {
     manifestPath: target.manifestPath,
   });
   if (target.manifestPath) {
-    validateBundledPackageRecord(new Set(closure.map(({ name }) => name)));
+    const closureNames = new Set(closure.map(({ name }) => name));
+    validateBundledPackageRecord(closureNames);
+    validateFirstPartyCssImports(closureNames);
   }
   // Asset-licensed renderer packages (the OFL Geist fonts) ship their license
   // as a vendored file in the artifact rather than an npm-notice entry, so

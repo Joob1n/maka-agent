@@ -1,11 +1,17 @@
 // Records which npm packages the renderer bundle actually contains.
 //
-// The rollup module graph is the one authority that sees every way a package
-// can enter the bundle — direct imports, deep imports, CSS `@import`, asset
-// url() chains — so the licensing and audit closure is checked against this
-// file instead of trusting a hand-maintained list to stay complete. The JSON
-// ships inside `dist-renderer`, which lets the release verifier judge the
-// packaged artifact by the artifact's own record.
+// The module graph sees direct and deep JS imports; the emitted assets carry
+// the rest of the chain, which is how a package reached only through CSS
+// (Fontsource, via its `.woff2` files) still lands here. What neither sees is
+// a stylesheet that imports a package of pure rules: Vite inlines a CSS
+// `@import` at transform time, so the imported file never becomes a module,
+// and a package whose CSS emits no `url()` asset leaves no trace in this
+// record. `validateFirstPartyCssImports` in the notice generator covers that
+// case by reading the stylesheets themselves — stated here because the gap is
+// invisible from this file, and the check that closes it lives elsewhere.
+//
+// The JSON ships inside `dist-renderer`, which lets the release verifier judge
+// the packaged artifact by the artifact's own record.
 export function bundledNpmPackagesPlugin() {
   return {
     name: 'maka-bundled-npm-packages',
