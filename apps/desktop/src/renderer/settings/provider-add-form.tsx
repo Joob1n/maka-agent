@@ -85,7 +85,6 @@ export function AddProviderForm(props: {
   const isCloudflareWorkersAi = props.providerType === 'cloudflare-workers-ai';
   const requiresBaseUrl = !defaults.baseUrl && !isCloudflareWorkersAi;
   const showsDefaultModel = recommendedDefaultModel.trim() === '';
-  const isCustomRelay = defaults.category === 'custom';
   const isExperimental = defaults.status === 'phase3-experimental';
   const supportsRemoteDiscovery = providerSupportsModelDiscovery(props.providerType);
   const supportsApiKey = providerAuthSupportsApiKey(props.providerType);
@@ -132,12 +131,6 @@ export function AddProviderForm(props: {
       });
     }
     const normalizedDefaultModel = defaultModel.trim();
-    if (isCustomRelay && !normalizedDefaultModel) {
-      return setError({
-        field: 'defaultModel',
-        message: copy.defaultModelRequired,
-      });
-    }
     if (isExperimental) {
       return setError({
         field: 'form',
@@ -184,7 +177,12 @@ export function AddProviderForm(props: {
         try {
           await props.bridge.fetchModels(connection.slug);
         } catch (error) {
-          if (!isCustomRelay) modelDiscoveryError = error;
+          // Reported for a custom relay too. It used to be swallowed for them,
+          // on the reasoning that a relay may not implement discovery — but a
+          // relay is exactly the endpoint most likely to be misconfigured, and
+          // the model field no longer requires a hand-typed id to fall back
+          // on. Silence left the user with an empty picker and nothing said.
+          modelDiscoveryError = error;
         }
       }
       if (!addProviderMountedRef.current) return;
@@ -374,7 +372,6 @@ export function AddProviderForm(props: {
             isDisabled={isExperimental || busy}
             label={copy.defaultModel}
             description={copy.defaultModelHelp}
-            isRequired={isCustomRelay}
             status={
               error?.field === 'defaultModel'
                 ? { type: 'error', message: error.message }
