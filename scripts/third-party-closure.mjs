@@ -123,16 +123,32 @@ export function collectWorkspaceClosure({ workspaceName, manifestPath }) {
  * archive outside it is a leak regardless of how it got there.
  */
 export function collectProductionNames(workspaceName) {
-  const names = new Set();
+  return new Set(collectProductionClosure(workspaceName).keys());
+}
+
+/**
+ * The same closure as `collectProductionNames`, keyed by name with the exact
+ * versions npm resolved. Verifying by name alone accepted an archive carrying
+ * a different version of a permitted package, which is the shape a
+ * substitution attack takes: a name that belongs, at a version that does not.
+ *
+ * A workspace package has no version in the tree; it maps to `undefined`, and
+ * the archive's own manifest is compared against that the same way.
+ */
+export function collectProductionClosure(workspaceName) {
+  const closure = new Map();
   const walk = (dependencies) => {
     for (const [name, dependency] of Object.entries(dependencies ?? {})) {
       if (!dependency || typeof dependency !== 'object') continue;
-      names.add(name);
+      if (!closure.has(name)) closure.set(name, new Set());
+      closure
+        .get(name)
+        .add(typeof dependency.version === 'string' ? dependency.version : undefined);
       walk(dependency.dependencies);
     }
   };
   walk(npmWorkspaceTree(workspaceName, true).dependencies);
-  return names;
+  return closure;
 }
 
 /**
@@ -143,14 +159,23 @@ export function collectProductionNames(workspaceName) {
  * already-resolved and are not package references.
  */
 export function bareCssImportSpecifiers(css) {
-  // `@import "pkg"`, `@import url("pkg")`, with or without a layer/media
-  // suffix. Relative and absolute URLs are first-party or already-resolved
-  // assets, so only bare specifiers are of interest here.
+  // `@import "pkg"`, `@import url("pkg")` and the unquoted `@import url(pkg)`
+  // Vite also accepts, with or without a layer/media suffix. Relative and
+  // absolute URLs are first-party or already-resolved assets, so only bare
+  // specifiers are of interest here.
+  //
+  // Unquoted is matched only inside `url()`. CSS has no bare `@import pkg`,
+  // and accepting one would read the `layer`/`supports` keyword of a
+  // quoted import as a package name.
   const names = new Set();
-  for (const [, quoted] of css.matchAll(/@import\s+(?:url\(\s*)?['"]([^'"]+)['"]/g)) {
-    if (/^[./]|^https?:|^data:/.test(quoted)) continue;
-    const segments = quoted.split('/');
-    names.add(quoted.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0]);
+  const specifiers = [
+    ...css.matchAll(/@import\s+(?:url\(\s*)?['"]([^'"]+)['"]/g),
+    ...css.matchAll(/@import\s+url\(\s*([^'")\s][^)]*?)\s*\)/g),
+  ];
+  for (const [, specifier] of specifiers) {
+    if (/^[./]|^https?:|^data:/.test(specifier)) continue;
+    const segments = specifier.split('/');
+    names.add(specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0]);
   }
   return [...names];
 }

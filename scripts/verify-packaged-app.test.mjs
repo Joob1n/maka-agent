@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { createPackage } from '@electron/asar';
 import { asarLookupPath, assertPackagedDependencyClosure } from './verify-packaged-app.mjs';
@@ -52,14 +52,28 @@ async function makeResources({
   bundled = ['react'],
   notices = COVERING_NOTICES,
   rendererLicenses = [],
+  // Files placed under `dist/` inside the archive, so the bare-import scan
+  // has shipped code to read.
+  distFiles = {},
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'maka-closure-'));
   roots.push(root);
   const stage = join(root, 'stage');
-  for (const name of asarPackages) {
+  for (const entry of asarPackages) {
+    // `name` or `name@version` — the archive's manifest is what the verifier
+    // compares against the closure, so a fixture has to be able to ship one
+    // that disagrees.
+    const at = entry.lastIndexOf('@');
+    const [name, version] =
+      at > 0 ? [entry.slice(0, at), entry.slice(at + 1)] : [entry, '0.0.0-fixture'];
     const directory = join(stage, 'node_modules', name);
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, 'package.json'), `{"name":"${name}"}\n`);
+    await writeFile(join(directory, 'package.json'), `${JSON.stringify({ name, version })}\n`);
+  }
+  for (const [relative, contents] of Object.entries(distFiles)) {
+    const target = join(stage, 'dist', ...relative.split('/'));
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, contents);
   }
   if (bundled !== null) {
     await mkdir(join(stage, 'dist-renderer'), { recursive: true });
@@ -84,9 +98,20 @@ after(async () => {
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
+const FIXTURE_VERSION = '0.0.0-fixture';
+const allowlistOf = (entries) =>
+  new Map(
+    entries.map((entry) => {
+      const at = entry.lastIndexOf('@');
+      return at > 0
+        ? [entry.slice(0, at), new Set([entry.slice(at + 1)])]
+        : [entry, new Set([FIXTURE_VERSION])];
+    }),
+  );
+
 const options = {
   collectClosure: () => [{ name: 'react', version: '19.2.0' }],
-  collectPackagedAllowlist: () => new Set(PTY_PACKAGES),
+  collectPackagedAllowlist: () => allowlistOf(PTY_PACKAGES),
 };
 
 describe('assertPackagedDependencyClosure', () => {
@@ -115,6 +140,40 @@ describe('assertPackagedDependencyClosure', () => {
     await assert.rejects(
       () => assertPackagedDependencyClosure(resources, options),
       /react@19\.2\.0/,
+    );
+  });
+
+  test('rejects a permitted package shipped at a version the closure does not declare', async () => {
+    // Names alone matched, so an archive carrying react@18 against a closure
+    // declaring react@19 passed — a name that belongs at a version that does
+    // not, which is the shape a substitution takes.
+    const resources = await makeResources({
+      asarPackages: [...PTY_PACKAGES, 'react@18.3.1'],
+      bundled: ['react'],
+    });
+    await assert.rejects(
+      assertPackagedDependencyClosure(resources, {
+        ...options,
+        collectPackagedAllowlist: () => allowlistOf([...PTY_PACKAGES, 'react@19.2.0']),
+      }),
+      /outside the production closure: react@18\.3\.1/u,
+    );
+  });
+
+  test('rejects shipped code importing a package the closure allows but the archive lacks', async () => {
+    // Being in the closure was accepted as proof the import resolves. It is
+    // not: only the archive can answer that, and an allowed-but-absent
+    // package is exactly the ERR_MODULE_NOT_FOUND this check exists for.
+    const resources = await makeResources({
+      asarPackages: PTY_PACKAGES,
+      distFiles: { 'main/app.js': "import QRCode from 'qrcode';\n" },
+    });
+    await assert.rejects(
+      assertPackagedDependencyClosure(resources, {
+        ...options,
+        collectPackagedAllowlist: () => allowlistOf([...PTY_PACKAGES, 'qrcode@1.5.4']),
+      }),
+      /importing packages it does not carry: qrcode/u,
     );
   });
 

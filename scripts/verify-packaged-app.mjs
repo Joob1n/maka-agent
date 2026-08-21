@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { join, resolve, sep } from 'node:path';
 import {
   ASSET_LICENSED_RENDERER_PACKAGES,
-  collectProductionNames,
+  collectProductionClosure,
   collectWorkspaceClosure,
 } from './third-party-closure.mjs';
 
@@ -499,27 +499,66 @@ function asar() {
   return asarApi;
 }
 
+/**
+ * Every package in the archive as `name` -> set of versions, read from each
+ * package's own shipped `package.json`.
+ *
+ * Names alone were not enough: the closure declares exact versions, so an
+ * archive carrying `react@18` against a closure that declares `react@19`
+ * matched by name and passed. A version that does not appear in the closure
+ * is a leak whatever it is called.
+ */
 function asarNodeModules(asarPath) {
   const { header } = asar().getRawHeader(asarPath);
-  const names = new Set();
+  const names = new Map();
+  const unpackedRoot = `${asarPath}.unpacked`;
+  const versionOf = (node, packagePath) => {
+    const manifestNode = node?.files?.['package.json'];
+    if (!manifestNode) return undefined;
+    try {
+      // Native modules are packaged with `unpacked: true`: the header still
+      // lists them, but the bytes live beside the archive in
+      // `app.asar.unpacked`, where `extractFile` cannot reach them. Reading
+      // the header alone would report every native module as version-less
+      // and fail the identity comparison for packages that are perfectly
+      // correct.
+      const source = manifestNode.unpacked
+        ? readFileSync(join(unpackedRoot, ...packagePath.split('/'), 'package.json'), 'utf8')
+        : asar()
+            .extractFile(asarPath, asarLookupPath(`${packagePath}/package.json`))
+            .toString('utf8');
+      const manifest = JSON.parse(source);
+      return typeof manifest.version === 'string' ? manifest.version : undefined;
+    } catch {
+      // A package whose manifest cannot be read is reported by name with no
+      // version, which fails the identity comparison rather than skipping it.
+      return undefined;
+    }
+  };
   // Recursive: npm nests a second copy under a package when versions
   // conflict (node_modules/foo/node_modules/bar), and a walk that stops at
   // the top level would certify an archive it has not fully inspected.
-  const collect = (modules) => {
+  const record = (name, node, packagePath) => {
+    if (!names.has(name)) names.set(name, new Set());
+    names.get(name).add(versionOf(node, packagePath));
+  };
+  const collect = (modules, prefix) => {
     for (const [name, node] of Object.entries(modules ?? {})) {
       if (name.startsWith('.')) continue; // .bin, .package-lock.json
       if (name.startsWith('@')) {
         for (const [scoped, scopedNode] of Object.entries(node.files ?? {})) {
-          names.add(`${name}/${scoped}`);
-          collect(scopedNode.files?.node_modules?.files);
+          const path = `${prefix}/${name}/${scoped}`;
+          record(`${name}/${scoped}`, scopedNode, path);
+          collect(scopedNode.files?.node_modules?.files, `${path}/node_modules`);
         }
       } else {
-        names.add(name);
-        collect(node.files?.node_modules?.files);
+        const path = `${prefix}/${name}`;
+        record(name, node, path);
+        collect(node.files?.node_modules?.files, `${path}/node_modules`);
       }
     }
   };
-  collect(header.files?.node_modules?.files);
+  collect(header.files?.node_modules?.files, 'node_modules');
   return names;
 }
 
@@ -541,8 +580,15 @@ export async function assertPackagedDependencyClosure(
   // renderer-only transitive package included, not just the declared roots.
   const allowed = collectPackagedAllowlist
     ? await collectPackagedAllowlist()
-    : collectProductionNames('@maka/desktop');
-  const leaked = [...packaged].filter((name) => !allowed.has(name));
+    : collectProductionClosure('@maka/desktop');
+  const leaked = [];
+  for (const [name, versions] of packaged) {
+    const permitted = allowed.get(name);
+    for (const version of versions) {
+      if (permitted?.has(version)) continue;
+      leaked.push(version === undefined ? name : `${name}@${version}`);
+    }
+  }
   if (leaked.length > 0) {
     throw new Error(
       `app.asar carries packages outside the production closure: ${leaked.join(', ')}`,
@@ -603,7 +649,11 @@ export async function assertPackagedDependencyClosure(
     for (const name of bareImportedPackages(
       asar().extractFile(asarPath, asarLookupPath(path)).toString('utf8'),
     )) {
-      if (packaged.has(name) || allowed.has(name) || RUNTIME_PROVIDED_PACKAGES.has(name)) continue;
+      // Being in the closure is not enough — the code has to resolve at
+      // runtime, and only the archive can answer that. A package that is
+      // allowed but absent is exactly the ERR_MODULE_NOT_FOUND this check
+      // exists to catch.
+      if (packaged.has(name) || RUNTIME_PROVIDED_PACKAGES.has(name)) continue;
       if (!unresolvable.has(name)) unresolvable.set(name, path);
     }
   }

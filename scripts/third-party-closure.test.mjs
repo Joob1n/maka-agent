@@ -16,6 +16,8 @@ describe('bareCssImportSpecifiers', () => {
 @import "@scope/pkg/dist/base.css" layer(components);
 @import "@scope/only-root";
 @import "tokens.css" screen and (min-width: 40em);
+@import url(unquoted-pkg/base.css);
+@import url( spaced-pkg );
 `;
     assert.deepEqual(bareCssImportSpecifiers(css).sort(), [
       '@scope/only-root',
@@ -23,7 +25,9 @@ describe('bareCssImportSpecifiers', () => {
       'modern-css-reset',
       'normalize.css',
       'some-pkg',
+      'spaced-pkg',
       'tokens.css',
+      'unquoted-pkg',
     ]);
   });
 

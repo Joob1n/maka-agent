@@ -59,4 +59,9 @@ jobs:
         run: node scripts/audit-shipped-dependencies.mjs
 
       - name: Verify registry signatures
-        run: npm audit signatures --omit=dev
+        # Not `--omit=dev`: the renderer roots live in devDependencies so their
+        # unread sources stay out of `app.asar`, but vite bundles their code
+        # into `dist-renderer`, so they ship. This audits the full tree and
+        # fails only on packages whose exact name@version is in the shipped
+        # closure — the same authority the vulnerability audit above uses.
+        run: node scripts/audit-shipped-signatures.mjs
