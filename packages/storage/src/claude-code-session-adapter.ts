@@ -262,12 +262,18 @@ export default ClaudeCodeSessionAdapter;
  * Transcript -> StoredMessage[]
  * ------------------------------------------------------------------ */
 
-/** `stop_reason` values that mean the model finished its turn rather than
- *  pausing for a tool. This is the recorded evidence a terminal `turn_state`
- *  needs: the Ledger refuses a reconstructed terminal that no record
- *  corroborates (`runtime-ledger-repair.ts`), and rightly so — a transcript
- *  that was killed mid-answer must not import as one that completed. */
-const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens']);
+/** `stop_reason` values that mean the model finished what it was saying. This
+ *  is the recorded evidence a terminal `turn_state` needs: the Ledger refuses a
+ *  reconstructed terminal that no record corroborates
+ *  (`runtime-ledger-repair.ts`), and rightly so — a transcript killed
+ *  mid-answer must not import as one that completed.
+ *
+ *  `max_tokens` is deliberately absent. It does report that generation stopped,
+ *  but it stopped because the answer hit the output limit — the turn was cut
+ *  off mid-sentence, which is the opposite of completed. It is rare (1
+ *  occurrence across 1130 local transcripts) and imports with no terminal
+ *  state, the same as any other turn whose end nothing vouches for. */
+const TERMINAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 
 interface TurnAccumulator {
   turnId: string;
@@ -288,6 +294,11 @@ export function convertTranscript(
   let turn: TurnAccumulator | undefined;
   let sequence = 0;
   const id = (kind: string): string => `claude-code:${sessionId}:${kind}:${sequence++}`;
+  // Turn ids count separately from message ids. Sharing one counter made turn
+  // ids skip (`turn:0`, `turn:3`) for no reason, and left them one edit away
+  // from colliding with a message id if the emission order ever changed.
+  let turnSequence = 0;
+  const nextTurnId = (): string => `claude-code:${sessionId}:turn:${turnSequence++}`;
 
   const closeTurn = (): void => {
     if (!turn) return;
@@ -345,12 +356,18 @@ export function convertTranscript(
         // model's own tool output in the user's mouth.
         for (const block of toolResults) {
           if (!turn) continue;
+          const toolUseId = stringOf(block.tool_use_id);
+          // A result with no `tool_use_id` cannot be matched to its call.
+          // Minting one produces a result that is guaranteed not to pair with
+          // anything — a detached row in the transcript view, which is worse
+          // than the row being absent.
+          if (!toolUseId) continue;
           messages.push({
             type: 'tool_result',
             id: id('tool-result'),
             turnId: turn.turnId,
             ts,
-            toolUseId: stringOf(block.tool_use_id) ?? id('tool-use'),
+            toolUseId,
             isError: block.is_error === true,
             content: { kind: 'text', text: toolResultText(block.content) },
           });
@@ -376,7 +393,7 @@ export function convertTranscript(
 
       // A human-authored user record opens a new turn.
       closeTurn();
-      turn = { turnId: `claude-code:${sessionId}:turn:${sequence}`, lastTs: ts };
+      turn = { turnId: nextTurnId(), lastTs: ts };
       messages.push({ type: 'user', id: id('user'), turnId: turn.turnId, ts, text });
       continue;
     }
@@ -385,7 +402,7 @@ export function convertTranscript(
       if (!turn) {
         // A transcript can open with an assistant record when the session was
         // resumed. Give it a turn rather than dropping the content.
-        turn = { turnId: `claude-code:${sessionId}:turn:${sequence}`, lastTs: ts };
+        turn = { turnId: nextTurnId(), lastTs: ts };
       }
       if (record.isApiErrorMessage === true) turn.failed = true;
       const message = asMessageRecord(record);

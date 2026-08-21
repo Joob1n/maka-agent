@@ -104,6 +104,63 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
+  test('a turn cut off by max_tokens is not reported as completed', async () => {
+    // `max_tokens` does say generation stopped — because the answer hit the
+    // output limit mid-sentence. Treating "stopped" as "finished" is the
+    // specific mistake this adapter is built to avoid.
+    await withClaudeHome(async (home) => {
+      await seed(home, 'aaaaaaaa-0000-4000-8000-000000000011', [
+        userRecord('write the whole file'),
+        assistantRecord({ text: 'Here is the beg', stopReason: 'max_tokens' }),
+      ]);
+      const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000011');
+      assert.equal(terminalState(messages), undefined);
+    });
+  });
+
+  test('a tool result with no tool_use_id is dropped rather than left detached', async () => {
+    // Minting an id produces a result guaranteed not to pair with any call —
+    // a detached row in the transcript view, worse than an absent one.
+    await withClaudeHome(async (home) => {
+      await seed(home, 'aaaaaaaa-0000-4000-8000-000000000012', [
+        userRecord('read it'),
+        assistantRecord({ toolUse: { id: 'toolu_a', name: 'Read' }, stopReason: 'tool_use' }),
+        {
+          type: 'user',
+          timestamp: '2026-08-01T00:00:02.000Z',
+          message: { role: 'user', content: [{ type: 'tool_result', content: 'orphan' }] },
+        },
+        assistantRecord({ text: 'done', stopReason: 'end_turn' }),
+      ]);
+      const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000012');
+      assert.equal(messages.filter((m) => m.type === 'tool_result').length, 0);
+      // Every result that does survive must name a call that is present.
+      const callIds = new Set(messages.filter((m) => m.type === 'tool_call').map((m) => m.id));
+      for (const message of messages) {
+        if (message.type === 'tool_result') assert.ok(callIds.has(message.toolUseId));
+      }
+    });
+  });
+
+  test('turn ids are dense and never collide with message ids', async () => {
+    await withClaudeHome(async (home) => {
+      await seed(home, 'aaaaaaaa-0000-4000-8000-000000000013', [
+        userRecord('one'),
+        assistantRecord({ text: 'a', stopReason: 'end_turn' }),
+        userRecord('two'),
+        assistantRecord({ text: 'b', stopReason: 'end_turn' }),
+      ]);
+      const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000013');
+      const turnIds = [...new Set(messages.map((m) => m.turnId))];
+      assert.deepEqual(turnIds, [
+        'claude-code:aaaaaaaa-0000-4000-8000-000000000013:turn:0',
+        'claude-code:aaaaaaaa-0000-4000-8000-000000000013:turn:1',
+      ]);
+      const messageIds = new Set(messages.map((m) => m.id));
+      for (const turnId of turnIds) assert.equal(messageIds.has(turnId), false);
+    });
+  });
+
   test('a sidechain transcript is neither listed nor readable', async () => {
     // Sub-agent transcripts are whole files, so exclusion is per file.
     // Importing one would present a fragment of a conversation as a whole.
