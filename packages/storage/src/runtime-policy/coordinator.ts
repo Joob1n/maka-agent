@@ -383,6 +383,12 @@ export class RuntimePolicyCoordinator {
       const catalog = await this.catalog.read(root);
       const connection = findConnection(catalog, input.locator);
       if (!connection) return deepFreeze({ kind: 'superseded' as const });
+      // Refreshing a token is a write like any other, and this path validated
+      // only the auth kind — so a retired provider whose contract still says
+      // `oauth_token` could have its credential rotated. No production caller
+      // reaches it today (execution resolution refuses first), which is
+      // exactly why it would have stayed open.
+      assertConnectionIsWritable(connection);
       if (PROVIDER_DEFAULTS[connection.providerType].authKind !== 'oauth_token') {
         throw codecError(
           'invalid_credential_input',

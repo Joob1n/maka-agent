@@ -579,9 +579,17 @@ export class ConnectionCatalogDocumentOwner {
     root: string,
     current: ConnectionCatalogDocument,
   ): Promise<boolean> {
-    if (current.connections.every((connection) => connection.lastTest === undefined)) return false;
+    // A retired row is a tombstone: byte-stable until it is deleted. Global
+    // invalidation is the indirect way back in — a user editing the network
+    // proxy would otherwise bump its revision, which is enough to make a
+    // deletion they started elsewhere fail as stale. Its `lastTest` describes
+    // a provider that can no longer be tested anyway, so there is nothing to
+    // invalidate.
+    const invalidates = (connection: ConnectionCatalogEntry): boolean =>
+      connection.lastTest !== undefined && !isRetiredProvider(connection.providerType);
+    if (!current.connections.some(invalidates)) return false;
     const connections = current.connections.map((connection) => {
-      if (connection.lastTest === undefined) return connection;
+      if (!invalidates(connection)) return connection;
       const { lastTest: _lastTest, ...withoutLastTest } = connection;
       return {
         ...withoutLastTest,

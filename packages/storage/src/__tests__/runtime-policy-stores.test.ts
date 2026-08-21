@@ -710,6 +710,10 @@ describe('runtime policy stores', () => {
     stores: Awaited<ReturnType<typeof openInteractiveRuntimePolicyStoresForWrite>>,
     slug: string,
     connectionId: string,
+    // A retired row that was tested before its provider was retired is the
+    // case global invalidation reaches, so seeding one is how that path gets
+    // exercised at all.
+    lastTest?: { status: 'verified'; checkedAt: string },
   ): Promise<ConnectionCatalogEntry> {
     const path = join(root, 'connection-catalog.json');
     const document = existsSync(path)
@@ -733,6 +737,7 @@ describe('runtime policy stores', () => {
       enabled: true,
       enabledModelIds: ['claude-opus-5'],
       models: [],
+      ...(lastTest ? { lastTest } : {}),
     });
     await writeFile(path, `${JSON.stringify(document)}\n`, 'utf8');
     const snapshot = await stores.connectionCatalog.getSnapshot();
@@ -773,6 +778,128 @@ describe('runtime policy stores', () => {
         }),
         { kind: 'invalid_default_target', target },
       );
+    });
+  });
+
+  test('an OAuth refresh cannot rotate a retained retired credential', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      // The credential this retirement deliberately keeps was written before
+      // the provider was retired, so it is seeded the same way the row is.
+      // `compareAndSetOAuthCredential` validated only the auth kind, which a
+      // retired provider still declares — so a refresh committed and advanced
+      // the credential revision. No production caller reaches it today, since
+      // execution resolution refuses first; that is precisely why it would
+      // have stayed open.
+      const retired = await seedRetiredConnection(
+        root,
+        stores,
+        'refresh-claude',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      );
+      const locator = {
+        scope: 'connection' as const,
+        connectionId: retired.connectionId,
+        kind: 'oauth_token' as const,
+      };
+      const vaultPath = join(root, 'credential-vault.json');
+      await writeFile(
+        vaultPath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          revision: 1,
+          entries: [
+            {
+              locator,
+              credentialId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              revision: 1,
+              secret: JSON.stringify({
+                access_token: 'legacy',
+                expires_at: Number.MAX_SAFE_INTEGER,
+              }),
+              updatedAt: 1,
+            },
+          ],
+        })}\n`,
+        'utf8',
+      );
+      const seeded = await getCredentialStatus(stores.credentialVault, locator);
+      assert.equal(credentialBasis(seeded).revision, 1);
+
+      await assert.rejects(
+        () =>
+          stores.operations.compareAndSetOAuthCredential({
+            locator,
+            expected: credentialExpectation(seeded),
+            secret: JSON.stringify({
+              access_token: 'rotated',
+              expires_at: Number.MAX_SAFE_INTEGER,
+            }),
+          }),
+        isStoreError('invalid_connection_input'),
+      );
+
+      // The credential is unchanged, which is what keeps it deletable as the
+      // thing the user came to remove rather than something Maka rewrote.
+      const after = await getCredentialStatus(stores.credentialVault, locator);
+      assert.equal(credentialBasis(after).revision, 1);
+    });
+  });
+
+  test('a global proxy change leaves a retained retired row byte-stable', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      // Refusing direct writes was not enough: an indirect one reached the
+      // tombstone. Editing the network proxy invalidates every tested
+      // connection's verification, which bumped the retired row's revision
+      // too — enough to make a deletion started elsewhere fail as stale, from
+      // a global setting that has nothing to do with this connection. Its
+      // `lastTest` describes a provider that can no longer be tested, so there
+      // is nothing there to invalidate either.
+      const live = await createConnection(
+        stores,
+        0,
+        connectionDraft('proxy-live', 'openai', 'Proxy Live'),
+      );
+      const retired = await seedRetiredConnection(
+        root,
+        stores,
+        'proxy-claude',
+        '99999999-9999-4999-8999-999999999999',
+        { status: 'verified', checkedAt: '2026-08-01T00:00:00.000Z' },
+      );
+      assert.ok(retired.lastTest, 'the seeded retired row must carry a verification to invalidate');
+
+      await stores.credentialVault.set({
+        locator: connectionCredential(live, 'api_key'),
+        expected: null,
+        secret: 'live-key',
+      });
+      const ticket = await stores.operations.beginConnectionTest(live.connectionId, 'gpt-5');
+      assert.equal(ticket.kind, 'ready');
+      if (ticket.kind !== 'ready') return;
+      await stores.operations.completeConnectionTest(ticket.ticket, {
+        status: 'verified',
+        checkedAt: '2026-08-02T00:00:00.000Z',
+      });
+      const before = await stores.connectionCatalog.getSnapshot();
+      const liveBefore = before.connections.find((item) => item.slug === 'proxy-live');
+      assert.ok(liveBefore?.lastTest, 'the live row must be verified before the proxy change');
+
+      const policy = await stores.runtimePolicy.getSnapshot();
+      const proxied = await stores.runtimePolicy.mutate(
+        networkProxyMutation(policy.revision, { host: 'proxy.example' }),
+      );
+      assert.equal(proxied.kind, 'committed');
+
+      const after = await stores.connectionCatalog.getSnapshot();
+      const retiredAfter = after.connections.find((item) => item.slug === 'proxy-claude');
+      const liveAfter = after.connections.find((item) => item.slug === 'proxy-live');
+      // The live row is invalidated — without this the test would pass by the
+      // invalidation doing nothing at all.
+      assert.equal(liveAfter?.lastTest, undefined);
+      assert.equal(liveAfter?.revision, (liveBefore?.revision ?? 0) + 1);
+      // The tombstone is untouched, revision included.
+      assert.deepEqual(retiredAfter?.lastTest, retired.lastTest);
+      assert.equal(retiredAfter?.revision, retired.revision);
     });
   });
 
