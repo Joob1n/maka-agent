@@ -845,6 +845,106 @@ describe('runtime policy stores', () => {
     });
   });
 
+  test('deleting a retained retired credential leaves its row byte-stable', async () => {
+    await withInteractiveOwner(async ({ root, stores }) => {
+      // Deleting the credential is the one write a tombstone must still accept
+      // — it is how a user removes the retained token. The deletion itself was
+      // never the problem: it invalidated the row's verification on the way
+      // out, bumping the revision of a row nothing may rewrite. The global
+      // sweep was taught to skip retired rows; this single-connection path is
+      // the same invariant reached one connection at a time.
+      const retired = await seedRetiredConnection(
+        root,
+        stores,
+        'delete-claude',
+        '88888888-8888-4888-8888-888888888888',
+        { status: 'verified', checkedAt: '2026-08-01T00:00:00.000Z' },
+      );
+      assert.ok(retired.lastTest, 'the seeded retired row must carry a verification');
+
+      // Seeded the same way the row is: a retired connection's credential
+      // cannot be written through the API that now refuses it.
+      const locator = {
+        scope: 'connection' as const,
+        connectionId: retired.connectionId,
+        kind: 'oauth_token' as const,
+      };
+      await writeFile(
+        join(root, 'credential-vault.json'),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          revision: 1,
+          entries: [
+            {
+              locator,
+              credentialId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+              revision: 1,
+              secret: JSON.stringify({
+                access_token: 'legacy',
+                expires_at: Number.MAX_SAFE_INTEGER,
+              }),
+              updatedAt: 1,
+            },
+          ],
+        })}\n`,
+        'utf8',
+      );
+      const seeded = await getCredentialStatus(stores.credentialVault, locator);
+      assert.equal(credentialBasis(seeded).revision, 1);
+
+      const deleted = await stores.credentialVault.delete({
+        expected: credentialBasis(seeded),
+      });
+      assert.equal(deleted.kind, 'committed');
+
+      const after = await stores.connectionCatalog.getSnapshot();
+      const row = after.connections.find((item) => item.slug === 'delete-claude');
+      // The credential is gone and the row is exactly as it was — same
+      // revision, same verification. A concurrent deletion of the row itself
+      // must not have been made stale by removing its credential.
+      assert.equal(row?.revision, retired.revision);
+      assert.deepEqual(row?.lastTest, retired.lastTest);
+
+      // Control: the same deletion against a live connection must still
+      // invalidate it. Without this the test would pass just as well if the
+      // guard stopped every invalidation rather than only the retired one.
+      const live = await createConnection(
+        stores,
+        after.revision,
+        connectionDraft('delete-live', 'openai', 'Delete Live'),
+      );
+      const liveLocator = connectionCredential(live, 'api_key');
+      await stores.credentialVault.set({
+        locator: liveLocator,
+        expected: null,
+        secret: 'live-key',
+      });
+      const ticket = await stores.operations.beginConnectionTest(live.connectionId, 'gpt-5');
+      assert.equal(ticket.kind, 'ready');
+      if (ticket.kind !== 'ready') return;
+      await stores.operations.completeConnectionTest(ticket.ticket, {
+        status: 'verified',
+        checkedAt: '2026-08-03T00:00:00.000Z',
+      });
+      const liveBefore = (await stores.connectionCatalog.getSnapshot()).connections.find(
+        (item) => item.slug === 'delete-live',
+      );
+      assert.ok(liveBefore?.lastTest, 'the live row must be verified before its credential goes');
+
+      const liveStatus = await getCredentialStatus(stores.credentialVault, liveLocator);
+      const liveDeleted = await stores.credentialVault.delete({
+        expected: credentialBasis(liveStatus),
+      });
+      assert.equal(liveDeleted.kind, 'committed');
+
+      const liveAfter = (await stores.connectionCatalog.getSnapshot()).connections.find(
+        (item) => item.slug === 'delete-live',
+      );
+      assert.equal(liveAfter?.lastTest, undefined);
+      assert.equal(liveAfter?.revision, liveBefore.revision + 1);
+    });
+  });
+
   test('a global proxy change leaves a retained retired row byte-stable', async () => {
     await withInteractiveOwner(async ({ root, stores }) => {
       // Refusing direct writes was not enough: an indirect one reached the

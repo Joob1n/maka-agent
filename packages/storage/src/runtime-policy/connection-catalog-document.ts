@@ -566,7 +566,14 @@ export class ConnectionCatalogDocumentOwner {
     if (!previous) {
       throw codecError('invalid_document', 'Coordinator admitted an unknown connection');
     }
-    if (previous.lastTest === undefined) return false;
+    // Same tombstone rule the global sweep follows, reached one connection at
+    // a time: deleting a retained retired credential is a write the row must
+    // still accept, and invalidating its verification on the way out would
+    // bump the revision of a row nothing may rewrite — enough to make a
+    // deletion started elsewhere fail as stale. Its `lastTest` describes a
+    // provider that can no longer be tested, so there is nothing to
+    // invalidate.
+    if (previous.lastTest === undefined || isRetiredProvider(previous.providerType)) return false;
     const { lastTest: _lastTest, ...withoutLastTest } = previous;
     await this.writePatchedResult(root, current, index, {
       ...withoutLastTest,
