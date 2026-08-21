@@ -28,7 +28,14 @@ const meta = {
 export default meta;
 
 type Story = StoryObj<typeof meta>;
-type AutoOpenTarget = 'detail' | 'detail-static' | 'add' | 'catalog' | 'oauth' | 'xai-device';
+type AutoOpenTarget =
+  | 'detail'
+  | 'detail-static'
+  | 'detail-relay'
+  | 'add'
+  | 'catalog'
+  | 'oauth'
+  | 'xai-device';
 
 function makeConnection(input: {
   slug: string;
@@ -117,6 +124,34 @@ const staticCatalogConnections = [
     }),
     enabledModelIds: ['doubao-seed-2.1-turbo', 'deepseek-v4-pro-beta'],
     relayModelProfiles: { 'deepseek-v4-pro-beta': { contextWindow: 262_144 } },
+  },
+];
+
+// A custom relay fronting one model family. Capability declarations are a
+// relay-only surface — a built-in provider's thinking support comes from
+// bundled metadata — and the family shares one `reasoning_effort` vocabulary,
+// which is the case the bulk control exists for. `deepseek-r2` already
+// declares two levels so the story shows partial coverage, not just the
+// all-or-nothing ends.
+const relayConnections = [
+  {
+    ...makeConnection({
+      slug: 'relay-house',
+      name: 'House Relay',
+      providerType: 'openai-compatible',
+      baseUrl: 'https://relay.example.com/v1',
+      defaultModel: 'deepseek-r2',
+      lastTestStatus: 'verified',
+      models: [
+        { id: 'deepseek-r2' },
+        { id: 'deepseek-v4' },
+        { id: 'qwen3-max-thinking' },
+        { id: 'kimi-k2.6' },
+      ],
+      modelSource: 'fetched',
+    }),
+    enabledModelIds: ['deepseek-r2', 'deepseek-v4', 'qwen3-max-thinking', 'kimi-k2.6'],
+    relayModelProfiles: { 'deepseek-r2': { thinkingLevels: ['low', 'high'] as const } },
   },
 ];
 
@@ -371,10 +406,11 @@ function reachCatalog(root: HTMLElement): HTMLElement | null {
 }
 
 function clickAutoOpenTarget(root: HTMLElement, target: AutoOpenTarget): boolean {
-  if (target === 'detail' || target === 'detail-static') {
+  if (target === 'detail' || target === 'detail-static' || target === 'detail-relay') {
     // ListItem's clickable surface is an invisible button inside the row, so
     // the row is located by its slug hook and the button taken from within it.
-    const slug = target === 'detail' ? 'zai-live' : 'ark-plan';
+    const slug =
+      target === 'detail' ? 'zai-live' : target === 'detail-static' ? 'ark-plan' : 'relay-house';
     const row = root.querySelector<HTMLElement>(`[data-connection-slug="${slug}"]`);
     const detailButton = row?.querySelector('button') ?? null;
     detailButton?.click();
@@ -448,6 +484,19 @@ export const StaticCatalogConnectionDetail: Story = {
     <ProviderStory
       bridge={createBridge({ connections: staticCatalogConnections, defaultSlug: 'ark-plan' })}
       autoOpen="detail-static"
+    />
+  ),
+};
+
+// Real path: 设置 → 模型 → click a custom relay — the capability section with
+// several enabled models, where 批量设置思考档位 sits above the per-model rows it
+// writes into. Opening its menu shows each level's coverage across the table:
+// `low` and `high` on 1 of 4, everything else on none.
+export const RelayConnectionDetail: Story = {
+  render: () => (
+    <ProviderStory
+      bridge={createBridge({ connections: relayConnections, defaultSlug: 'relay-house' })}
+      autoOpen="detail-relay"
     />
   ),
 };

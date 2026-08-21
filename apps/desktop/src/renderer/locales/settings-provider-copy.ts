@@ -15,6 +15,11 @@ const zhCapabilitiesCopy = {
   thinkingEffortHelp: '勾选需要的思考强度档位，不勾选即为不声明。',
   thinkingUndeclared: '未声明',
   thinkingSelectedCount: (count: number) => `已选择 ${count} 个`,
+  thinkingBulk: '批量设置思考档位',
+  thinkingBulkHelp: '勾选写入下方全部已启用模型，取消勾选则从全部模型移除；其余档位不受影响。',
+  thinkingBulkTrigger: '应用到全部模型',
+  thinkingBulkCoverage: (declared: number, total: number) =>
+    declared === 0 ? '全部未声明' : `${declared}/${total} 个模型`,
   visionInput: '视觉输入（vision）',
   visionInputHelp: '「自动」跟随内置元数据；「启用/禁用」是显式声明，覆盖自动判断。',
   visionAuto: '自动',
@@ -34,6 +39,12 @@ const enCapabilitiesCopy = {
   thinkingEffortHelp: 'Tick the thinking levels this model supports; none ticked means undeclared.',
   thinkingUndeclared: 'Undeclared',
   thinkingSelectedCount: (count: number) => `${count} selected`,
+  thinkingBulk: 'Set thinking levels for all models',
+  thinkingBulkHelp:
+    'Ticking adds the level to every enabled model below; unticking removes it from all of them. Other levels are left alone.',
+  thinkingBulkTrigger: 'Apply to all models',
+  thinkingBulkCoverage: (declared: number, total: number) =>
+    declared === 0 ? 'On no model' : `On ${declared} of ${total} models`,
   visionInput: 'Vision input',
   visionInputHelp: 'Auto follows built-in metadata; Enabled/Disabled overrides it explicitly.',
   visionAuto: 'Auto',
