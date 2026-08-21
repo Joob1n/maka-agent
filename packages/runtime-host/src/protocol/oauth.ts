@@ -207,10 +207,3 @@ function oauthLoginFailure(value: unknown): OAuthLoginFailureCode {
   }
   return value as OAuthLoginFailureCode;
 }
-
-function safeInteger(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw invalidProtocolFrame(`Invalid ${label}`);
-  }
-  return value as number;
-}

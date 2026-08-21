@@ -7,6 +7,7 @@ import {
   decodeOAuthLoginProjection,
   decodeOAuthPresentationRequest,
   decodeOAuthPresentationResult,
+  type OAuthPresentationMethod,
 } from '../protocol/index.js';
 
 test('OAuth login protocol binds attempt identity and closes terminal projections', () => {
@@ -97,11 +98,13 @@ test('OAuth presentation keeps one closed request and result contract', () => {
   assert.deepEqual(decodeOAuthPresentationResult('open_external', { kind: 'presented' }), {
     kind: 'presented',
   });
-  // The paste-code presentation is gone from the wire, so a peer still
-  // offering it is refused rather than decoded into a method nothing serves.
+  // A peer on an older epoch still offers the removed method. The cast models
+  // that value arriving off the wire; the type no longer admits it, and the
+  // decoder must refuse it rather than serve a method nothing implements.
+  const retiredMethod = 'request_authorization_code' as unknown as OAuthPresentationMethod;
   assert.throws(
     () =>
-      decodeOAuthPresentationRequest('request_authorization_code' as 'open_external', {
+      decodeOAuthPresentationRequest(retiredMethod, {
         url: 'https://auth.example/authorize',
         stateHint: 'ABCD-1234',
       }),
@@ -109,7 +112,7 @@ test('OAuth presentation keeps one closed request and result contract', () => {
   );
   assert.throws(
     () =>
-      decodeOAuthPresentationResult('request_authorization_code' as 'open_external', {
+      decodeOAuthPresentationResult(retiredMethod, {
         kind: 'authorization_code',
         authorizationCode: 'code#state',
       }),

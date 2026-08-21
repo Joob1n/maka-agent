@@ -54,13 +54,13 @@ export const OAUTH_PROVIDER_CONTRACTS = {
   },
   'xai-oauth': {
     clientId: 'b1a00492-073a-47ea-816f-4c329264a828',
-    authorizationEndpoint: 'https://auth.x.ai/oauth2/authorize',
+    // xAI device-code flow: request a user code at `deviceEndpoint`, then
+    // exchange it at `tokenEndpoint` under `deviceGrant`. The loopback
+    // authorize endpoint, its 127.0.0.1 redirect, and the PKCE extras left
+    // with the paste-code presentation that was the only caller.
     deviceEndpoint: 'https://auth.x.ai/oauth2/device/code',
     tokenEndpoint: 'https://auth.x.ai/oauth2/token',
-    redirectUri: 'http://127.0.0.1:56121/callback',
     scope: 'openid profile email offline_access grok-cli:access api:access',
-    presentation: 'loopback',
-    authorizationExtras: [['plan', 'generic']] as ReadonlyArray<readonly [string, string]>,
     deviceGrant: 'urn:ietf:params:oauth:grant-type:device_code',
     defaultTokenLifetimeSeconds: 3_600,
   },

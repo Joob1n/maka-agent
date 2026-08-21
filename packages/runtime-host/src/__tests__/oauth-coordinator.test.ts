@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ConnectionCatalogEntry } from '@maka/core/runtime-policy';
 import { OAuthDeviceAuthorizationExpiredError } from '@maka/runtime/oauth-provider-contracts';
-import { OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
 import {
   parseOAuthSubscriptionTokens,
   type OAuthSubscriptionTokens,
@@ -20,7 +19,6 @@ import {
   OAUTH_PRESENTATION_SERVICE_VERSION,
   type ClientCapabilityServiceCallFrame,
   type OAuthLoginProjection,
-  type OAuthPresentationRequest,
 } from '../protocol/index.js';
 import { HostClientCapabilityCoordinator } from '../server/client-capability-coordinator.js';
 import { HostOAuthCoordinator } from '../server/oauth-coordinator.js';

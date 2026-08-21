@@ -21,10 +21,7 @@ test('presents the Host OAuth handoff without exposing the authorization URL', a
     'DEVICE-CODE',
     new AbortController().signal,
   );
-  assert.deepEqual(await external.presented, {
-    method: 'open_external',
-    stateHint: 'DEVICE-CODE',
-  });
+  assert.deepEqual(await external.presented, { stateHint: 'DEVICE-CODE' });
 
   assert.deepEqual(opened, ['https://auth.example/device']);
 });

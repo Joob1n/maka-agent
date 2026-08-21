@@ -12,7 +12,6 @@ import {
 export { OAuthTokenEndpointError } from './oauth-provider-contracts.js';
 export type { OAuthTokenEndpointErrorCategory } from './oauth-provider-contracts.js';
 
-export type OAuthLoginProvider = 'xai-oauth';
 export type OAuthInitialTokenProvider = 'xai-oauth' | 'openai-codex';
 
 export const OAUTH_LOGIN_MAX_RESPONSE_BYTES = 64 * 1024;
@@ -115,12 +114,6 @@ export function decodeOAuthInitialTokenPayload(
     ...(tokenType !== undefined ? { token_type: tokenType } : {}),
     ...(scope !== undefined ? { scope } : {}),
   };
-}
-
-function assertOpaqueValue(_name: string, value: string, maxChars: number): void {
-  if (typeof value !== 'string' || value.length === 0 || value.length > maxChars) {
-    throw new OAuthTokenEndpointError('invalid_response');
-  }
 }
 
 function assertTokenEndpointTimeout(timeoutMs: number): void {

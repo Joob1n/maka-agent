@@ -69,8 +69,8 @@ test('OAuth enrollment presents only on the initiating Client over the real endp
           acquireResidency: () => context.acquireResidency('oauth'),
           invalidateBackends: async () => undefined,
           onFatal: () => context.requestDrain(),
-          // Codex enrolls through device authorization, which presents via
-          // `openExternal` rather than the retired paste-code prompt.
+          // Codex enrolls through device authorization, presented via
+          // `openExternal`.
           startCodexAuthorization: async () => ({
             deviceAuthId: 'uds-deviceauth',
             userCode: 'UDS-CODE',

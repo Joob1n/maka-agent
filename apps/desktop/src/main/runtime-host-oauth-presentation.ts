@@ -3,7 +3,6 @@ import type { OAuthPresentationBackend } from '@maka/runtime-host/client';
 const PRESENTATION_TIMEOUT_MS = 30_000;
 
 export interface OAuthExternalPresentation {
-  readonly method: 'open_external';
   readonly stateHint: string;
 }
 
@@ -72,7 +71,7 @@ export class RuntimeHostOAuthPresentation implements OAuthPresentationBackend {
     try {
       await this.openSystemBrowser(url);
       signal.throwIfAborted();
-      pending.resolve({ method: 'open_external', stateHint });
+      pending.resolve({ stateHint });
     } catch (error) {
       pending.reject(error);
       throw error;

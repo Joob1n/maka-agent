@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { OAuthTokenEndpointError } from '@maka/runtime/oauth-login';
 import { createProxiedFetchTransport } from '@maka/runtime/network/scoped-fetch-transport';
 import {
@@ -529,10 +528,6 @@ function loginFailureCode(error: unknown): OAuthLoginFailureCode {
       : 'authorization_failed';
   }
   return 'internal_failure';
-}
-
-function randomOpaqueValue(): string {
-  return randomBytes(32).toString('base64url');
 }
 
 function isCommitOutcomeUnknown(error: unknown): error is RuntimePolicyStoreError {
