@@ -187,25 +187,27 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
-  test('one response split across records emits its prose once and keeps calls in place', async () => {
-    // The real shape, measured 374 times across 30 local transcripts: text and
-    // a first tool_use, then the result of that call, then a second tool_use
-    // carrying the same `message.id`. The second call was issued after the
-    // result, so folding it back to the first record's position would invert
-    // cause and effect.
+  test('one response is assembled from every fragment, calls before their results', async () => {
+    // The real shape, measured across 1130 local transcripts: a response is
+    // written as several records sharing `message.id`, the pieces separated by
+    // the results of calls the earlier pieces made. In 4093 of 14095
+    // responses the visible text is NOT in the first fragment — so a guard
+    // that emits prose at the first record and suppresses it afterwards drops
+    // the reply.
+    //
+    // Both calls share one `message.id`, so they came from one API response
+    // and were issued together however the log interleaved them with the
+    // results arriving: they are one assistant step, and both precede both
+    // results.
     await withClaudeHome(async (home) => {
       const fragment = (blocks: Parameters<typeof assistantFragment>[1]) =>
         assistantFragment('msg_shared', blocks);
-      // Each fragment repeats the response's text, which is what a naive walk
-      // turns into three separate replies.
       await seed(home, 'aaaaaaaa-0000-4000-8000-000000000015', [
         userRecord('read both files'),
-        fragment([{ type: 'text', text: 'Reading them now.' }]),
-        fragment([
-          { type: 'text', text: 'Reading them now.' },
-          { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} },
-        ]),
+        fragment([{ type: 'thinking', thinking: 'Two files to read.' }]),
+        fragment([{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }]),
         toolResultRecord('toolu_1', 'first file'),
+        // The text arrives last, after a call and its result — the 4093 case.
         fragment([
           { type: 'text', text: 'Reading them now.' },
           { type: 'tool_use', id: 'toolu_2', name: 'Read', input: {} },
@@ -215,20 +217,25 @@ describe('ClaudeCodeSessionAdapter', () => {
       ]);
       const messages = await read(home, 'aaaaaaaa-0000-4000-8000-000000000015');
 
-      // The split response contributes one visible reply, not three.
-      const texts = messages.filter(
+      const assistants = messages.filter(
         (m): m is Extract<StoredMessage, { type: 'assistant' }> => m.type === 'assistant',
       );
+      // The reply survives even though no fragment before it carried text, and
+      // the response is still one reply rather than one per fragment.
       assert.deepEqual(
-        texts.map((m) => m.text),
+        assistants.filter((m) => m.text.length > 0).map((m) => m.text),
         ['Reading them now.', 'Both read.'],
       );
+      // The thinking from the first fragment belongs to the same response.
+      assert.deepEqual(
+        assistants.filter((m) => m.thinking).map((m) => m.thinking?.text),
+        ['Two files to read.'],
+      );
 
-      // Both calls survive, and each still precedes its own result.
       const order = messages
         .filter((m) => m.type === 'tool_call' || m.type === 'tool_result')
         .map((m) => (m.type === 'tool_call' ? `call:${m.id}` : `result:${m.toolUseId}`));
-      assert.deepEqual(order, ['call:toolu_1', 'result:toolu_1', 'call:toolu_2', 'result:toolu_2']);
+      assert.deepEqual(order, ['call:toolu_1', 'call:toolu_2', 'result:toolu_1', 'result:toolu_2']);
     });
   });
 

@@ -28,6 +28,10 @@ import type {
   ExternalSessionSummary,
 } from '@maka/core/external-session';
 import type { StoredMessage } from '@maka/core/session';
+import {
+  resolveTranscriptLineage,
+  type TranscriptRecord,
+} from './claude-code-transcript-lineage.js';
 
 export const CLAUDE_CODE_SESSION_ADAPTER_ID = 'claude-code';
 
@@ -46,8 +50,6 @@ export interface ClaudeCodeSessionAdapterOptions {
   claudeHome?: string;
   maxTranscriptBytes?: number;
 }
-
-type TranscriptRecord = Record<string, unknown>;
 
 interface ParsedTranscript {
   readonly records: readonly TranscriptRecord[];
@@ -312,50 +314,35 @@ interface TurnAccumulator {
 }
 
 /**
- * One semantic event per source record, before any of it becomes a message.
- *
- * A transcript is an append log, not a list of distinct events. Two shapes
- * break a naive one-line-one-message walk, and both occur in ordinary resume
- * and recovery histories:
- *
- * - **A record can be written twice.** Replaying it emits the prompt, turn, or
- *   tool identity twice. Measured: 3 repeats across 1130 local transcripts —
- *   rare, and unrecoverable once persisted as canonical history.
- * - **One assistant response is split across records sharing `message.id`,
- *   and the pieces can be separated by the `tool_result` of a call the earlier
- *   piece made.** Measured: 374 occurrences across 30 transcripts. Emitting
- *   each piece as its own assistant message turned one reply into four.
- *
- * Folding must not flatten the second shape into its first record's position:
- * a later `tool_use` sharing that id was issued *after* the result in between,
- * and moving it earlier would invert cause and effect. So the visible prose of
- * a response is emitted once, at its first appearance, while each tool call
- * stays where the log put it. Verified against the corpus: `text` and
- * `thinking` each appear at most once per `message.id`, so emitting them once
- * loses nothing.
+ * Which records are the conversation, decided before any of them becomes a
+ * message. See `claude-code-transcript-lineage` for what the transcript's own
+ * fields say about rewind branches, compaction boundaries, and fragmented
+ * responses; this file only converts what that returns.
  */
-function normalizeRecords(records: readonly TranscriptRecord[]): readonly TranscriptRecord[] {
-  const seenUuids = new Set<string>();
-  const normalized: TranscriptRecord[] = [];
-  for (const record of records) {
-    const uuid = typeof record.uuid === 'string' ? record.uuid : undefined;
-    if (uuid) {
-      if (seenUuids.has(uuid)) continue;
-      seenUuids.add(uuid);
-    }
-    normalized.push(record);
-  }
-  return normalized;
-}
-
 export function convertTranscript(
   sessionId: string,
   rawRecords: readonly TranscriptRecord[],
 ): readonly StoredMessage[] {
-  const records = normalizeRecords(rawRecords);
-  // Prose already emitted for an assistant response, keyed by `message.id`.
-  const emittedProse = new Set<string>();
+  const records = resolveTranscriptLineage(rawRecords).records;
+  // Every fragment of one assistant response, keyed by `message.id`. A
+  // response is emitted once, from all of its fragments, at the position of
+  // the first — so a later fragment's text is part of the reply rather than
+  // something the first fragment's absence of text can suppress.
+  const responseFragments = new Map<string, TranscriptRecord[]>();
+  for (const record of records) {
+    if (record.type !== 'assistant') continue;
+    const responseId = stringOf(asMessageRecord(record)?.id);
+    if (responseId === undefined) continue;
+    const existing = responseFragments.get(responseId);
+    if (existing) existing.push(record);
+    else responseFragments.set(responseId, [record]);
+  }
+  const emittedResponses = new Set<string>();
   const messages: StoredMessage[] = [];
+  // A boundary can precede the first turn — a transcript that opens straight
+  // after a compaction. A system note needs a turn to hang from, so the fact
+  // waits for one rather than being dropped for arriving early.
+  let pendingCompactBoundaryTs: number | undefined;
   let turn: TurnAccumulator | undefined;
   let sequence = 0;
   const id = (kind: string): string => `claude-code:${sessionId}:${kind}:${sequence++}`;
@@ -481,6 +468,16 @@ export function convertTranscript(
       // A human-authored user record opens a new turn.
       closeTurn();
       turn = { turnId: nextTurnId(), lastTs: ts };
+      if (pendingCompactBoundaryTs !== undefined) {
+        messages.push({
+          type: 'system_note',
+          id: id('compact'),
+          turnId: turn.turnId,
+          ts: pendingCompactBoundaryTs,
+          kind: 'context_compacted',
+        });
+        pendingCompactBoundaryTs = undefined;
+      }
       messages.push({ type: 'user', id: id('user'), turnId: turn.turnId, ts, text });
       continue;
     }
@@ -490,23 +487,53 @@ export function convertTranscript(
         // A transcript can open with an assistant record when the session was
         // resumed. Give it a turn rather than dropping the content.
         turn = { turnId: nextTurnId(), lastTs: ts };
+        if (pendingCompactBoundaryTs !== undefined) {
+          messages.push({
+            type: 'system_note',
+            id: id('compact'),
+            turnId: turn.turnId,
+            ts: pendingCompactBoundaryTs,
+            kind: 'context_compacted',
+          });
+          pendingCompactBoundaryTs = undefined;
+        }
       }
       if (record.isApiErrorMessage === true) turn.failed = true;
       const message = asMessageRecord(record);
+      const responseId = stringOf(message?.id);
+      // A response is emitted once, at its first fragment, assembled from all
+      // of them. A later fragment reached here is that same response still
+      // being written — its content is already in what was emitted, and
+      // emitting again would repeat the reply.
+      if (responseId !== undefined) {
+        if (emittedResponses.has(responseId)) continue;
+        emittedResponses.add(responseId);
+      }
+      // A fragment with no id stands alone; it is the only fragment of itself.
+      const fragments =
+        (responseId === undefined ? undefined : responseFragments.get(responseId)) ?? [record];
+
+      // Status evidence is read from every fragment, not just the first: the
+      // `stop_reason` lands on whichever fragment the response finished on.
+      for (const fragment of fragments) {
+        if (fragment.isApiErrorMessage === true) turn.failed = true;
+        const stop = stringOf(asMessageRecord(fragment)?.stop_reason);
+        if (stop && TERMINAL_STOP_REASONS.has(stop)) turn.terminalStop = stop;
+      }
+
       // The transcript names the model that produced each step. Carrying the
       // real value keeps an imported turn attributable; a placeholder would
       // put a model the user never ran onto their history.
       const modelId = stringOf(message?.model) ?? 'claude-code';
-      const stop = stringOf(message?.stop_reason);
-      if (stop && TERMINAL_STOP_REASONS.has(stop)) turn.terminalStop = stop;
 
-      // One response's prose belongs to the response, not to each record that
-      // carries part of it. A fragment with no id is its own response.
-      const responseId = stringOf(message?.id);
-      const proseAlreadyEmitted = responseId !== undefined && emittedProse.has(responseId);
-      if (responseId !== undefined) emittedProse.add(responseId);
-
-      const thinking = proseAlreadyEmitted ? '' : thinkingText(message);
+      // Concatenated in fragment order, which is the order the response was
+      // streamed. Joining rather than picking one: every delta is content the
+      // model produced, and choosing between them would be choosing which
+      // half of a reply to keep.
+      const thinking = fragments
+        .map((fragment) => thinkingText(asMessageRecord(fragment)))
+        .filter((part) => part.length > 0)
+        .join('\n\n');
       if (thinking) {
         messages.push({
           type: 'assistant',
@@ -519,7 +546,10 @@ export function convertTranscript(
           modelId,
         });
       }
-      const text = proseAlreadyEmitted ? undefined : claudeAssistantText(record);
+      const text = fragments
+        .map((fragment) => claudeAssistantText(fragment))
+        .filter((part): part is string => part !== undefined && part.length > 0)
+        .join('\n\n');
       if (text) {
         messages.push({
           type: 'assistant',
@@ -531,22 +561,44 @@ export function convertTranscript(
           modelId,
         });
       }
-      for (const block of toolUseBlocks(message)) {
-        messages.push({
-          type: 'tool_call',
-          // The id must equal the tool_use id so the result can match it.
-          id: stringOf(block.id) ?? id('tool-call'),
-          turnId: turn.turnId,
-          ts,
-          toolName: stringOf(block.name) ?? 'unknown',
-          args: block.input ?? {},
-        });
+      // Every call the response made, before any of their results. Calls
+      // sharing a `message.id` came from one API response, so they were
+      // issued together however the log interleaved them with the results
+      // arriving; a call written after its sibling's result did not follow it.
+      for (const fragment of fragments) {
+        for (const block of toolUseBlocks(asMessageRecord(fragment))) {
+          messages.push({
+            type: 'tool_call',
+            // The id must equal the tool_use id so the result can match it.
+            id: stringOf(block.id) ?? id('tool-call'),
+            turnId: turn.turnId,
+            ts,
+            toolName: stringOf(block.name) ?? 'unknown',
+            args: block.input ?? {},
+          });
+        }
       }
       continue;
     }
 
-    if (record.isCompactSummary === true) {
-      if (!turn) continue;
+    // The compaction boundary, keyed on the record that states it.
+    //
+    // It used to be keyed on `isCompactSummary`, which belongs to the summary
+    // *user* record — and that record is consumed by the `user` branch above
+    // and never reaches here, so the note was never emitted. The import then
+    // carried the pre-boundary history flat with nothing saying a compaction
+    // had happened, while `claudeUserAuthoredText` dropped the summary itself
+    // for being `isCompactSummary`: both halves of the event lost at once.
+    //
+    // Pre-boundary records stay. They are the conversation that actually
+    // happened — 24,695 of them across the 5 compacted transcripts here — and
+    // the boundary marks where the model's context restarted, which is the
+    // part a reader cannot reconstruct from the messages themselves.
+    if (record.subtype === 'compact_boundary') {
+      if (!turn) {
+        pendingCompactBoundaryTs = ts;
+        continue;
+      }
       messages.push({
         type: 'system_note',
         id: id('compact'),
