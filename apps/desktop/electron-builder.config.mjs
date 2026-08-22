@@ -11,6 +11,24 @@ const { runtimeHostSetupPackage } = resolveProductManifestIdentity({
   cliManifest: readManifest('../../packages/cli/package.json'),
 });
 
+// Git Credential Manager and the .NET runtime it needs are 223 files and
+// ~103 MiB of the bundled Git distribution, and Maka never runs them: every
+// git invocation sets `credential.helper=` explicitly
+// (`git-workspace-service.ts:1257`, `:2873`), so the helper is not merely
+// unused — it is switched off at the call site. Credentials live in Maka's
+// own `credentials.json` under the SECURITY.md permission contract.
+//
+// Excluded by name because the payload is interleaved with git's own commands
+// inside one flat `libexec/git-core` — there is no directory to drop. `.dll`
+// and `.dylib` appear nowhere else in the distribution, and every one of the
+// 16 dylibs is a .NET, Avalonia or Skia runtime library.
+const GIT_CREDENTIAL_MANAGER_EXCLUDES = [
+  '!libexec/git-core/*.dll',
+  '!libexec/git-core/*.dylib',
+  '!libexec/git-core/git-credential-manager*',
+  '!libexec/git-core/createdump',
+];
+
 export default {
   appId: 'com.maka.desktop',
   productName: 'Maka',
@@ -50,6 +68,7 @@ export default {
     {
       from: '../../node_modules/dugite/git',
       to: 'git',
+      filter: ['**/*', ...GIT_CREDENTIAL_MANAGER_EXCLUDES],
     },
     {
       from: 'bundled-git.json',

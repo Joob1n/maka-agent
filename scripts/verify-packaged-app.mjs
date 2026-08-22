@@ -705,6 +705,13 @@ export async function assertPackagedResources(
     requirePath,
     forbidPath = assertMissing,
     requireWindowsSandbox = process.platform === 'win32',
+    // The credential-manager exclusion is written against the POSIX Git
+    // distribution, whose commands sit in a flat `libexec/git-core`. The
+    // Windows distribution has a different layout (`git/cmd/git.exe`, and its
+    // own `.dll` set that git itself loads), so the exclusion does not apply
+    // there and neither does this assertion. Scoped rather than guessed:
+    // trimming Windows needs its own measurement first.
+    assertGitTree = process.platform !== 'win32',
     // The upgrade-lifecycle check runs this against a previously released
     // build, which predates the disclaimer being packaged. Requiring it there
     // would fail a release that was correct when it shipped.
@@ -759,9 +766,49 @@ export async function assertPackagedResources(
     // app, and `distributionReady` is false for exactly this reason.
     join('bin', 'maka-cu'),
     join('tools', 'maka-cu'),
+    // Git Credential Manager and its .NET runtime are excluded from the
+    // packaged Git distribution: Maka sets `credential.helper=` on every git
+    // invocation, so nothing can reach them. Naming the entry point rather
+    // than the runtime keeps this readable; `assertPackagedGitIsComplete`
+    // covers the rest by listing the directory.
+    ...(assertGitTree ? [join('git', 'libexec', 'git-core', 'git-credential-manager')] : []),
   ];
   for (const path of forbidden) {
     await forbidPath(join(resourcesPath, path));
+  }
+  if (assertGitTree) await assertPackagedGitIsComplete(resourcesPath, requirePath);
+}
+
+/**
+ * The credential-manager exclusion is a name filter over one flat directory
+ * that also holds git's own commands, so it can over-match — and a git that
+ * lost `git-remote-http` fails at clone time in a user's hands, not here.
+ *
+ * Both halves are asserted: the commands Maka actually invokes must be
+ * present, and nothing from the .NET runtime may be. Checking only the
+ * absence would pass just as well for an empty directory.
+ */
+async function assertPackagedGitIsComplete(resourcesPath, requirePath) {
+  const gitCore = join(resourcesPath, 'git', 'libexec', 'git-core');
+  // `git-workspace-service.ts` drives add / cat-file / commit / config /
+  // for-each-ref / init / rev-parse / status / worktree. Those are builtins
+  // reached through the `git` binary; what has to exist on disk is the
+  // binary itself plus the helpers git dispatches to as separate programs.
+  for (const name of ['git', 'git-remote-http', 'git-http-fetch', 'git-shell']) {
+    await requirePath(join(gitCore, name));
+  }
+  await requirePath(join(resourcesPath, 'git', 'bin', 'git'));
+  await requirePath(join(resourcesPath, 'git', 'share', 'git-core', 'templates'));
+
+  const entries = await readdir(gitCore, { withFileTypes: true });
+  const runtimeLeftovers = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => /\.(?:dll|dylib)$/u.test(name) || name.startsWith('git-credential-manager'));
+  if (runtimeLeftovers.length > 0) {
+    throw new Error(
+      `packaged git still carries the credential-manager runtime: ${runtimeLeftovers.join(', ')}`,
+    );
   }
 }
 
