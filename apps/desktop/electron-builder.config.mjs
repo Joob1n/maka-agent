@@ -22,11 +22,28 @@ const { runtimeHostSetupPackage } = resolveProductManifestIdentity({
 // inside one flat `libexec/git-core` — there is no directory to drop. `.dll`
 // and `.dylib` appear nowhere else in the distribution, and every one of the
 // 16 dylibs is a .NET, Avalonia or Skia runtime library.
+// `**/*` rather than `*`: the runtime is not flat. Alongside the assemblies at
+// the top level, GCM ships 13 localisation directories each holding one
+// `System.CommandLine.resources.dll`, and on Linux two native UI libraries
+// (`libSkiaSharp.so`, `libHarfBuzzSharp.so`). A top-level-only glob leaves all
+// of them behind — which it did, until a review caught it against a real
+// package.
+//
+// `.so` is listed for the Linux distribution, where GCM is self-contained and
+// its Skia/HarfBuzz libraries sit beside the binary. Git's own commands in
+// this directory are executables and shell scripts, never `.dll`/`.dylib`/
+// `.so`, so the extension globs cannot reach them.
 const GIT_CREDENTIAL_MANAGER_EXCLUDES = [
-  '!libexec/git-core/*.dll',
-  '!libexec/git-core/*.dylib',
+  '!libexec/git-core/**/*.dll',
+  '!libexec/git-core/**/*.dylib',
+  '!libexec/git-core/**/*.so',
   '!libexec/git-core/git-credential-manager*',
   '!libexec/git-core/createdump',
+  // GCM's own installation leftovers. `NOTICE` is its third-party attribution
+  // file, not git's — git's own notices live in `share/doc`, which this filter
+  // does not touch.
+  '!libexec/git-core/NOTICE',
+  '!libexec/git-core/uninstall.sh',
 ];
 
 export default {

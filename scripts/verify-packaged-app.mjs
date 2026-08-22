@@ -4,7 +4,7 @@ import { createReadStream, readFileSync } from 'node:fs';
 import { access, mkdir, readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { join, resolve, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import {
   ASSET_LICENSED_RENDERER_PACKAGES,
   collectProductionClosure,
@@ -800,16 +800,49 @@ async function assertPackagedGitIsComplete(resourcesPath, requirePath) {
   await requirePath(join(resourcesPath, 'git', 'bin', 'git'));
   await requirePath(join(resourcesPath, 'git', 'share', 'git-core', 'templates'));
 
-  const entries = await readdir(gitCore, { withFileTypes: true });
-  const runtimeLeftovers = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => entry.name)
-    .filter((name) => /\.(?:dll|dylib)$/u.test(name) || name.startsWith('git-credential-manager'));
+  // Recursive, because the runtime is not flat: GCM ships 13 localisation
+  // directories each holding one `System.CommandLine.resources.dll`, and on
+  // Linux two native UI libraries beside the binary. A top-level-only scan
+  // reported a clean tree while all of that was still packaged — which is
+  // exactly what it did until a review checked a real artifact.
+  const runtimeLeftovers = await findCredentialManagerLeftovers(gitCore, gitCore);
   if (runtimeLeftovers.length > 0) {
     throw new Error(
       `packaged git still carries the credential-manager runtime: ${runtimeLeftovers.join(', ')}`,
     );
   }
+}
+
+/**
+ * Every credential-manager artefact under one directory, as paths relative to
+ * the git-core root so the failure names where to look.
+ *
+ * Git's own commands here are executables and shell scripts, so matching on
+ * the .NET/native extensions cannot implicate them. `NOTICE` and
+ * `uninstall.sh` are GCM's installation leftovers, not git's — git keeps its
+ * notices in `share/doc`.
+ */
+async function findCredentialManagerLeftovers(directory, root) {
+  const leftovers = [];
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const absolute = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      leftovers.push(...(await findCredentialManagerLeftovers(absolute, root)));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const isRuntimeLibrary = /\.(?:dll|dylib|so)$/u.test(entry.name);
+    const isCredentialManager =
+      entry.name.startsWith('git-credential-manager') ||
+      entry.name === 'createdump' ||
+      entry.name === 'NOTICE' ||
+      entry.name === 'uninstall.sh';
+    if (isRuntimeLibrary || isCredentialManager) {
+      leftovers.push(relative(root, absolute));
+    }
+  }
+  return leftovers;
 }
 
 /**
