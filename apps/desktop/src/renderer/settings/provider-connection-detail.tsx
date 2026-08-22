@@ -614,6 +614,18 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
                            present as the same empty box. */
                         description={copy.thinkingBulkCoverage(state.declaredCount, state.total)}
                         aria-label={`${copy.thinkingBulk} ${state.level}`}
+                        /* The item's `description` is visible text only — the
+                           component does not wire it to `aria-describedby`,
+                           and this item's own `aria-label` replaces the name
+                           the description would otherwise have joined. Without
+                           this, "1/4 个模型" and "全部未声明" both reach a screen
+                           reader as an unchecked box with the same name, which
+                           is exactly the partial state the count exists to
+                           show. */
+                        aria-description={copy.thinkingBulkCoverage(
+                          state.declaredCount,
+                          state.total,
+                        )}
                         value={state.checked}
                         onChange={(checked) => {
                           setDraftThinkingLevelForAll(capabilityModelIds, state.level, checked);

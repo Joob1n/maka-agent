@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { expect, userEvent, within } from 'storybook/test';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core';
 import { ToastProvider } from '@maka/ui';
 import type {
@@ -499,6 +500,32 @@ export const RelayConnectionDetail: Story = {
       autoOpen="detail-relay"
     />
   ),
+  // Opens the batch menu and asserts that partial coverage reaches assistive
+  // technology, not only the eye. The item carries its own `aria-label`, which
+  // replaces the accessible name the visible description would otherwise have
+  // joined — and the menu item does not wire `description` to
+  // `aria-describedby`. Without an explicit description, "1/4 个模型" and
+  // "全部未声明" both reach a screen reader as an unchecked box with the same
+  // name, which is exactly the state the count exists to distinguish.
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const trigger = await body.findByRole('button', { name: /批量设置思考档位/ });
+    await userEvent.click(trigger);
+
+    // `low` is declared by one of the four models; `minimal` by none.
+    const partial = await body.findByRole('menuitemcheckbox', {
+      name: '批量设置思考档位 low',
+    });
+    const none = await body.findByRole('menuitemcheckbox', {
+      name: '批量设置思考档位 minimal',
+    });
+
+    // Both are unchecked — coverage is the only thing separating them.
+    await expect(partial).toHaveAttribute('aria-checked', 'false');
+    await expect(none).toHaveAttribute('aria-checked', 'false');
+    await expect(partial).toHaveAttribute('aria-description', '1/4 个模型');
+    await expect(none).toHaveAttribute('aria-description', '全部未声明');
+  },
 };
 
 // Real path: 设置 → 模型 → 添加连接 — level two, the provider catalog.
