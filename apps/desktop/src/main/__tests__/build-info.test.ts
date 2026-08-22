@@ -34,14 +34,42 @@ test('an ordinary clone resolves the commit through a ref', async () => {
   assert.deepEqual(resolveBuildInfo(false, root), { mode: 'dev', commit: SHA.slice(0, 7) });
 });
 
-test('a linked worktree resolves through its gitdir pointer', async () => {
-  // `.git` is a FILE here, holding `gitdir: <path>`. This is the case the
-  // resolver used to miss entirely.
+test('a linked worktree reads HEAD privately and the branch ref from commondir', async () => {
+  // The real layout, reproduced from `git worktree add`: `.git` is a FILE
+  // holding `gitdir: <admin dir>`; the admin directory holds this worktree's
+  // own HEAD plus a `commondir` pointer, and NOTHING under `refs/heads`. The
+  // branch ref lives in the common Git directory shared with the main
+  // checkout. A resolver that looks for the ref beside HEAD finds nothing.
   const root = await makeRoot();
-  const real = join(root, 'real-git-dir');
-  await seedGitDir(real, { head: 'ref: refs/heads/feature', refs: { 'refs/heads/feature': SHA } });
-  await writeFile(join(root, '.git'), `gitdir: ${real}\n`);
-  assert.deepEqual(resolveBuildInfo(false, root), { mode: 'dev', commit: SHA.slice(0, 7) });
+  const commonDir = join(root, 'main-repo', '.git');
+  const adminDir = join(commonDir, 'worktrees', 'linked');
+  await seedGitDir(commonDir, { head: 'ref: refs/heads/main', refs: { 'refs/heads/main': SHA } });
+  await mkdir(adminDir, { recursive: true });
+  await writeFile(join(adminDir, 'HEAD'), 'ref: refs/heads/feature\n');
+  await writeFile(join(adminDir, 'commondir'), '../..\n');
+  // The branch ref exists only in the common directory, as Git writes it.
+  await mkdir(join(commonDir, 'refs', 'heads'), { recursive: true });
+  await writeFile(join(commonDir, 'refs', 'heads', 'feature'), `${SHA}\n`);
+  const checkout = join(root, 'linked');
+  await mkdir(checkout, { recursive: true });
+  await writeFile(join(checkout, '.git'), `gitdir: ${adminDir}\n`);
+  assert.deepEqual(resolveBuildInfo(false, checkout), { mode: 'dev', commit: SHA.slice(0, 7) });
+});
+
+test('a worktree finds a packed branch ref in the common directory', async () => {
+  // Same split, but the ref is packed. `packed-refs` is shared too.
+  const root = await makeRoot();
+  const commonDir = join(root, 'main-repo', '.git');
+  const adminDir = join(commonDir, 'worktrees', 'linked');
+  await mkdir(commonDir, { recursive: true });
+  await writeFile(join(commonDir, 'packed-refs'), `# pack-refs with: peeled\n${SHA} refs/heads/feature\n`);
+  await mkdir(adminDir, { recursive: true });
+  await writeFile(join(adminDir, 'HEAD'), 'ref: refs/heads/feature\n');
+  await writeFile(join(adminDir, 'commondir'), '../..\n');
+  const checkout = join(root, 'linked');
+  await mkdir(checkout, { recursive: true });
+  await writeFile(join(checkout, '.git'), `gitdir: ${adminDir}\n`);
+  assert.deepEqual(resolveBuildInfo(false, checkout), { mode: 'dev', commit: SHA.slice(0, 7) });
 });
 
 test('a worktree pointer relative to the checkout resolves', async () => {

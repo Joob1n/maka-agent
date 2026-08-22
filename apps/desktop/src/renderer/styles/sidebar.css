@@ -168,9 +168,16 @@
 .maka-sidebar-footer-row-primary {
   /* `auto` rather than `1 1 0`: the settings row asks for the width its label
      needs and gives back the rest, so the stamp shrinks into what is left
-     instead of the label being clipped first. */
+     instead of the label being clipped first.
+
+     `min-content`, not `0`: with `min-width: 0` BOTH items are free to shrink,
+     so at the 180px minimum with an update reminder present the Settings label
+     could still pick up an ellipsis even though the stamp had room left to
+     give. Flooring this row at its content width makes the priority
+     deterministic — the stamp is the only thing that truncates. The stamp
+     keeps `min-width: 0`, so it can still yield all the way down. */
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: min-content;
 }
 
 /* Stacked, the row stretches its children to the rail's width so the settings
