@@ -555,11 +555,17 @@ async function readCodexThreadRows(
       if (!query.includeArchived && columns.has('archived')) {
         where.push('(archived IS NULL OR archived = 0)');
       }
-      if (query.cwd !== undefined && columns.has('cwd')) {
-        const variants = cwdSqlVariants(query.cwd);
-        where.push(`cwd IN (${variants.map(() => '?').join(', ')})`);
-        params.push(...variants);
-      }
+      // No cwd clause. `cwd IN (...)` enumerated spelling variants of the
+      // query, but SQLite compares them exactly: a row stored `C:\\Repo\\App`
+      // was discarded before `matchesQuery` could see that `c:/repo/app` names
+      // the same project. A prefilter that cannot express the matcher's own
+      // equivalence is not an optimization, it is a second, weaker rule — so
+      // the shared matcher below is the only authority on which project a row
+      // belongs to. The archived clause stays: that one is an exact boolean
+      // and agrees with the matcher by construction.
+      //
+      // The statement has no LIMIT, so dropping the clause widens the read
+      // rather than truncating it.
       const orderColumn = columns.has('updated_at_ms')
         ? 'updated_at_ms'
         : columns.has('updated_at')
@@ -734,25 +740,10 @@ function normalizeEpochMs(value: unknown): number | undefined {
   return undefined;
 }
 
-function normalizePath(value: string): string {
-  const normalized = value.replaceAll('\\', '/').replace(/\/+$/, '');
-  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
-}
-
-function cwdSqlVariants(cwd: string): string[] {
-  const normalized = normalizePath(cwd);
-  const variants = new Set([cwd, normalized]);
-  if (/^[A-Za-z]:\//.test(normalized)) variants.add(normalized.replaceAll('/', '\\'));
-  if (normalized !== '/') {
-    variants.add(`${normalized}/`);
-    if (/^[A-Za-z]:\//.test(normalized)) variants.add(`${normalized.replaceAll('/', '\\')}\\`);
-  }
-  return [...variants];
-}
-
 function matchesQuery(entry: ExternalSessionSummary, query: ExternalSessionQuery): boolean {
-  // Delegated so both sources answer a query identically; the local
-  // `normalizePath` below is still used for the SQL cwd variants.
+  // The single authority on whether a row answers a query, shared with every
+  // other adapter. The local path helpers this file used to keep were only
+  // reachable from the SQL prefilter that has been removed.
   return externalSessionMatchesQuery(entry, query);
 }
 

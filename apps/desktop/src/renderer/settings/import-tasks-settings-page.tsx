@@ -7,6 +7,7 @@ import { List, ListItem } from '@astryxdesign/core/List';
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
 import { TextInput } from '@astryxdesign/core/TextInput';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
+import { normalizeExternalSessionQueryText } from '@maka/core/external-session';
 import { uiLocaleToIntlLocale } from '@maka/core/ui-locale';
 import type {
   DesktopRuntimeHostRef,
@@ -466,6 +467,9 @@ export function ImportTasksSettingsPage(props: {
   const noSource = sourceResolved && !sourceLoading && !sourceError && adapterIds.length === 0;
   const catalogEmpty =
     adapterId !== null && !catalogLoading && !catalogError && catalog.sessions.length === 0;
+  // The shared normalizer decides what counts as a filter, so the empty-state
+  // copy and the matcher cannot disagree about a whitespace-only box.
+  const activeSearch = normalizeExternalSessionQueryText(search);
 
   if (sourceLoading) {
     return (
@@ -649,10 +653,18 @@ export function ImportTasksSettingsPage(props: {
               nothing in it. Reusing the "no conversations" copy would tell a
               user their transcripts are missing when the term is simply
               wrong, and hide the one control that would fix it. */}
-          {catalogEmpty && search !== '' && (
-            <EmptyState isCompact title={copy.searchLabel} description={copy.searchEmpty(search)} />
+          {/* Keyed on the normalized term, the same value the matcher uses.
+              Comparing the raw string would call a box holding only spaces an
+              active search and answer `No conversation has "   "` on a source
+              that is simply empty. */}
+          {catalogEmpty && activeSearch !== undefined && (
+            <EmptyState
+              isCompact
+              title={copy.searchLabel}
+              description={copy.searchEmpty(search.trim())}
+            />
           )}
-          {catalogEmpty && search === '' && (
+          {catalogEmpty && activeSearch === undefined && (
             <EmptyState isCompact title={copy.emptyTitle} description={copy.emptyDescription} />
           )}
 

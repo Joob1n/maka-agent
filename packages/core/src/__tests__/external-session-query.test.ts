@@ -55,6 +55,36 @@ describe('externalSessionMatchesQuery', () => {
     assert.equal(normalized?.length, EXTERNAL_SESSION_QUERY_TEXT_MAX_CHARS);
   });
 
+  test('a term pasted from a Windows path finds a forward-slash summary', () => {
+    // `sameExternalSessionPath` already calls these the same project. Before
+    // the shared normalizer, the text match disagreed with the cwd filter
+    // about the same two strings.
+    const win = summary({ cwd: 'C:/Repo/App' });
+    assert.equal(
+      externalSessionMatchesQuery(win, {
+        text: 'C:' + String.fromCharCode(92) + 'Repo' + String.fromCharCode(92) + 'App',
+      }),
+      true,
+    );
+    assert.equal(externalSessionMatchesQuery(win, { text: 'c:/repo/app' }), true);
+    // A summary recorded with backslashes is reachable from either spelling.
+    const stored = summary({
+      cwd: 'C:' + String.fromCharCode(92) + 'Repo' + String.fromCharCode(92) + 'App',
+    });
+    assert.equal(externalSessionMatchesQuery(stored, { text: 'C:/Repo/App' }), true);
+  });
+
+  test('composed and decomposed Unicode name the same conversation', () => {
+    // macOS records decomposed filenames, so the same visible title arrives
+    // in NFC or NFD depending on where it was typed.
+    const nfc = 'caf\u00e9-notes';
+    const nfd = 'cafe\u0301-notes';
+    assert.notEqual(nfc, nfd, 'fixture must actually differ by normalization form');
+    assert.equal(externalSessionMatchesQuery(summary({ name: nfc }), { text: nfd }), true);
+    assert.equal(externalSessionMatchesQuery(summary({ name: nfd }), { text: nfc }), true);
+    assert.equal(sameExternalSessionPath('/repo/' + nfc, '/repo/' + nfd), true);
+  });
+
   test('archived rows stay hidden unless asked for, term or no term', () => {
     const archived = summary({ archived: true });
     assert.equal(externalSessionMatchesQuery(archived, {}), false);

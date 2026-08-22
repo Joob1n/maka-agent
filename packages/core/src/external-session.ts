@@ -50,7 +50,36 @@ export function externalSessionMatchesQuery(
   // conversation they are looking for. Both already sit on the summary, so
   // matching costs no extra reads. Message content is deliberately excluded:
   // it would mean opening every transcript on every keystroke.
-  return summary.name.toLowerCase().includes(text) || summary.cwd.toLowerCase().includes(text);
+  //
+  // Candidate and term pass through the same normalizer. Without it a term
+  // pasted from a Windows path missed a stored forward-slash path that
+  // `sameExternalSessionPath` already calls the same project, and a title
+  // typed in NFC missed one macOS recorded in NFD.
+  return (
+    normalizeExternalSessionMatchText(summary.name).includes(text) ||
+    normalizeExternalSessionMatchText(summary.cwd).includes(text)
+  );
+}
+
+/**
+ * The comparable form of one side of a text match.
+ *
+ * Three normalizations, each for a difference that is not a difference to the
+ * person searching:
+ *
+ * - **NFC** — macOS records decomposed filenames, so the same visible name can
+ *   arrive composed or decomposed depending on where it was typed.
+ * - **case** — nobody searching for a project remembers its capitalisation.
+ * - **separators** — a term pasted from a Windows path should still find the
+ *   project the summary stored with forward slashes, matching the equivalence
+ *   `sameExternalSessionPath` already applies to the `cwd` filter.
+ *
+ * Applied to the title as well as the path. A title rarely holds a separator,
+ * but running one normalizer over both is what keeps this a single authority
+ * rather than two rules free to drift.
+ */
+function normalizeExternalSessionMatchText(value: string): string {
+  return value.normalize('NFC').toLowerCase().split(String.fromCharCode(92)).join('/');
 }
 
 /**
@@ -61,7 +90,7 @@ export function externalSessionMatchesQuery(
 export function normalizeExternalSessionQueryText(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim().slice(0, EXTERNAL_SESSION_QUERY_TEXT_MAX_CHARS);
-  return trimmed.length > 0 ? trimmed.toLowerCase() : undefined;
+  return trimmed.length > 0 ? normalizeExternalSessionMatchText(trimmed) : undefined;
 }
 
 /**
@@ -77,7 +106,7 @@ export function sameExternalSessionPath(left: string, right: string): boolean {
 }
 
 function normalizeExternalSessionPath(value: string): string {
-  const normalized = value.replaceAll('\\', '/').replace(/\/+$/u, '');
+  const normalized = value.normalize('NFC').replaceAll('\\', '/').replace(/\/+$/u, '');
   return /^[A-Za-z]:\//u.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 

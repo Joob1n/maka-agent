@@ -109,6 +109,45 @@ describe('CodexSessionAdapter', () => {
     });
   });
 
+  test('a Windows path spelling reaches the matcher instead of being lost in SQL', async () => {
+    // The SQL used to prefilter with `cwd IN (<spelling variants>)`, and
+    // SQLite compares those exactly — a row stored `C:\\Repo\\App` was
+    // discarded before the shared matcher could see that `c:/repo/app` names
+    // the same project. This drives the real state-database path, not the
+    // matcher in isolation, because that is where the row was being dropped.
+    await withCodexHome(async (codexHome) => {
+      const rolloutPath = await seedMinimalRollout(
+        codexHome,
+        'codex-win',
+        false,
+        'C:\\Repo\\App',
+        'hello',
+      );
+      await seedStateDatabase(codexHome, [
+        {
+          id: 'codex-win',
+          rolloutPath,
+          cwd: 'C:\\Repo\\App',
+          name: 'Windows-shaped path',
+          createdAtMs: 1_000,
+          updatedAtMs: 2_000,
+          archived: false,
+          source: 'cli',
+        },
+      ]);
+      const adapter = new CodexSessionAdapter({ codexHome });
+      for (const cwd of ['C:\\Repo\\App', 'C:/Repo/App', 'c:/repo/app', 'c:\\repo\\app\\']) {
+        assert.deepEqual(
+          (await adapter.listSessions({ cwd })).map((session) => session.id),
+          ['codex-win'],
+          `cwd=${cwd}`,
+        );
+      }
+      // A genuinely different project is still excluded.
+      assert.equal((await adapter.listSessions({ cwd: 'C:/Repo/Other' })).length, 0);
+    });
+  });
+
   test('converts Codex presentation events and raw tool items without duplicates', async () => {
     await withCodexHome(async (codexHome) => {
       await seedFixtureRollout(codexHome, 'codex-session-1', false);
