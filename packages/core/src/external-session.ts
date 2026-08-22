@@ -55,9 +55,16 @@ export function externalSessionMatchesQuery(
   // pasted from a Windows path missed a stored forward-slash path that
   // `sameExternalSessionPath` already calls the same project, and a title
   // typed in NFC missed one macOS recorded in NFD.
+  // Separator folding is applied to the path pair only, never to the title.
+  // Folding a title would make a search for `/n` match a title containing a
+  // literal backslash-n, and folding the term without the title would stop
+  // `\\n` from finding the very title it names. The path pair has no such
+  // ambiguity: a separator there is a separator.
   return (
     normalizeExternalSessionMatchText(summary.name).includes(text) ||
-    normalizeExternalSessionMatchText(summary.cwd).includes(text)
+    foldExternalSessionPathSeparators(normalizeExternalSessionMatchText(summary.cwd)).includes(
+      foldExternalSessionPathSeparators(text),
+    )
   );
 }
 
@@ -79,7 +86,16 @@ export function externalSessionMatchesQuery(
  * rather than two rules free to drift.
  */
 function normalizeExternalSessionMatchText(value: string): string {
-  return value.normalize('NFC').toLowerCase().split(String.fromCharCode(92)).join('/');
+  return value.normalize('NFC').toLowerCase();
+}
+
+/**
+ * Windows separators folded to the POSIX form, so a term pasted from one
+ * spelling of a path finds the project the summary stored in the other. The
+ * same equivalence `sameExternalSessionPath` applies to the `cwd` filter.
+ */
+function foldExternalSessionPathSeparators(value: string): string {
+  return value.split(String.fromCharCode(92)).join('/');
 }
 
 /**

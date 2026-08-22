@@ -74,6 +74,23 @@ describe('externalSessionMatchesQuery', () => {
     assert.equal(externalSessionMatchesQuery(stored, { text: 'C:/Repo/App' }), true);
   });
 
+  test('separator folding stays on the path pair and off the title', () => {
+    // Folding a title would make `/n` match a title holding a literal
+    // backslash-n; folding the term but not the title would stop the term
+    // that names it from finding it. Both directions are checked because a
+    // one-sided fold trades one bug for the other.
+    const backslash = String.fromCharCode(92);
+    const title = summary({ name: `regex: ${backslash}n handling`, cwd: '/repo' });
+    assert.equal(externalSessionMatchesQuery(title, { text: `${backslash}n` }), true);
+    assert.equal(externalSessionMatchesQuery(title, { text: '/n' }), false);
+    // The path pair still folds, which is what makes a pasted Windows path work.
+    const win = summary({ name: 'untitled', cwd: 'C:/Repo/App' });
+    assert.equal(
+      externalSessionMatchesQuery(win, { text: `C:${backslash}Repo${backslash}App` }),
+      true,
+    );
+  });
+
   test('composed and decomposed Unicode name the same conversation', () => {
     // macOS records decomposed filenames, so the same visible title arrives
     // in NFC or NFD depending on where it was typed.
