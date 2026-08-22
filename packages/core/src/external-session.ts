@@ -95,7 +95,7 @@ function normalizeExternalSessionMatchText(value: string): string {
  * same equivalence `sameExternalSessionPath` applies to the `cwd` filter.
  */
 function foldExternalSessionPathSeparators(value: string): string {
-  return value.split(String.fromCharCode(92)).join('/');
+  return normalizeExternalSessionPath(value);
 }
 
 /**
@@ -122,8 +122,16 @@ export function sameExternalSessionPath(left: string, right: string): boolean {
 }
 
 function normalizeExternalSessionPath(value: string): string {
-  const normalized = value.normalize('NFC').replaceAll('\\', '/').replace(/\/+$/u, '');
-  return /^[A-Za-z]:\//u.test(normalized) ? normalized.toLowerCase() : normalized;
+  const folded = value.normalize('NFC').replaceAll('\\', '/');
+  // Trailing separators are noise — Windows Explorer copies `C:\\Repo\\App\\`
+  // — but the POSIX root IS its separator. Stripping unconditionally folded
+  // `/` and `''` to the same value, so a workspace at filesystem root matched
+  // every session whose cwd was simply unknown.
+  const stripped = folded.replace(/\/+$/u, '');
+  // `''` after stripping means the input was nothing but separators, so it was
+  // the POSIX root — `/`, `//` and `///` all name the same directory.
+  const trimmed = stripped.length > 0 ? stripped : folded.length > 0 ? '/' : '';
+  return /^[A-Za-z]:\//u.test(trimmed) ? trimmed.toLowerCase() : trimmed;
 }
 
 /**

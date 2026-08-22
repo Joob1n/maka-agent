@@ -144,6 +144,33 @@ describe('sameExternalSessionPath', () => {
     assert.equal(sameExternalSessionPath('/Repo', '/repo'), false);
   });
 
+  test('the POSIX root is not the same as an unknown cwd', () => {
+    // Stripping trailing separators unconditionally folded `/` and `''` to the
+    // same value, so a workspace at filesystem root matched every session
+    // whose cwd the adapter could not determine. The root IS its separator.
+    assert.equal(sameExternalSessionPath('/', ''), false);
+    assert.equal(sameExternalSessionPath('/', '/'), true);
+    assert.equal(sameExternalSessionPath('//', '/'), true);
+    assert.equal(sameExternalSessionPath('', ''), true);
+    assert.equal(sameExternalSessionPath('/', '/repo'), false);
+  });
+
+  test('a term with a trailing separator still names the project', () => {
+    // Windows Explorer copies `C:\\Repo\\App\\`, trailing backslash included.
+    const backslash = String.fromCharCode(92);
+    const win = summary({ name: 'untitled', cwd: 'C:/Repo/App' });
+    assert.equal(
+      externalSessionMatchesQuery(win, {
+        text: `C:${backslash}Repo${backslash}App${backslash}`,
+      }),
+      true,
+    );
+    assert.equal(
+      externalSessionMatchesQuery(summary({ cwd: '/repo/app' }), { text: '/repo/app/' }),
+      true,
+    );
+  });
+
   test('different projects stay different', () => {
     assert.equal(sameExternalSessionPath('/repo/app', '/repo/other'), false);
     assert.equal(sameExternalSessionPath('/repo/app', '/repo/app-2'), false);

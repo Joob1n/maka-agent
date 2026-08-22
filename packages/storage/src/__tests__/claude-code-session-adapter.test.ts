@@ -295,6 +295,37 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
+  test('a rewritten transcript is re-read, a deleted one drops out', async () => {
+    // Listing parses every transcript, and the catalog is listed once per
+    // search term — so summaries are cached against the file's own mtime and
+    // size. The risk a cache carries is serving a stale answer, so both
+    // directions are pinned: an appended transcript must be re-read, and a
+    // removed one must not survive in the map.
+    await withClaudeHome(async (home) => {
+      const id = 'aaaaaaaa-0000-4000-8000-000000000033';
+      await seed(home, id, [
+        userRecord('first title'),
+        assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+      ]);
+      const adapter = new ClaudeCodeSessionAdapter({ claudeHome: home });
+      assert.equal((await adapter.listSessions())[0]?.name, 'first title');
+
+      // Rewritten with a different title. Same path, new content.
+      await seed(home, id, [
+        userRecord('second title'),
+        assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+      ]);
+      assert.equal(
+        (await adapter.listSessions())[0]?.name,
+        'second title',
+        'a changed transcript must not keep its cached summary',
+      );
+
+      await rm(join(home, 'projects', CWD.replace(/\//gu, '-'), `${id}.jsonl`));
+      assert.deepEqual(await adapter.listSessions(), []);
+    });
+  });
+
   test('a project query tolerates a trailing separator', async () => {
     // The adapter compared raw strings, so the same project reached with a
     // trailing slash answered "no such project". Both sources now share one
