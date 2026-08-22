@@ -510,8 +510,9 @@ export function convertTranscript(
         emittedResponses.add(responseId);
       }
       // A fragment with no id stands alone; it is the only fragment of itself.
-      const fragments =
-        (responseId === undefined ? undefined : responseFragments.get(responseId)) ?? [record];
+      const fragments = (responseId === undefined
+        ? undefined
+        : responseFragments.get(responseId)) ?? [record];
 
       // Status evidence is read from every fragment, not just the first: the
       // `stop_reason` lands on whichever fragment the response finished on.

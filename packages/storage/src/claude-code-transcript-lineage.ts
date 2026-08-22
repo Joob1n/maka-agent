@@ -133,7 +133,9 @@ export function resolveTranscriptLineage(
   const { kept: records, duplicates } = deduplicate(rawRecords);
   const compactBoundaries = records.filter((r) => r.subtype === 'compact_boundary').length;
 
-  const main = records.filter((r) => r.isSidechain !== true && stringField(r, 'uuid') !== undefined);
+  const main = records.filter(
+    (r) => r.isSidechain !== true && stringField(r, 'uuid') !== undefined,
+  );
   if (main.length === 0) {
     return { records, abandoned: 0, withdrawnPrompts: 0, duplicates, compactBoundaries };
   }

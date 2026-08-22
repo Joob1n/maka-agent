@@ -539,12 +539,7 @@ test('a resolved Claude transcript replays as the conversation the user kept', a
           ? `call:${m.id}`
           : `result:${(m as Extract<StoredMessage, { type: 'tool_result' }>).toolUseId}`,
       );
-    assert.deepEqual(shape, [
-      'call:toolu_a',
-      'call:toolu_b',
-      'result:toolu_a',
-      'result:toolu_b',
-    ]);
+    assert.deepEqual(shape, ['call:toolu_a', 'call:toolu_b', 'result:toolu_a', 'result:toolu_b']);
 
     // And the turn is terminal on its own evidence, not repaired into one.
     assert.equal(run.status, 'completed');
