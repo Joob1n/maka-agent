@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import type { StoredMessage } from '@maka/core/session';
 import { sanitizeForeignTitle } from '@maka/core/foreign-session';
+import { externalSessionMatchesQuery } from '@maka/core/external-session';
 import type {
   ExternalMakaSession,
   ExternalSessionAdapter,
@@ -750,8 +751,9 @@ function cwdSqlVariants(cwd: string): string[] {
 }
 
 function matchesQuery(entry: ExternalSessionSummary, query: ExternalSessionQuery): boolean {
-  if (!query.includeArchived && entry.archived) return false;
-  return query.cwd === undefined || normalizePath(entry.cwd) === normalizePath(query.cwd);
+  // Delegated so both sources answer a query identically; the local
+  // `normalizePath` below is still used for the SQL cwd variants.
+  return externalSessionMatchesQuery(entry, query);
 }
 
 function compareCatalogEntries(a: CodexCatalogEntry, b: CodexCatalogEntry): number {

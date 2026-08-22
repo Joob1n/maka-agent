@@ -21,6 +21,7 @@ import {
   pickClaudeTitle,
   sanitizeForeignTitle,
 } from '@maka/core/foreign-session';
+import { externalSessionMatchesQuery } from '@maka/core/external-session';
 import type {
   ExternalMakaSession,
   ExternalSessionAdapter,
@@ -83,14 +84,18 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
       // a parent — so exclusion is per file. Importing one would present a
       // fragment of a conversation as a conversation.
       if (parsed.isSidechain) continue;
-      if (query?.cwd !== undefined && parsed.cwd !== query.cwd) continue;
-      summaries.push({
+      const summary: ExternalSessionSummary = {
         id: file.sessionId,
         name: parsed.title || file.sessionId,
         cwd: parsed.cwd,
         ...(parsed.createdAt !== undefined ? { createdAt: parsed.createdAt } : {}),
         ...(parsed.updatedAt !== undefined ? { updatedAt: parsed.updatedAt } : {}),
-      });
+      };
+      // The shared matcher, not a local cwd comparison: filtering happens here
+      // rather than after paging, and every source has to answer a query the
+      // same way or the catalog lies about which one dropped the term.
+      if (!externalSessionMatchesQuery(summary, query)) continue;
+      summaries.push(summary);
     }
     summaries.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
     return summaries;

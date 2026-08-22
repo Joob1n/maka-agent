@@ -1807,6 +1807,7 @@ const makaBridge = {
       adapterId: string;
       includeArchived?: boolean;
       cursor?: string;
+      text?: string;
     }, host?: DesktopRuntimeHostRef): Promise<{
       sessions: DesktopExternalSessionCatalogItem[];
       nextCursor: string | null;

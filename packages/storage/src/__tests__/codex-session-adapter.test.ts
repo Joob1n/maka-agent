@@ -70,6 +70,29 @@ describe('CodexSessionAdapter', () => {
         (await adapter.listSessions({ includeArchived: true })).map((session) => session.id),
         ['codex-session-1', 'codex-session-archived'],
       );
+
+      // The same text query the Claude Code adapter honours. A catalog filter
+      // that silently worked for one source and not the other would be worse
+      // than none — the user cannot see which source dropped their term.
+      assert.deepEqual(
+        (await adapter.listSessions({ text: 'named' })).map((session) => session.id),
+        ['codex-session-1'],
+      );
+      assert.deepEqual(
+        (await adapter.listSessions({ text: '/workspace/project' })).map((session) => session.id),
+        ['codex-session-1'],
+      );
+      assert.equal((await adapter.listSessions({ text: 'kubernetes' })).length, 0);
+      // A blank box selects nothing, so it must not filter.
+      assert.equal((await adapter.listSessions({ text: '  ' })).length, 1);
+      // Text does not override the archived gate.
+      assert.equal((await adapter.listSessions({ text: 'archived' })).length, 0);
+      assert.deepEqual(
+        (await adapter.listSessions({ includeArchived: true, text: 'archived' })).map(
+          (session) => session.id,
+        ),
+        ['codex-session-archived'],
+      );
       assert.deepEqual(
         await adapter.listSessions({ includeArchived: true, cwd: '/workspace/archive/' }),
         [
