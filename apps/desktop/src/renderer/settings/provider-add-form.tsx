@@ -40,14 +40,11 @@ import {
   type AddProviderIssue,
 } from './provider-add-submission';
 
-type ProviderFormField =
-  | 'slug'
-  | 'apiKey'
-  | 'accountId'
-  | 'baseUrl'
-  | 'defaultModel'
-  | 'advancedRequest'
-  | 'form';
+/* No `defaultModel`: the creation gate has no rule that can fail on the model
+   id, so an error could never be reported against that field. The union is
+   kept aligned with `AddProviderIssue` plus the two form-local fields the
+   gate does not own. */
+type ProviderFormField = 'slug' | 'apiKey' | 'accountId' | 'baseUrl' | 'advancedRequest' | 'form';
 
 type ProviderFormError = {
   field: ProviderFormField;
@@ -341,19 +338,11 @@ export function AddProviderForm(props: {
         {showsDefaultModel && (
           <TextInput
             value={defaultModel}
-            onChange={(value) => {
-              setDefaultModel(value);
-              clearFieldError('defaultModel');
-            }}
+            onChange={setDefaultModel}
             placeholder={copy.defaultModelPlaceholder}
             isDisabled={isExperimental || busy}
             label={copy.defaultModel}
             description={copy.defaultModelHelp}
-            status={
-              error?.field === 'defaultModel'
-                ? { type: 'error', message: error.message }
-                : undefined
-            }
           />
         )}
         {advancedRequestEditor}
