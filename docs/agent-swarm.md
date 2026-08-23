@@ -29,13 +29,20 @@ There is no `agent_swarm` tool. A synchronous fan-out tool of that name existed
 until #2384, which removed it in favour of asynchronous supervision over the
 graph. `agent_swarm` survives only as a tool-result kind on historical records.
 
-Swarm adds no execution machinery of its own:
+Swarm adds no execution machinery of its own. There is one scheduler, one
+ledger, and one control plane, and they are the graph's:
 
 - items are ordinary child Sessions and their `AgentRun`s, scheduled as graph work;
-- durable schedule, admission, and wake state live in the SQLite graph control plane;
+- durable schedule, admission, and wake state are stored in the SQLite graph
+  control plane;
 - `agent_swarm_status` is a compact projection over the same graph snapshot —
   its `swarmId` is the `graphId`;
 - there is no `SwarmRun`, second event ledger, or background owner.
+
+What the mode does add is supervision policy over that machinery: which tools
+are guaranteed, what the Agent is told to do with them, why the mode was
+authorized, and when a checkpoint is worth waking the Agent for. Those four are
+described below.
 
 For the mechanism underneath, see
 [Graph Is a Schedule, Not a Second Runtime](./architecture/agent-graph-stream-scheduling-draft.md).
@@ -68,9 +75,11 @@ from it:
    `AgentRun` header as `session_mode` (the Session is in swarm mode),
    `turn_override` (one `/swarm <task>` turn), or `none`. It records why swarm
    was authorized, not merely that it was.
-4. **Wake policy.** `isSwarmCheckpointTransition` gives the mode its own
-   supervisor-wake rule: wake when the swarm first reaches `settled`, or when the
-   set of `blocked` / `failed` / `aborted` / `cancelled` items changes.
+4. **Wake policy.** Wake *state* is stored by the graph control plane like any
+   other graph wake, but the *trigger* is mode-specific:
+   `isSwarmCheckpointTransition` wakes the supervisor when the swarm first
+   reaches `settled`, or when the set of `blocked` / `failed` / `aborted` /
+   `cancelled` items changes.
 
 ## What the prompt instructs
 
