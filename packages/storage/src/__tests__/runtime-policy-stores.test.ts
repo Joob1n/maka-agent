@@ -51,6 +51,7 @@ import {
   openInteractiveRuntimePolicyStoresForWrite,
   RuntimePolicyStoreError,
 } from '../runtime-policy-stores.js';
+import { removeControlDirectory } from './fixtures/control-directory-hygiene.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -3596,7 +3597,11 @@ async function withInteractiveRoot(
   await withTempDir(async (base) => {
     const root = join(base, 'interactive');
     const capability = await resolveStorageRoot({ path: root, kind: 'interactive' });
-    await run({ root, capability });
+    try {
+      await run({ root, capability });
+    } finally {
+      await removeControlDirectory(capability.rootId);
+    }
   });
 }
 
