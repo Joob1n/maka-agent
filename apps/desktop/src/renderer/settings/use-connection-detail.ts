@@ -22,6 +22,7 @@ import {
   connectionNameDraftChanged,
   connectionNameDraftReseed,
   connectionNameToSave,
+  shouldRefreshModelsAfterSave,
 } from './connection-name-draft.js';
 import {
   type ConnectionTestResult,
@@ -325,7 +326,11 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       if (
         supportsRemoteDiscovery &&
         (!requiresCredential || nextHasSecret) &&
-        (wroteNewKey || field === 'endpoint' || models.length === 0)
+        shouldRefreshModelsAfterSave({
+          field,
+          wroteNewKey,
+          hasCachedModels: models.length > 0,
+        })
       ) {
         void refreshModels({ silent: true });
       }

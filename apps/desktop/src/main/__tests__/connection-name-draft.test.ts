@@ -23,6 +23,7 @@ import {
   connectionNameDraftChanged,
   connectionNameDraftReseed,
   connectionNameToSave,
+  shouldRefreshModelsAfterSave,
 } from '../../renderer/settings/connection-name-draft.js';
 
 describe('connectionNameDraftReseed', () => {
@@ -101,5 +102,42 @@ describe('connectionNameDraftChanged', () => {
 describe('connectionNameToSave', () => {
   test('commits the trimmed name, not the raw draft', () => {
     assert.equal(connectionNameToSave('  Renamed  '), 'Renamed');
+  });
+});
+
+describe('shouldRefreshModelsAfterSave', () => {
+  test('a rename never fetches models', () => {
+    // The catalog a user lands on is unchanged by a rename, so an empty cache
+    // is no more urgent afterwards — and a fetch nobody asked for can raise an
+    // error about a connection the user only renamed.
+    assert.equal(
+      shouldRefreshModelsAfterSave({ field: 'name', wroteNewKey: false, hasCachedModels: false }),
+      false,
+    );
+    assert.equal(
+      shouldRefreshModelsAfterSave({ field: 'name', wroteNewKey: false, hasCachedModels: true }),
+      false,
+    );
+  });
+
+  test('a new credential still fetches', () => {
+    assert.equal(
+      shouldRefreshModelsAfterSave({ field: 'key', wroteNewKey: true, hasCachedModels: true }),
+      true,
+    );
+  });
+
+  test('a new endpoint still fetches', () => {
+    assert.equal(
+      shouldRefreshModelsAfterSave({ field: 'endpoint', wroteNewKey: false, hasCachedModels: true }),
+      true,
+    );
+  });
+
+  test('an empty cache still fetches for the fields that can fill it', () => {
+    assert.equal(
+      shouldRefreshModelsAfterSave({ field: 'key', wroteNewKey: false, hasCachedModels: false }),
+      true,
+    );
   });
 });

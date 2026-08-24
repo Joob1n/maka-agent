@@ -59,3 +59,25 @@ export function connectionNameDraftChanged(draft: string, savedName: string): bo
 export function connectionNameToSave(draft: string): string {
   return draft.trim();
 }
+
+/** Which settled value a save is committing. */
+export type ConnectionDetailSaveField = 'key' | 'endpoint' | 'name';
+
+/**
+ * Whether a completed save should also refresh the live model catalog.
+ *
+ * A new credential or a new endpoint changes what the catalog would answer,
+ * and an empty cache means the model row has nothing but the static fallback
+ * list to offer. A rename changes neither: the catalog a user lands on is the
+ * same one, so an empty cache is no more urgent after a rename than before,
+ * and a fetch nobody asked for can surface an error about a connection the
+ * user only renamed.
+ */
+export function shouldRefreshModelsAfterSave(input: {
+  readonly field: ConnectionDetailSaveField;
+  readonly wroteNewKey: boolean;
+  readonly hasCachedModels: boolean;
+}): boolean {
+  if (input.field === 'name') return false;
+  return input.wroteNewKey || input.field === 'endpoint' || !input.hasCachedModels;
+}

@@ -424,12 +424,13 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
               : copy.credentialUnknownDetail}
           />
         )}
-        {(supportsApiKey || showsEndpoint) && (
+        {/* The name row is outside the key/endpoint guard below: a connection
+            with neither — an OAuth subscription, say — still has a name, and
+            hiding the only editable field it has would leave the section
+            empty. It comes first because it is the field the user chose. */}
+        {!retired && (
           <VStack gap={0}>
             <Divider />
-            {/* Every connection has a name, including the ones with no key and
-                no endpoint to edit, so this row is not behind either guard. It
-                comes first because it is the one field the user chose. */}
             <SettingsExpandableRow
               label={copy.connectionName}
               value={savedName || connection.slug}
@@ -452,6 +453,10 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
                 isDisabled={allActionsBusy}
               />
             </SettingsExpandableRow>
+          </VStack>
+        )}
+        {(supportsApiKey || showsEndpoint) && (
+          <VStack gap={0}>
             <Divider />
             {supportsApiKey && (
               <>
