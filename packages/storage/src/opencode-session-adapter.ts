@@ -194,18 +194,20 @@ export class OpenCodeSessionAdapter implements ExternalSessionAdapter {
     sessionId: string,
   ): Promise<{ messages: readonly MessageRow[]; parts: readonly PartRow[] }> {
     return await this.#withDatabase((db) => {
+      // A row that will not decode is not skipped. Dropping one silently
+      // yields a transcript missing a message or a part while the import
+      // reports success — a history that reads as complete and is not. A
+      // selected import either carries what the session recorded or fails.
       const messages = db
         .prepare('SELECT id, time_created, data FROM message WHERE session_id = ?')
         .all(sessionId)
-        .map(toMessageRow)
-        .filter((row): row is MessageRow => row !== undefined);
+        .map((row, index) => requireRow(toMessageRow(row), 'message', index));
       // Ordered by the message they belong to and then by their own id, which
       // is how the writer orders them; `time_created` ties within one step.
       const parts = db
         .prepare('SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created, id')
         .all(sessionId)
-        .map(toPartRow)
-        .filter((row): row is PartRow => row !== undefined);
+        .map((row, index) => requireRow(toPartRow(row), 'part', index));
       return { messages, parts };
     });
   }
@@ -382,43 +384,45 @@ export function convertTranscript(
 
     const modelId = stringOf(data.modelID) ?? 'opencode';
 
-    const reasoning = messageParts
-      .filter((part) => stringOf(part.type) === 'reasoning')
-      .map((part) => stringOf(part.text) ?? '')
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-    if (reasoning.length > 0) {
-      out.push({
-        type: 'assistant',
-        id: id('thinking'),
-        turnId: turn.turnId,
-        ts,
-        text: '',
-        thinking: { text: reasoning },
-        contentOrder: ['thinking'],
-        modelId,
-      });
-    }
-
-    const text = messageParts
-      .filter((part) => stringOf(part.type) === 'text')
-      .map((part) => stringOf(part.text) ?? '')
-      .filter((part) => part.length > 0)
-      .join('\n\n');
-    if (text.length > 0) {
-      out.push({
-        type: 'assistant',
-        id: id('assistant'),
-        turnId: turn.turnId,
-        ts,
-        text,
-        contentOrder: ['text'],
-        modelId,
-      });
-    }
-
+    // Parts are walked in the order the session recorded them rather than
+    // bucketed by type. opencode accepts `text` before `reasoning`, and its
+    // own replay keeps that order; emitting all reasoning first would move a
+    // model's thinking across text it actually wrote after.
     for (const part of messageParts) {
-      if (stringOf(part.type) !== 'tool') continue;
+      const kind = stringOf(part.type);
+
+      if (kind === 'reasoning') {
+        const thinking = stringOf(part.text);
+        if (thinking === undefined) continue;
+        out.push({
+          type: 'assistant',
+          id: id('thinking'),
+          turnId: turn.turnId,
+          ts,
+          text: '',
+          thinking: { text: thinking },
+          contentOrder: ['thinking'],
+          modelId,
+        });
+        continue;
+      }
+
+      if (kind === 'text') {
+        const text = stringOf(part.text);
+        if (text === undefined) continue;
+        out.push({
+          type: 'assistant',
+          id: id('assistant'),
+          turnId: turn.turnId,
+          ts,
+          text,
+          contentOrder: ['text'],
+          modelId,
+        });
+        continue;
+      }
+
+      if (kind !== 'tool') continue;
       const callId = stringOf(part.callID);
       // A call with no id cannot be paired with its result. Minting one
       // produces a row guaranteed not to match anything, which reads as a
@@ -434,26 +438,50 @@ export function convertTranscript(
         toolName: stringOf(part.tool) ?? 'unknown',
         args: asRecord(state?.input) ?? {},
       });
-      // Only a completed call has an answer to import. Every other status —
-      // pending, running, and whatever else the union carries — describes a
-      // call still in flight when the session was written, and this adapter
-      // has no captured sample of their shape. Synthesising a result for one
-      // would put words the tool never said into the transcript.
-      if (status !== 'completed') continue;
-      out.push({
-        type: 'tool_result',
-        id: id('tool-result'),
-        turnId: turn.turnId,
-        ts,
-        toolUseId: callId,
-        isError: false,
-        content: { kind: 'text', text: stringOf(state?.output) ?? '' },
-      });
+      // `completed` and `error` are both terminal: opencode records a failed
+      // call as `{ status: 'error', error: <message> }` and replays it as an
+      // errored output. Dropping the failure would leave a call with no
+      // answer inside a turn a later `finish: "stop"` marks completed — a
+      // transcript asserting the tool never replied when it replied with a
+      // failure.
+      //
+      // `pending` and `running` are the calls that genuinely had no answer
+      // when the session was written, and they get no result.
+      if (status === 'completed') {
+        out.push({
+          type: 'tool_result',
+          id: id('tool-result'),
+          turnId: turn.turnId,
+          ts,
+          toolUseId: callId,
+          isError: false,
+          content: { kind: 'text', text: stringOf(state?.output) ?? '' },
+        });
+        continue;
+      }
+      if (status === 'error') {
+        out.push({
+          type: 'tool_result',
+          id: id('tool-result'),
+          turnId: turn.turnId,
+          ts,
+          toolUseId: callId,
+          isError: true,
+          content: { kind: 'text', text: stringOf(state?.error) ?? 'opencode tool call failed' },
+        });
+      }
     }
   }
 
   closeTurn();
   return out;
+}
+
+function requireRow<T>(row: T | undefined, table: string, index: number): T {
+  if (row === undefined) {
+    throw new Error(`opencode \`${table}\` row ${index} could not be decoded`);
+  }
+  return row;
 }
 
 function toSessionRow(value: unknown): SessionRow | undefined {

@@ -266,6 +266,182 @@ describe('OpenCodeSessionAdapter', () => {
     });
   });
 
+  test('a terminal tool failure is imported as an errored result, not a dangling call', async () => {
+    await withOpenCodeHome(async (home) => {
+      // The reviewer's reproduction: a failed call inside a step that a later
+      // `finish: "stop"` closes. Without a result the transcript asserts the
+      // tool never replied, inside a turn recorded as completed.
+      const fixture = await seed(home, (f) => {
+        f.messages = [
+          { id: 'm_user', time_created: 1, data: { role: 'user' } },
+          {
+            id: 'm_call',
+            time_created: 2,
+            data: { role: 'assistant', finish: 'tool-calls', modelID: 'm' },
+          },
+          {
+            id: 'm_stop',
+            time_created: 3,
+            data: { role: 'assistant', finish: 'stop', modelID: 'm' },
+          },
+        ];
+        f.parts = [
+          {
+            id: 'p_prompt',
+            message_id: 'm_user',
+            time_created: 1,
+            data: { type: 'text', text: 'go' },
+          },
+          {
+            id: 'p_tool',
+            message_id: 'm_call',
+            time_created: 2,
+            data: {
+              type: 'tool',
+              tool: 'bash',
+              callID: 'call_failed',
+              state: { status: 'error', input: { command: 'false' }, error: 'exit 1' },
+            },
+          },
+          {
+            id: 'p_text',
+            message_id: 'm_stop',
+            time_created: 3,
+            data: { type: 'text', text: 'done' },
+          },
+        ];
+        return f;
+      });
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      const session = await adapter.readSession(fixture.session.id);
+
+      const result = session.messages.find((m) => m.type === 'tool_result') as
+        | { toolUseId: string; isError: boolean; content: { text: string } }
+        | undefined;
+      assert.ok(result, 'a failed call still answered, and the answer is a failure');
+      assert.equal(result?.toolUseId, 'call_failed');
+      assert.equal(result?.isError, true);
+      assert.equal(result?.content.text, 'exit 1');
+    });
+  });
+
+  test('a call still running when the session was written gets no result', async () => {
+    await withOpenCodeHome(async (home) => {
+      const fixture = await seed(home, (f) => {
+        f.messages = [
+          { id: 'm_user', time_created: 1, data: { role: 'user' } },
+          {
+            id: 'm_call',
+            time_created: 2,
+            data: { role: 'assistant', finish: 'tool-calls', modelID: 'm' },
+          },
+        ];
+        f.parts = [
+          {
+            id: 'p_prompt',
+            message_id: 'm_user',
+            time_created: 1,
+            data: { type: 'text', text: 'go' },
+          },
+          {
+            id: 'p_tool',
+            message_id: 'm_call',
+            time_created: 2,
+            data: {
+              type: 'tool',
+              tool: 'bash',
+              callID: 'call_running',
+              state: { status: 'running', input: {} },
+            },
+          },
+        ];
+        return f;
+      });
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      const session = await adapter.readSession(fixture.session.id);
+      assert.ok(session.messages.some((m) => m.type === 'tool_call'));
+      assert.equal(session.messages.filter((m) => m.type === 'tool_result').length, 0);
+    });
+  });
+
+  test('parts keep the order the session recorded them in', async () => {
+    await withOpenCodeHome(async (home) => {
+      // opencode accepts text -> reasoning -> tool and its own replay keeps
+      // that order. Bucketing by type would emit reasoning first.
+      const fixture = await seed(home, (f) => {
+        f.messages = [
+          { id: 'm_user', time_created: 1, data: { role: 'user' } },
+          {
+            id: 'm_reply',
+            time_created: 2,
+            data: { role: 'assistant', finish: 'stop', modelID: 'm' },
+          },
+        ];
+        f.parts = [
+          {
+            id: 'p_prompt',
+            message_id: 'm_user',
+            time_created: 1,
+            data: { type: 'text', text: 'go' },
+          },
+          {
+            id: 'p1',
+            message_id: 'm_reply',
+            time_created: 2,
+            data: { type: 'text', text: 'first' },
+          },
+          {
+            id: 'p2',
+            message_id: 'm_reply',
+            time_created: 3,
+            data: { type: 'reasoning', text: 'second' },
+          },
+          {
+            id: 'p3',
+            message_id: 'm_reply',
+            time_created: 4,
+            data: {
+              type: 'tool',
+              tool: 'bash',
+              callID: 'call_third',
+              state: { status: 'completed', input: {}, output: 'ok' },
+            },
+          },
+        ];
+        return f;
+      });
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      const session = await adapter.readSession(fixture.session.id);
+      const reply = session.messages.filter((m) => m.type !== 'user');
+      assert.deepEqual(
+        reply.slice(0, 4).map((m) => {
+          if (m.type !== 'assistant') return m.type;
+          return (m as { thinking?: unknown }).thinking !== undefined ? 'thinking' : 'text';
+        }),
+        ['text', 'thinking', 'tool_call', 'tool_result'],
+      );
+    });
+  });
+
+  test('an undecodable transcript row fails the import rather than truncating it', async () => {
+    await withOpenCodeHome(async (home) => {
+      const fixture = await seed(home, (f) => {
+        f.messages = [{ id: 'm_user', time_created: 1, data: { role: 'user' } }];
+        f.parts = [];
+        return f;
+      });
+      // Replace the message payload with something that is not JSON.
+      const db = new DatabaseSync(join(home, 'opencode.db'));
+      try {
+        db.prepare('UPDATE message SET data = ? WHERE id = ?').run('{not json', 'm_user');
+      } finally {
+        db.close();
+      }
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      await assert.rejects(adapter.readSession(fixture.session.id), /could not be read/u);
+    });
+  });
+
   test('the registry exposes the adapter under its own id', async () => {
     const registry = createExternalSessionAdapterRegistry();
     const adapter = registry.get(OPENCODE_SESSION_ADAPTER_ID);
