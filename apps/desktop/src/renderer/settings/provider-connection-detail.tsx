@@ -153,6 +153,8 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     apiKey,
     setApiKey,
     hasSecret,
+    name,
+    setName,
     baseUrl,
     setBaseUrl,
     enabledModelIds,
@@ -173,6 +175,8 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     apiKeyStatusHint,
     hasApiKeyChange,
     hasBaseUrlChange,
+    hasNameChange,
+    savedName,
     issue,
     lastTestMessage,
     lastTestAtMs,
@@ -223,7 +227,9 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
   // Opening a row discards the other's draft: leaving an abandoned draft in
   // state meant it reappeared when the user came back to that row, and — until
   // `save` became per-field — rode along with the next save.
-  const [editingRow, setEditingRow] = useState<'key' | 'endpoint' | 'headers' | 'body' | null>(null);
+  const [editingRow, setEditingRow] = useState<
+    'name' | 'key' | 'endpoint' | 'headers' | 'body' | null
+  >(null);
   const [addModelOpen, setAddModelOpen] = useState(false);
   const [savedHeaderNames, setSavedHeaderNames] = useState<readonly string[]>([]);
   const [headerDrafts, setHeaderDrafts] = useState<RequestHeaderDraft[]>([]);
@@ -266,11 +272,19 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
     };
   }, [connection.slug, props.bridge, toast]);
 
-  function openRow(row: 'key' | 'endpoint' | 'headers' | 'body') {
+  function openRow(row: 'name' | 'key' | 'endpoint' | 'headers' | 'body') {
+    // Opening one row abandons whatever another row was holding: only one is
+    // editable at a time, so a draft left behind would be saved by a later
+    // action the user never connected to it.
+    if (row !== 'name') setName(savedName);
     if (row === 'key') setBaseUrl(savedBaseUrl);
     else if (row === 'endpoint') setApiKey('');
     else if (row === 'headers') setHeaderDrafts(savedRequestHeaderDrafts(savedHeaderNames));
-    else setBodyDraft(savedBodyText);
+    else if (row === 'body') setBodyDraft(savedBodyText);
+    else {
+      setApiKey('');
+      setBaseUrl(savedBaseUrl);
+    }
     setEditingRow(row);
   }
 
@@ -412,6 +426,32 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
         )}
         {(supportsApiKey || showsEndpoint) && (
           <VStack gap={0}>
+            <Divider />
+            {/* Every connection has a name, including the ones with no key and
+                no endpoint to edit, so this row is not behind either guard. It
+                comes first because it is the one field the user chose. */}
+            <SettingsExpandableRow
+              label={copy.connectionName}
+              value={savedName || connection.slug}
+              actionLabel={copy.edit}
+              isEditing={editingRow === 'name'}
+              isDisabled={allActionsBusy}
+              canSave={hasNameChange}
+              saveLabel={copy.save}
+              cancelLabel={copy.cancel}
+              onEdit={() => openRow('name')}
+              onCancel={() => { setName(savedName); setEditingRow(null); }}
+              onSave={async () => { if (await save('name')) setEditingRow(null); }}
+            >
+              <TextInput
+                label={copy.connectionName}
+                isLabelHidden
+                value={name}
+                onChange={setName}
+                placeholder={copy.connectionNamePlaceholder}
+                isDisabled={allActionsBusy}
+              />
+            </SettingsExpandableRow>
             <Divider />
             {supportsApiKey && (
               <>

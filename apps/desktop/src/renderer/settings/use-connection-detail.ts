@@ -19,6 +19,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  connectionNameDraftChanged,
+  connectionNameDraftReseed,
+  connectionNameToSave,
+} from './connection-name-draft.js';
+import {
   type ConnectionTestResult,
   type LlmConnection,
   type ModelInfo,
@@ -114,6 +119,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
   const [hasSecret, setHasSecret] = useState<CredentialPresenceStatus>(
     defaults.authKind === 'none' ? true : 'loading',
   );
+  const [name, setName] = useState(connection.name);
   const [baseUrl, setBaseUrl] = useState(connection.baseUrl ?? defaults.baseUrl ?? '');
   const [models, setModels] = useState<ModelInfo[]>(connection.models ?? []);
   const [enabledModelIds, setEnabledModelIds] = useState(() => connectionEnabledModelIds(connection));
@@ -165,6 +171,9 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
   const draftBaseUrl = baseUrl;
   const hasApiKeyChange = apiKey.length > 0;
   const hasBaseUrlChange = draftBaseUrl !== savedBaseUrl;
+  const savedName = connection.name;
+  const draftName = connectionNameToSave(name);
+  const hasNameChange = connectionNameDraftChanged(name, savedName);
   // Persistent single-line credential hint. Rendered in every hasSecret state
   // (including `false`) so the description row never adds or drops a line as the
   // async secret probe resolves — the dialog height stays constant.
@@ -288,7 +297,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
    * Returns whether the write landed, so a failed save keeps the row open with
    * the draft intact instead of collapsing as if it had succeeded.
    */
-  async function save(field: 'key' | 'endpoint'): Promise<boolean> {
+  async function save(field: 'key' | 'endpoint' | 'name'): Promise<boolean> {
     const releaseSave = connectionDetailActionGuard.beginExclusive('save');
     if (!releaseSave) return false;
     const lifecycle = connectionDetailLifecycleRef.current;
@@ -297,7 +306,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     try {
       await props.bridge.update(
         connection.slug,
-        field === 'key' ? { apiKey } : { baseUrl },
+        field === 'key' ? { apiKey } : field === 'name' ? { name: draftName } : { baseUrl },
       );
       saved = true;
       if (!isConnectionDetailCurrent(lifecycle)) return true;
@@ -489,6 +498,27 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection.slug, connection.relayModelProfiles, relayProfilesDirty]);
+
+  // The name draft is reseeded on its own rather than through
+  // `connectionDetailSnapshot`: that snapshot's dependency identity is
+  // load-bearing (see the update-depth note above), and a name needs none of
+  // its machinery.
+  //
+  // A slug switch always reseeds — carrying A's typed name onto B would let
+  // one save rename the wrong connection. A same-slug change reseeds only
+  // while the draft still matches what was saved, so a rename landing from
+  // this page (or another client) does not overwrite work in progress.
+  const nameDraftOwnerRef = useRef<{ slug: string; savedName: string }>({
+    slug: connection.slug,
+    savedName: connection.name,
+  });
+  useEffect(() => {
+    const previous = nameDraftOwnerRef.current;
+    const reseed = connectionNameDraftReseed(previous, connection, name);
+    nameDraftOwnerRef.current = { slug: connection.slug, savedName: connection.name };
+    if (reseed) setName(connection.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection.slug, connection.name]);
 
   async function saveRelayProfiles(): Promise<boolean> {
     // Refuse while the draft still belongs to the previous connection: in the
@@ -739,6 +769,8 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     apiKey,
     setApiKey,
     hasSecret,
+    name,
+    setName,
     baseUrl,
     setBaseUrl,
     enabledModelIds,
@@ -760,6 +792,8 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     hasApiKeyChange,
     hasBaseUrlChange,
     savedBaseUrl,
+    hasNameChange,
+    savedName,
     issue,
     lastTestMessage,
     lastTestAtMs,
