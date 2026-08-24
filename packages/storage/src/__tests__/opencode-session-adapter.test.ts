@@ -19,7 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -60,6 +60,50 @@ describe('OpenCodeSessionAdapter', () => {
       const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
       assert.equal(await adapter.detect(), false);
       assert.deepEqual(await adapter.listSessions(), []);
+    });
+  });
+
+  test('an unreadable database is reported, not answered as an empty catalog', async () => {
+    await withOpenCodeHome(async (home) => {
+      await writeFile(join(home, 'opencode.db'), 'not a database');
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      // The file is there, so the source is present; what fails is reading it.
+      assert.equal(await adapter.detect(), true);
+      await assert.rejects(adapter.listSessions(), /could not be (opened|read)/u);
+      // Reporting "not found" here would send a user looking for a session
+      // that exists in a database this could not open.
+      await assert.rejects(adapter.readSession('ses_anything'), /could not be (opened|read)/u);
+    });
+  });
+
+  test('a session whose transcript tables are missing fails instead of importing empty', async () => {
+    await withOpenCodeHome(async (home) => {
+      const fixture = await seed(home, undefined, { omitPartTable: true });
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      // The session row still reads, so the catalog offers it...
+      assert.equal((await adapter.listSessions()).length, 1);
+      // ...and the import must not answer with a conversation of nothing. A
+      // future opencode that renames these tables would otherwise silently
+      // import every session as empty and report success.
+      await assert.rejects(adapter.readSession(fixture.session.id), /could not be read/u);
+    });
+  });
+
+  test('a user message with no prompt does not produce a turn holding no messages', async () => {
+    await withOpenCodeHome(async (home) => {
+      const fixture = await seed(home, (f) => {
+        // One user message, no parts at all.
+        f.messages = [{ id: 'msg_empty', time_created: 1, data: { role: 'user' } }];
+        f.parts = [];
+        return f;
+      });
+      const adapter = new OpenCodeSessionAdapter({ opencodeHome: home });
+      const session = await adapter.readSession(fixture.session.id);
+      assert.deepEqual(
+        session.messages,
+        [],
+        'no turn_state is emitted for a turn that holds nothing',
+      );
     });
   });
 
@@ -239,7 +283,11 @@ async function withOpenCodeHome(run: (home: string) => Promise<void>): Promise<v
   }
 }
 
-async function seed(home: string, mutate?: (fixture: Fixture) => Fixture): Promise<Fixture> {
+async function seed(
+  home: string,
+  mutate?: (fixture: Fixture) => Fixture,
+  options: { omitPartTable?: boolean } = {},
+): Promise<Fixture> {
   const raw = JSON.parse(await readFile(FIXTURE, 'utf8')) as Fixture;
   const fixture = mutate ? mutate(raw) : raw;
   const db = new DatabaseSync(join(home, 'opencode.db'));
@@ -255,11 +303,15 @@ async function seed(home: string, mutate?: (fixture: Fixture) => Fixture): Promi
         id text PRIMARY KEY, session_id text NOT NULL,
         time_created integer NOT NULL, time_updated integer, data text NOT NULL
       );
-      CREATE TABLE part (
-        id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
-        time_created integer NOT NULL, time_updated integer, data text NOT NULL
-      );
     `);
+    if (!options.omitPartTable) {
+      db.exec(`
+        CREATE TABLE part (
+          id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
+          time_created integer NOT NULL, time_updated integer, data text NOT NULL
+        );
+      `);
+    }
     db.prepare(
       'INSERT INTO session (id, parent_id, directory, title, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).run(
@@ -277,6 +329,7 @@ async function seed(home: string, mutate?: (fixture: Fixture) => Fixture): Promi
     for (const row of fixture.messages) {
       message.run(row.id, fixture.session.id, row.time_created, JSON.stringify(row.data));
     }
+    if (options.omitPartTable) return fixture;
     const part = db.prepare(
       'INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)',
     );

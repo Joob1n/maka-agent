@@ -128,25 +128,33 @@ export class OpenCodeSessionAdapter implements ExternalSessionAdapter {
     return join(this.#home, 'opencode.db');
   }
 
-  async #withDatabase<T>(read: (db: OpenCodeDatabase) => T): Promise<T | undefined> {
+  /**
+   * Opens the database and runs one read.
+   *
+   * Failure is reported, not flattened into an empty result. An unreadable
+   * database and an opencode install with no sessions are different facts, and
+   * a caller that cannot tell them apart reports the wrong one: "no sessions
+   * here" for a database that is locked, corrupt, or written by a version
+   * whose tables this does not recognise.
+   */
+  async #withDatabase<T>(read: (db: OpenCodeDatabase) => T): Promise<T> {
     const path = this.#databasePath();
-    if (!existsSync(path)) return undefined;
     let sqlite: typeof import('node:sqlite');
     try {
       sqlite = await import('node:sqlite');
-    } catch {
-      return undefined;
+    } catch (cause) {
+      throw new Error('opencode sessions need node:sqlite, which is unavailable', { cause });
     }
     let db: OpenCodeDatabase;
     try {
       db = new sqlite.DatabaseSync(path, { readOnly: true }) as OpenCodeDatabase;
-    } catch {
-      return undefined;
+    } catch (cause) {
+      throw new Error(`opencode database could not be opened: ${path}`, { cause });
     }
     try {
       return read(db);
-    } catch {
-      return undefined;
+    } catch (cause) {
+      throw new Error(`opencode database could not be read: ${path}`, { cause });
     } finally {
       try {
         db.close();
@@ -159,9 +167,15 @@ export class OpenCodeSessionAdapter implements ExternalSessionAdapter {
   }
 
   async #readSessions(): Promise<readonly SessionRow[]> {
-    const rows = await this.#withDatabase((db) => {
+    // Discovery is allowed to come up empty — the catalog lists whatever
+    // sources are present, and an opencode that was installed but never used
+    // is a normal state rather than a failure to report.
+    if (!existsSync(this.#databasePath())) return [];
+    return await this.#withDatabase((db) => {
       const columns = tableColumns(db, 'session');
-      if (!columns.has('id') || !columns.has('directory')) return undefined;
+      if (!columns.has('id') || !columns.has('directory')) {
+        throw new Error('opencode `session` table does not carry `id` and `directory`');
+      }
       const selected = [
         'id',
         'title',
@@ -174,13 +188,12 @@ export class OpenCodeSessionAdapter implements ExternalSessionAdapter {
       const raw = db.prepare(`SELECT ${selected.join(', ')} FROM session`).all();
       return raw.map(toSessionRow).filter((row): row is SessionRow => row !== undefined);
     });
-    return rows ?? [];
   }
 
   async #readTranscript(
     sessionId: string,
   ): Promise<{ messages: readonly MessageRow[]; parts: readonly PartRow[] }> {
-    const read = await this.#withDatabase((db) => {
+    return await this.#withDatabase((db) => {
       const messages = db
         .prepare('SELECT id, time_created, data FROM message WHERE session_id = ?')
         .all(sessionId)
@@ -195,7 +208,6 @@ export class OpenCodeSessionAdapter implements ExternalSessionAdapter {
         .filter((row): row is PartRow => row !== undefined);
       return { messages, parts };
     });
-    return read ?? { messages: [], parts: [] };
   }
 }
 
@@ -319,23 +331,26 @@ export function convertTranscript(
     const messageParts = partsByMessage.get(message.id) ?? [];
 
     if (role === 'user') {
+      // A user message closes whatever came before it either way: it is the
+      // boundary, whether or not it carries a prompt this import can use.
       closeTurn();
+      const text = messageParts
+        .filter((part) => stringOf(part.type) === 'text')
+        .map((part) => stringOf(part.text) ?? '')
+        .filter((part) => part.length > 0)
+        .join('\n\n');
+      // No text part means no prompt to import. Opening a turn for it would
+      // produce a `turn_state` describing a turn that holds no messages —
+      // a terminal verdict on a conversation that is not there. An assistant
+      // message that follows opens its own turn.
+      if (text.length === 0) continue;
       turn = {
         turnId: `opencode:${sessionId}:turn:${turnSequence++}`,
         lastTs: ts,
         aborted: false,
         closed: false,
       };
-      const text = messageParts
-        .filter((part) => stringOf(part.type) === 'text')
-        .map((part) => stringOf(part.text) ?? '')
-        .filter((part) => part.length > 0)
-        .join('\n\n');
-      // A user message with no text part carries no prompt to import. Emitting
-      // an empty user turn would put a blank message in the user's history.
-      if (text.length > 0) {
-        out.push({ type: 'user', id: id('user'), turnId: turn.turnId, ts, text });
-      }
+      out.push({ type: 'user', id: id('user'), turnId: turn.turnId, ts, text });
       continue;
     }
 
