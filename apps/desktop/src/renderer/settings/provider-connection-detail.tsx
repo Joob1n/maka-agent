@@ -435,6 +435,7 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
               label={copy.connectionName}
               value={savedName || connection.slug}
               actionLabel={copy.edit}
+              actionAriaLabel={`${copy.edit}: ${copy.connectionName}`}
               isEditing={editingRow === 'name'}
               isDisabled={allActionsBusy}
               canSave={hasNameChange}
@@ -501,6 +502,7 @@ function ConnectionDetailInner(props: ConnectionDetailProps) {
                 label={copy.endpoint}
                 value={savedBaseUrl || copy.endpointDefault}
                 actionLabel={copy.edit}
+                actionAriaLabel={`${copy.edit}: ${copy.endpoint}`}
                 isEditing={editingRow === 'endpoint'}
                 isDisabled={allActionsBusy}
                 canSave={hasBaseUrlChange}
