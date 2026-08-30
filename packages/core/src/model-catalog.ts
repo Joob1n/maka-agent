@@ -345,9 +345,15 @@ function makeEntry(
   const lastUpdated = normalizedModel.lastUpdated ?? metadata.lastUpdated;
   const modalities = normalizedModel.modalities ?? metadata.modalities;
   const capabilities = mergeCapabilities(normalizedModel.capabilities, metadata.capabilities);
+  // `modalities` too, not just `capabilities`: both are merged from the
+  // provider row and the bundled metadata a few lines up, and the chat guard
+  // reads the modality. Passing the unmerged `normalizedModel.modalities`
+  // meant a bundled image-only model reached the guard with no output
+  // declaration at all.
   const unavailableReason = deriveModelUnavailableReason(input, {
     ...normalizedModel,
     capabilities,
+    ...(modalities !== undefined ? { modalities } : {}),
   });
   return {
     id: normalizedModel.id,
@@ -626,10 +632,34 @@ function isStale(
   return now - input.modelsFetchedAt > staleAfterMs;
 }
 
+/**
+ * Whether a declared output modality rules the model out of chat.
+ *
+ * A model that answers only in images or only in audio cannot hold a
+ * conversation, and this is the form that fact actually arrives in: the
+ * generated metadata records `modalities.output` for every such model and has
+ * never set `capabilities.imageGeneration` for any of them, so the capability
+ * check below could not fire on bundled data.
+ *
+ * An EMPTY list is not evidence. `modalities.output` is typed to text, image,
+ * and audio, so a video model's real output has no representation and
+ * serializes as `[]` — the same shape a future generator bug would produce.
+ * Only a non-empty list says something, and what it says is what it lists.
+ */
+function declaresNoTextOutput(model: ModelInfo): boolean {
+  const output = model.modalities?.output;
+  if (output === undefined || output.length === 0) return false;
+  return !output.includes('text');
+}
+
 export function isModelExplicitlyUnsupportedForChat(model: ModelInfo): boolean {
   const caps = model.capabilities;
+  if (caps?.chat === false) return true;
+  // Only an explicit `chat: true` outranks the modality. `reasoning` and
+  // `functionCalling` do not: a TTS model carrying `reasoning: true` is
+  // describing how it composes speech, and it still cannot answer in text.
+  if (caps?.chat !== true && declaresNoTextOutput(model)) return true;
   if (!caps) return false;
-  if (caps.chat === false) return true;
   return (
     caps.imageGeneration === true &&
     caps.chat !== true &&
