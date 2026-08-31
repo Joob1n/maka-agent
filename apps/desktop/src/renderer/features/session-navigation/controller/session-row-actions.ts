@@ -107,6 +107,9 @@ export interface SessionNavigationRowActions {
   purgeSessions(sessionIds: readonly string[]): Promise<SessionPurgeOutcome>;
   deleteSessions(sessionIds: readonly string[]): Promise<SessionPurgeOutcome>;
   archiveSessions(sessionIds: readonly string[]): Promise<SessionArchiveOutcome>;
+  /** Confirms, sweeps, and reports — the rail's own wording. */
+  archiveSelected(sessionIds: readonly string[]): Promise<void>;
+  deleteSelected(sessionIds: readonly string[]): Promise<void>;
 }
 
 export function createSessionNavigationRowActions(deps: {
@@ -449,6 +452,72 @@ export function createSessionNavigationRowActions(deps: {
     return { archived, failed, firstFailure };
   }
 
+  /**
+   * The rail's own bulk archive, wording included.
+   *
+   * The sweeps below it stay silent on purpose — Settings' purge phrases its
+   * own confirm — but the rail's phrasing belongs to the rail, and this module
+   * is where the feature already holds its copy. Putting it in the selection
+   * hook instead would have made that hook the feature's second importer of
+   * renderer legacy copy, which the architecture check refuses.
+   */
+  async function archiveSelected(sessionIds: readonly string[]): Promise<void> {
+    if (sessionIds.length === 0) return;
+    const ok = await toastApi.confirm({
+      title: copy.bulkArchiveTitle(sessionIds.length),
+      description: copy.bulkArchiveDescription,
+      confirmLabel: copy.bulkArchiveLabel,
+      cancelLabel: copy.cancelLabel,
+    });
+    if (!ok) return;
+    const outcome = await archiveSessions(sessionIds);
+    if (outcome.failed.length === 0) {
+      toastApi.success(copy.bulkArchivedTitle(outcome.archived));
+      return;
+    }
+    toastApi.error(
+      copy.bulkArchiveFailedTitle,
+      outcome.firstFailure
+        ? localizedShellErrorMessage(outcome.firstFailure.error, copy.actionFallback, uiLocale)
+        : copy.bulkFailedBody(outcome.failed.length),
+      undefined,
+      outcome.firstFailure ? { sessionId: outcome.firstFailure.sessionId } : undefined,
+    );
+  }
+
+  /** The rail's own bulk delete. See `archiveSelected` for why the wording is here. */
+  async function deleteSelected(sessionIds: readonly string[]): Promise<void> {
+    if (sessionIds.length === 0) return;
+    const ok = await toastApi.confirm({
+      title: copy.bulkDeleteTitle(sessionIds.length),
+      description: copy.bulkDeleteDescription,
+      confirmLabel: copy.deleteLabel,
+      cancelLabel: copy.cancelLabel,
+      destructive: true,
+    });
+    if (!ok) return;
+    const outcome = await deleteSessions(sessionIds);
+    // Kept tasks and failures are independent, and reporting one while dropping
+    // the other is how a count quietly stops adding up.
+    const kept =
+      outcome.restored.length > 0 ? copy.bulkKeptRestored(outcome.restored.length) : undefined;
+    if (outcome.verified && outcome.remaining.length === 0) {
+      toastApi.success(copy.bulkDeletedTitle(outcome.removed), kept);
+      return;
+    }
+    const reason = !outcome.verified
+      ? copy.bulkUnverified
+      : outcome.firstFailure
+        ? localizedShellErrorMessage(outcome.firstFailure.error, copy.actionFallback, uiLocale)
+        : copy.bulkFailedBody(outcome.remaining.length);
+    toastApi.error(
+      copy.bulkDeleteFailedTitle,
+      kept ? `${reason} ${kept}` : reason,
+      undefined,
+      outcome.firstFailure ? { sessionId: outcome.firstFailure.sessionId } : undefined,
+    );
+  }
+
   return {
     flagSession,
     archiveSession,
@@ -458,5 +527,7 @@ export function createSessionNavigationRowActions(deps: {
     purgeSessions,
     deleteSessions,
     archiveSessions,
+    archiveSelected,
+    deleteSelected,
   };
 }

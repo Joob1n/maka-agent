@@ -192,25 +192,7 @@ export function useSessionNavigationController(
     [groups, sessionMeta, worktreeSessionIds],
   );
 
-  // The toast API is reached through the ref for the same reason the row
-  // actions reach it that way: the shell rebuilds it per render, and the
-  // selection's callbacks must not change identity with it.
-  const selectionToastApi = useMemo<SessionNavigationToastApi>(
-    () => ({
-      success: (title, description) => portsRef.current.toastApi.success(title, description),
-      error: (title, description, details, target) =>
-        portsRef.current.toastApi.error(title, description, details, target),
-      confirm: (options) => portsRef.current.toastApi.confirm(options),
-    }),
-    [],
-  );
-
-  const selection = useSessionSelection({
-    sessions: rail.sessions,
-    commands,
-    locale,
-    toastApi: selectionToastApi,
-  });
+  const selection = useSessionSelection({ sessions: rail.sessions, commands });
 
   return useMemo(
     () => ({ layout, selectors, commands, selection }),
