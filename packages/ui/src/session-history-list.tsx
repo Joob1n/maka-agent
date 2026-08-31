@@ -60,7 +60,11 @@ import { StatusDot, type StatusDotVariant } from '@astryxdesign/core/StatusDot';
 import { describeBlockedReason, presentSessionStatus } from './session-status-presentation.js';
 import { dotForStatus } from './status-vocabulary.js';
 import { SessionRenameDialog, type SessionRenameTarget } from './session-rename-dialog.js';
-import { useSessionRailData } from './session-rail-context.js';
+import {
+  sessionSelectionGestureMode,
+  useSessionRailData,
+  useSessionRailSelection,
+} from './session-rail-context.js';
 import { useUiLocale } from './locale-context.js';
 import { getConversationCopy } from './conversation-copy.js';
 import { getSessionHoverCardCopy } from './session-hover-card-copy.js';
@@ -134,12 +138,34 @@ export interface SessionHistoryGroup {
 
 export function SessionHistoryList() {
   const rail = useSessionRailData();
+  const selection = useSessionRailSelection();
   const locale = useUiLocale();
 
   function handleListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+    if (event.key !== 'Escape' && event.key !== 'Delete' && event.key !== 'Backspace') return;
+    // The text-entry guard comes first, and now covers Escape too: a rename
+    // field is where Escape means "abandon this edit", and answering it by
+    // clearing the selection behind the dialog would be a second, invisible
+    // effect of one keypress.
     const active = document.activeElement as HTMLElement | null;
     if (!active || active.matches('input, textarea, [contenteditable="true"]')) return;
+    const marked = selection !== null && selection.selectedIds.size > 0;
+    if (event.key === 'Escape') {
+      // Without this the only way out of a selection is un-clicking every row,
+      // and a modifier pressed by accident becomes a mode the user is stuck in.
+      if (!marked) return;
+      event.preventDefault();
+      selection?.onClear();
+      return;
+    }
+    if (marked) {
+      // Delete is about the marked set once one exists. Deleting the focused
+      // row instead would act on one of several rows the user marked, which is
+      // the shape of an unrecoverable surprise. The sweep confirms first.
+      event.preventDefault();
+      void selection?.onDeleteSelected();
+      return;
+    }
     const row = active.closest<HTMLElement>(
       '[data-maka-contract="session-row"], [data-session-id]',
     );
@@ -241,10 +267,11 @@ function SessionListGroups(props: {
   // any one of them changing identity upstream rebuilt every row. It arrives as
   // `rail` now, so this array says what it always meant (#4109).
   const renderSessionRow = useCallback(
-    (session: SessionSummary): ReactNode => (
+    (session: SessionSummary, groupSessionIds: readonly string[]): ReactNode => (
       <SessionNavRow
         key={session.id}
         session={session}
+        groupSessionIds={groupSessionIds}
         active={session.id === rail.activeId}
         streaming={rail.streamingSessionIds?.has(session.id) ?? false}
         stale={rail.staleSessionIds?.has(session.id) ?? false}
@@ -326,7 +353,10 @@ function SessionListGroups(props: {
     <>
       {renameDialog}
       {props.groups.map((group) => {
-        const items = group.sessions.map((session) => renderSessionRow(session));
+        // Once per group, never per row: a fresh array for each row would hand
+        // every `SessionNavRow` a new prop identity and defeat its memo.
+        const groupSessionIds = group.sessions.map((session) => session.id);
+        const items = group.sessions.map((session) => renderSessionRow(session, groupSessionIds));
         if (!group.label) {
           return (
             <div key={group.key} className="maka-session-group">
@@ -352,7 +382,7 @@ function ProjectNavRow(props: {
   streamingSessionIds?: ReadonlySet<string>;
   projectActions?: ProjectRowActions;
   onStartRename(opener: HTMLElement | null): void;
-  renderSession(session: SessionSummary): ReactNode;
+  renderSession(session: SessionSummary, groupSessionIds: readonly string[]): ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverDescriptionId = useId();
@@ -369,6 +399,13 @@ function ProjectNavRow(props: {
   // still truthy children for Astryx (!!children) and fabricates a disclosure.
   const hasSessions = props.sessions.length > 0;
   const hasActions = props.project !== undefined && props.projectActions !== undefined;
+  // Hoisted and memoized: built inside the row loop it would be rebuilt once
+  // per row, and each row would receive a new array identity — which is
+  // exactly what `SessionNavRow`'s memo exists to avoid.
+  const groupSessionIds = useMemo(
+    () => props.sessions.map((session) => session.id),
+    [props.sessions],
+  );
   return (
     <div ref={containerRef} data-project-id={props.groupKey} className="maka-project-row">
       <SideNavItem
@@ -397,7 +434,9 @@ function ProjectNavRow(props: {
       >
         {/* sidebar.css keeps an 8px nest so session titles share the project x. */}
         {hasSessions ? (
-          <VStack gap={0.5}>{props.sessions.map((session) => props.renderSession(session))}</VStack>
+          <VStack gap={0.5}>
+            {props.sessions.map((session) => props.renderSession(session, groupSessionIds))}
+          </VStack>
         ) : undefined}
       </SideNavItem>
       <ProjectHoverCardDescription
@@ -450,6 +489,8 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   stale: boolean;
   worktree: boolean;
   meta?: string;
+  /** Rendered order of this row's group, so a range knows where it may reach. */
+  groupSessionIds: readonly string[];
   onSelectSession(sessionId: string): void;
   actions?: SessionRowActions;
   onStartRename(target: SessionRenameTarget, opener: HTMLElement | null): void;
@@ -457,6 +498,11 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverDescriptionId = useId();
   const locale = useUiLocale();
+  // Read here rather than passed down: `renderSessionRow` is memoized on the
+  // rail value, so threading the selection through it would rebuild every row
+  // on every click — the thing #4109 took the props out of the tree to stop.
+  const selection = useSessionRailSelection();
+  const marked = selection?.selectedIds.has(props.session.id) ?? false;
   const copy = getConversationCopy(locale).sessions;
   const signals = sessionRowSignals(
     props.session,
@@ -496,6 +542,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
       data-session-id={props.session.id}
       data-stale={props.stale ? 'true' : undefined}
       data-worktree={props.worktree ? 'true' : undefined}
+      data-selected={marked ? 'true' : undefined}
     >
       <SideNavItem
         label={props.session.name}
@@ -519,6 +566,19 @@ const SessionNavRow = memo(function SessionNavRow(props: {
           )
         }
         onClick={(event) => {
+          // A modified click marks the row instead of opening it. Checked
+          // before the double-click branch: Shift-clicking a range lands two
+          // clicks on the same row often enough that a rename dialog in the
+          // middle of a selection is a real outcome, not a corner case.
+          const mode = selection ? sessionSelectionGestureMode(event) : undefined;
+          if (mode && selection) {
+            selection.onGesture({
+              sessionId: props.session.id,
+              mode,
+              groupSessionIds: props.groupSessionIds,
+            });
+            return;
+          }
           if (event.detail > 1 && props.actions) {
             props.onStartRename(
               {

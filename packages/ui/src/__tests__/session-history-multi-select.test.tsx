@@ -1,0 +1,350 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+/**
+ * The rail is a navigation surface that also has to be selectable, so what
+ * matters is which of the two a click is. These cases drive real clicks rather
+ * than asserting markup: the branch under test is chosen inside the row's
+ * handler, and markup cannot say which branch ran.
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { parseHTML } from 'linkedom';
+import type { SessionSummary } from '@maka/core/session';
+import { LocaleProvider } from '../locale-context.js';
+import { SessionHistoryList } from '../session-history-list.js';
+import {
+  SessionRailProvider,
+  type SessionRailData,
+  type SessionRailSelection,
+  type SessionRailSelectionGesture,
+} from '../session-rail-context.js';
+
+/**
+ * What Astryx's SideNavItem reaches for that linkedom does not ship: a computed
+ * style and `matchMedia`, which its hover hook subscribes to. Neither is what
+ * these cases are about, so both answer the least interesting truth.
+ */
+/**
+ * linkedom ships no `MouseEvent`, and React reads the modifier flags straight
+ * off the native event, so a plain Event carrying them is exactly as much event
+ * as the handler under test looks at.
+ */
+function clickEvent(
+  window: ReturnType<typeof parseHTML>['window'],
+  modifiers: Partial<MouseEventInit>,
+): Event {
+  const event = new window.Event('click', { bubbles: true, cancelable: true });
+  Object.assign(event, {
+    detail: 1,
+    button: 0,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    ...modifiers,
+  });
+  return event as unknown as Event;
+}
+
+function installDomStubs(window: ReturnType<typeof parseHTML>['window']): void {
+  window.getComputedStyle = () =>
+    ({
+      direction: 'ltr',
+      writingMode: 'horizontal-tb',
+      getPropertyValue: () => '',
+    }) as unknown as CSSStyleDeclaration;
+  (window as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  });
+}
+
+function summary(id: string): SessionSummary {
+  return {
+    id,
+    name: id,
+    isFlagged: false,
+    isArchived: false,
+    labels: [],
+    hasUnread: false,
+    status: 'active',
+    backend: 'ai-sdk',
+    llmConnectionSlug: 'test-connection',
+    connectionLocked: true,
+    model: 'test-model',
+    permissionMode: 'ask',
+  };
+}
+
+const SESSIONS = ['a', 'b', 'c'].map(summary);
+
+type Harness = {
+  gestures: SessionSelectionGestureLog[];
+  opened: string[];
+  cleared: number;
+  deleteRequests: number;
+  pressKey(key: string, focusedSessionId?: string): Promise<void>;
+  dispose(): Promise<void>;
+  clickRow(sessionId: string, modifiers?: Partial<MouseEventInit>): Promise<void>;
+  document: Document;
+};
+
+type SessionSelectionGestureLog = SessionRailSelectionGesture;
+
+async function mount(options: { selectedIds?: readonly string[] } = {}): Promise<Harness> {
+  const original = {
+    document: globalThis.document,
+    window: globalThis.window,
+    IS_REACT_ACT_ENVIRONMENT: (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT,
+  };
+  const { document, window } = parseHTML('<div id="root"></div>');
+  installDomStubs(window);
+  Object.assign(globalThis, { document, window, IS_REACT_ACT_ENVIRONMENT: true });
+
+  const gestures: SessionSelectionGestureLog[] = [];
+  const opened: string[] = [];
+  let cleared = 0;
+  let deleteRequests = 0;
+  const selection: SessionRailSelection = {
+    selectedIds: new Set(options.selectedIds ?? []),
+    onGesture: (gesture) => gestures.push(gesture),
+    onClear: () => {
+      cleared += 1;
+    },
+    onArchiveSelected: () => undefined,
+    onDeleteSelected: () => {
+      deleteRequests += 1;
+    },
+  };
+  const data: SessionRailData = {
+    sessions: SESSIONS,
+    groupVariant: 'conversation',
+    groups: [{ id: 'recent', label: 'Recent', sessions: [...SESSIONS] }],
+    onSelectSession: (sessionId) => opened.push(sessionId),
+  };
+
+  const container = document.querySelector('#root');
+  assert.ok(container);
+  const root = createRoot(container);
+  await act(() =>
+    root.render(
+      <LocaleProvider locale="en">
+        <SessionRailProvider data={data} selection={selection}>
+          <SessionHistoryList />
+        </SessionRailProvider>
+      </LocaleProvider>,
+    ),
+  );
+
+  const harness: Harness = {
+    gestures,
+    opened,
+    get cleared() {
+      return cleared;
+    },
+    get deleteRequests() {
+      return deleteRequests;
+    },
+    pressKey: async (key: string, focusedSessionId = 'a') => {
+      // linkedom has no focus model and reports `activeElement` as null, where a
+      // browser reports <body> when nothing is focused — and here a row really
+      // is focused, because the user just clicked one. The handler's first
+      // guard reads it, so the test has to answer it.
+      const focused = document.querySelector(`[data-session-id="${focusedSessionId}"] button`);
+      assert.ok(focused);
+      Object.defineProperty(document, 'activeElement', {
+        configurable: true,
+        get: () => focused,
+      });
+      const list = document.querySelector('.maka-session-list');
+      assert.ok(list);
+      await act(() => {
+        const event = new window.Event('keydown', { bubbles: true, cancelable: true });
+        Object.assign(event, { key });
+        list.dispatchEvent(event);
+      });
+    },
+    document: document as unknown as Document,
+    clickRow: async (sessionId, modifiers = {}) => {
+      const row = document.querySelector(`[data-session-id="${sessionId}"] button`);
+      assert.ok(row, `no clickable row for ${sessionId}`);
+      await act(() => {
+        row.dispatchEvent(clickEvent(window, modifiers));
+      });
+    },
+    dispose: async () => {
+      await act(() => root.unmount());
+      Object.assign(globalThis, original);
+    },
+  };
+  return harness;
+}
+
+test('a plain click still opens the task', async () => {
+  const harness = await mount();
+  try {
+    await harness.clickRow('b');
+    assert.deepEqual(harness.opened, ['b']);
+    assert.deepEqual(harness.gestures, []);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('a modified click marks the row instead of opening it', async () => {
+  const harness = await mount();
+  try {
+    await harness.clickRow('b', { metaKey: true });
+    // Not opened: navigating away from what the user is marking is the whole
+    // failure this branch exists to prevent.
+    assert.deepEqual(harness.opened, []);
+    assert.deepEqual(harness.gestures, [
+      { sessionId: 'b', mode: 'toggle', groupSessionIds: ['a', 'b', 'c'] },
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('Shift reports a range and carries the group it may reach across', async () => {
+  const harness = await mount();
+  try {
+    await harness.clickRow('c', { shiftKey: true });
+    assert.deepEqual(harness.opened, []);
+    assert.deepEqual(harness.gestures, [
+      { sessionId: 'c', mode: 'range', groupSessionIds: ['a', 'b', 'c'] },
+    ]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('Ctrl toggles too, for a rail that is not on a Mac', async () => {
+  const harness = await mount();
+  try {
+    await harness.clickRow('a', { ctrlKey: true });
+    assert.equal(harness.gestures[0]?.mode, 'toggle');
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('a marked row says so in the DOM', async () => {
+  const harness = await mount({ selectedIds: ['b'] });
+  try {
+    const marked = harness.document.querySelectorAll('[data-selected="true"]');
+    assert.equal(marked.length, 1);
+    assert.equal((marked[0] as HTMLElement).dataset.sessionId, 'b');
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('a rail with no selection wired up behaves exactly as before', async () => {
+  // The context is optional so a surface that never adopts multi-select — or a
+  // story that renders rows alone — keeps plain clicks and gains no chrome.
+  const original = {
+    document: globalThis.document,
+    window: globalThis.window,
+    IS_REACT_ACT_ENVIRONMENT: (
+      globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    ).IS_REACT_ACT_ENVIRONMENT,
+  };
+  const { document, window } = parseHTML('<div id="root"></div>');
+  installDomStubs(window);
+  Object.assign(globalThis, { document, window, IS_REACT_ACT_ENVIRONMENT: true });
+  const opened: string[] = [];
+  const container = document.querySelector('#root');
+  assert.ok(container);
+  const root = createRoot(container);
+  try {
+    await act(() =>
+      root.render(
+        <LocaleProvider locale="en">
+          <SessionRailProvider
+            data={{
+              sessions: SESSIONS,
+              groupVariant: 'conversation',
+              groups: [{ id: 'recent', label: 'Recent', sessions: [...SESSIONS] }],
+              onSelectSession: (sessionId) => opened.push(sessionId),
+            }}
+          >
+            <SessionHistoryList />
+          </SessionRailProvider>
+        </LocaleProvider>,
+      ),
+    );
+    const row = document.querySelector('[data-session-id="b"] button');
+    assert.ok(row);
+    await act(() => {
+      row.dispatchEvent(clickEvent(window, { metaKey: true }));
+    });
+    // A modifier with nothing wired up is still a click on a task.
+    assert.deepEqual(opened, ['b']);
+    assert.equal(document.querySelector('[data-selected="true"]'), null);
+  } finally {
+    await act(() => root.unmount());
+    Object.assign(globalThis, original);
+  }
+});
+
+test('Escape leaves a selection', async () => {
+  const harness = await mount({ selectedIds: ['b'] });
+  try {
+    await harness.pressKey('Escape');
+    assert.equal(harness.cleared, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('Escape with nothing marked is not this handler\'s business', async () => {
+  const harness = await mount();
+  try {
+    await harness.pressKey('Escape');
+    assert.equal(harness.cleared, 0);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('Delete asks for the marked set, not the focused row', async () => {
+  // Deleting the focused row while several are marked is the shape of an
+  // unrecoverable surprise: the user sees N marked and loses one they did not
+  // single out.
+  const harness = await mount({ selectedIds: ['a', 'c'] });
+  try {
+    await harness.pressKey('Delete');
+    assert.equal(harness.deleteRequests, 1);
+  } finally {
+    await harness.dispose();
+  }
+});

@@ -530,3 +530,44 @@
   letter-spacing: var(--tracking-wide);
   white-space: nowrap;
 }
+
+/*
+ * Multi-select.
+ *
+ * The marked state is a background, not a border: the rail already spends its
+ * border vocabulary on the active row's own chrome, and a second outlined
+ * treatment beside it reads as two competing "current" marks rather than one
+ * current row among several marked ones. `--color-overlay-pressed` is the
+ * heavier of the rail's two overlays, so a marked row sits visibly above a
+ * hovered one without inventing a colour.
+ */
+.maka-session-row[data-selected='true'] > div > .astryx-side-nav-item {
+  background: var(--color-overlay-pressed);
+}
+
+/*
+ * Shift-click extends a text selection from wherever the last one was anchored,
+ * and in a list of titles that paints a blue smear across the rows the user is
+ * marking. It cannot be fixed from the click handler — the browser starts the
+ * selection on mousedown, before any click exists — so it is refused here.
+ */
+.maka-session-row {
+  user-select: none;
+}
+
+/*
+ * The bar sits in the sticky top region, below the grouping switch, and takes
+ * the same block padding so the three chrome rows keep one rhythm. The hairline
+ * is what separates a set of commands from the list they act on; without it the
+ * count reads as the first row of the list.
+ */
+.maka-session-selection-bar {
+  padding-block: var(--spacing-1) var(--spacing-2);
+  border-block-end: var(--border-width-hairline) solid var(--border-soft);
+}
+
+/* Pushes the actions to the trailing edge, so the count keeps the leading one
+   whatever the locale does to the button labels' width. */
+.maka-session-selection-bar-spacer {
+  flex: 1 1 auto;
+}

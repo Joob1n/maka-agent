@@ -21,7 +21,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import type { ProjectRecord } from '@maka/core/project';
 import type { SessionSummary } from '@maka/core/session';
 import { runtimeHostProfileUsesHostWorkspace } from '@maka/runtime-host/profile-kind';
-import { useUiLocale, type SessionHistoryGroup } from '@maka/ui';
+import { useUiLocale, type SessionHistoryGroup, type SessionRailSelection } from '@maka/ui';
 import { useExternalStoreSelector } from '../../../use-external-store-selector.js';
 import { deriveSessionNavigationGroups } from '../model/session-navigation-groups.js';
 import { deriveWorktreeSessionIds } from '../model/session-project-grouping.js';
@@ -37,6 +37,7 @@ import {
   createSessionNavigationRowActions,
   type SessionNavigationRowActions,
 } from './session-row-actions.js';
+import { useSessionSelection } from './use-session-selection.js';
 
 export type SessionNavigationToastApi = {
   success(title: string, description?: string): void;
@@ -99,6 +100,7 @@ export interface SessionNavigationController {
   layout: SessionRailLayoutState;
   selectors: SessionNavigationSelectors;
   commands: SessionNavigationRowActions;
+  selection: SessionRailSelection;
 }
 
 /**
@@ -190,8 +192,28 @@ export function useSessionNavigationController(
     [groups, sessionMeta, worktreeSessionIds],
   );
 
+  // The toast API is reached through the ref for the same reason the row
+  // actions reach it that way: the shell rebuilds it per render, and the
+  // selection's callbacks must not change identity with it.
+  const selectionToastApi = useMemo<SessionNavigationToastApi>(
+    () => ({
+      success: (title, description) => portsRef.current.toastApi.success(title, description),
+      error: (title, description, details, target) =>
+        portsRef.current.toastApi.error(title, description, details, target),
+      confirm: (options) => portsRef.current.toastApi.confirm(options),
+    }),
+    [],
+  );
+
+  const selection = useSessionSelection({
+    sessions: rail.sessions,
+    commands,
+    locale,
+    toastApi: selectionToastApi,
+  });
+
   return useMemo(
-    () => ({ layout, selectors, commands }),
-    [commands, layout, selectors],
+    () => ({ layout, selectors, commands, selection }),
+    [commands, layout, selection, selectors],
   );
 }

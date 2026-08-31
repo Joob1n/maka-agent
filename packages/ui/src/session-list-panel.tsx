@@ -23,6 +23,7 @@ import {
 } from '@astryxdesign/core/SegmentedControl';
 import { SideNav } from '@astryxdesign/core/SideNav';
 import { SessionHistoryList } from './session-history-list.js';
+import { SessionSelectionBar } from './session-selection-bar.js';
 import {
   useSessionRailChrome,
   type SessionViewMode,
@@ -124,6 +125,13 @@ export function SessionListPanel() {
           <>
             <SessionSidebarNav />
             {groupingSwitch}
+            {/* Sticky, with the rest of the permanent chrome. A bar that
+                scrolled with the list would be one the user has to scroll back
+                to after marking rows at the bottom — the case multi-select
+                exists for. It renders nothing until rows are marked, and the
+                list element below is a constant, so a selection change
+                re-renders this panel and skips the ~1,000 fibers under it. */}
+            {!collapsed ? <SessionSelectionBar /> : null}
           </>
         }
         footer={<SessionSidebarFooter />}

@@ -42,6 +42,13 @@ export { deriveBranchBanner } from './model/branch-banner.js';
 export { deriveSessionRail } from './model/session-rail.js';
 export { deriveSessionRevisionNavigation } from './model/session-revisions.js';
 export {
+  applySessionSelectionGesture,
+  EMPTY_SESSION_SELECTION,
+  pruneSessionSelection,
+  type SessionSelection,
+  type SessionSelectionGesture,
+} from './model/session-selection.js';
+export {
   readSessionListViewMode,
   SESSION_LIST_EXPANDED_MAX_WIDTH,
   SESSION_LIST_EXPANDED_MIN_WIDTH,

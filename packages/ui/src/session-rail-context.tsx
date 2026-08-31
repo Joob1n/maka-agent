@@ -92,8 +92,68 @@ export interface SessionRailChrome {
   };
 }
 
+/**
+ * One row's click, reported rather than interpreted.
+ *
+ * The rail says what was clicked and with which modifier; the host decides what
+ * that means for its selection. `groupSessionIds` is the rendered order of the
+ * group the row sits in, which is as far as a range can reach: a project
+ * group's collapsed state lives inside Astryx's `SideNavItem` and is not
+ * readable here, so a range across groups could quietly include rows nobody can
+ * see. Inside one group the question never arises — both endpoints had to be
+ * clicked, and a row that can be clicked is a row that is on screen.
+ */
+export interface SessionRailSelectionGesture {
+  sessionId: string;
+  mode: 'toggle' | 'range';
+  groupSessionIds: readonly string[];
+}
+
+/**
+ * What the rail has marked for a bulk action.
+ *
+ * A THIRD context, for the reason the chrome is a second one: this changes on
+ * every modified click while the list does not, and folding it into
+ * `SessionRailData` would give that value a new identity per click — which is
+ * the ~1,000-fiber render the split exists to prevent (#4109). Rows that read
+ * this context still re-render on a selection change; that is the cost, and it
+ * is bounded by the rows on screen rather than by the shell.
+ *
+ * Absent means the rail has no multi-select: rows navigate, nothing marks, and
+ * a surface that never wired it up renders exactly as before.
+ */
+export interface SessionRailSelection {
+  selectedIds: ReadonlySet<string>;
+  onGesture(gesture: SessionRailSelectionGesture): void;
+  onClear(): void;
+  onArchiveSelected(): void | Promise<void>;
+  onDeleteSelected(): void | Promise<void>;
+  /** A sweep is running. The bar disables while one is, so a second click
+   *  cannot ask for the same set twice. */
+  busy?: boolean;
+}
+
+/**
+ * Which selection gesture a click's modifiers ask for, if any.
+ *
+ * An unmodified click is not a gesture: the rail is a navigation surface first
+ * and must keep opening the task. Shift outranks the toggle modifier when both
+ * are held — a range is the more specific request, and answering it with a
+ * toggle drops what was asked for.
+ */
+export function sessionSelectionGestureMode(modifiers: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+}): SessionRailSelectionGesture['mode'] | undefined {
+  if (modifiers.shiftKey) return 'range';
+  if (modifiers.metaKey || modifiers.ctrlKey) return 'toggle';
+  return undefined;
+}
+
 const SessionRailDataContext = createContext<SessionRailData | null>(null);
 const SessionRailChromeContext = createContext<SessionRailChrome | null>(null);
+const SessionRailSelectionContext = createContext<SessionRailSelection | null>(null);
 
 /**
  * `chrome` is optional so the list can be rendered on its own — a test or a
@@ -103,12 +163,15 @@ const SessionRailChromeContext = createContext<SessionRailChrome | null>(null);
 export function SessionRailProvider(props: {
   data: SessionRailData;
   chrome?: SessionRailChrome;
+  selection?: SessionRailSelection;
   children?: ReactNode;
 }) {
   return (
     <SessionRailDataContext.Provider value={props.data}>
       <SessionRailChromeContext.Provider value={props.chrome ?? null}>
-        {props.children}
+        <SessionRailSelectionContext.Provider value={props.selection ?? null}>
+          {props.children}
+        </SessionRailSelectionContext.Provider>
       </SessionRailChromeContext.Provider>
     </SessionRailDataContext.Provider>
   );
@@ -124,4 +187,12 @@ export function useSessionRailChrome(): SessionRailChrome {
   const chrome = useContext(SessionRailChromeContext);
   if (!chrome) throw new Error('SessionRailProvider is missing');
   return chrome;
+}
+
+/**
+ * Null rather than throwing, unlike the other two: multi-select is optional
+ * chrome, and a rail without it is a rail, not a misconfiguration.
+ */
+export function useSessionRailSelection(): SessionRailSelection | null {
+  return useContext(SessionRailSelectionContext);
 }

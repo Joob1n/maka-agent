@@ -1,0 +1,165 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { SessionSummary } from '@maka/core/session';
+import type { UiLocale } from '@maka/core/ui-locale';
+import type { SessionRailSelection } from '@maka/ui';
+import { getShellCopy, localizedShellErrorMessage } from '../../../locales/shell-copy.js';
+import {
+  applySessionSelectionGesture,
+  EMPTY_SESSION_SELECTION,
+  pruneSessionSelection,
+} from '../model/session-selection.js';
+import type { SessionNavigationRowActions } from './session-row-actions.js';
+import type { SessionNavigationToastApi } from './use-session-navigation-controller.js';
+
+/**
+ * The rail's multi-select: which rows are marked, and the two sweeps they feed.
+ *
+ * The selection is reconciled against the catalog on every change to it, not
+ * only after a sweep. Another window deleting a task, a Host going away, or a
+ * grouping change that drops rows all leave ids behind, and a count that
+ * includes them is a count that does not match what the confirm names.
+ */
+export function useSessionSelection(input: {
+  sessions: readonly SessionSummary[];
+  commands: SessionNavigationRowActions;
+  locale: UiLocale;
+  toastApi: SessionNavigationToastApi;
+}): SessionRailSelection {
+  const { sessions, commands, locale, toastApi } = input;
+  const [selection, setSelection] = useState(EMPTY_SESSION_SELECTION);
+  const [busy, setBusy] = useState(false);
+  const copy = getShellCopy(locale).sessionRowActions;
+
+  const listedIds = useMemo(() => new Set(sessions.map((session) => session.id)), [sessions]);
+  useEffect(() => {
+    // `pruneSessionSelection` returns its input untouched when nothing was
+    // dropped, so this settles after one pass instead of looping on a new Set.
+    setSelection((current) => pruneSessionSelection(current, listedIds));
+  }, [listedIds]);
+
+  // The sweep reads the ids at the moment it runs, and the state it reads is
+  // the one the confirm was built from — held in a ref so the callbacks below
+  // do not change identity per selection change and re-render the bar's buttons.
+  const selectionRef = useRef(selection);
+  const busyRef = useRef(busy);
+  // Published on commit, not during render: a render React throws away must not
+  // leave a ref pointing at a selection that was never shown.
+  useLayoutEffect(() => {
+    selectionRef.current = selection;
+    busyRef.current = busy;
+  });
+
+  const onGesture = useCallback<SessionRailSelection['onGesture']>((gesture) => {
+    setSelection((current) => applySessionSelectionGesture(current, gesture));
+  }, []);
+
+  const onClear = useCallback(() => setSelection(EMPTY_SESSION_SELECTION), []);
+
+  const runSweep = useCallback(
+    async (kind: 'archive' | 'delete') => {
+      if (busyRef.current) return;
+      // Frozen at the click, for the reason the archived-task purge freezes its
+      // own set: a confirm names a number to a person, and a set re-read after
+      // the dialog can be a different one.
+      const sessionIds = [...selectionRef.current.selectedIds];
+      if (sessionIds.length === 0) return;
+      const confirmed = await toastApi.confirm({
+        title:
+          kind === 'delete'
+            ? copy.bulkDeleteTitle(sessionIds.length)
+            : copy.bulkArchiveTitle(sessionIds.length),
+        description:
+          kind === 'delete' ? copy.bulkDeleteDescription : copy.bulkArchiveDescription,
+        confirmLabel: kind === 'delete' ? copy.deleteLabel : copy.bulkArchiveLabel,
+        cancelLabel: copy.cancelLabel,
+        destructive: kind === 'delete',
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      try {
+        if (kind === 'archive') {
+          const outcome = await commands.archiveSessions(sessionIds);
+          if (outcome.failed.length > 0) {
+            toastApi.error(
+              copy.bulkArchiveFailedTitle,
+              outcome.firstFailure
+                ? localizedShellErrorMessage(
+                    outcome.firstFailure.error,
+                    copy.actionFallback,
+                    locale,
+                  )
+                : copy.bulkFailedBody(outcome.failed.length),
+              undefined,
+              outcome.firstFailure ? { sessionId: outcome.firstFailure.sessionId } : undefined,
+            );
+          } else {
+            toastApi.success(copy.bulkArchivedTitle(outcome.archived));
+          }
+          return;
+        }
+        const outcome = await commands.deleteSessions(sessionIds);
+        // Kept tasks and failures are independent, and reporting one while
+        // dropping the other is how a count quietly stops adding up.
+        const kept =
+          outcome.restored.length > 0 ? copy.bulkKeptRestored(outcome.restored.length) : undefined;
+        if (!outcome.verified || outcome.remaining.length > 0) {
+          const reason = !outcome.verified
+            ? copy.bulkUnverified
+            : outcome.firstFailure
+              ? localizedShellErrorMessage(outcome.firstFailure.error, copy.actionFallback, locale)
+              : copy.bulkFailedBody(outcome.remaining.length);
+          toastApi.error(
+            copy.bulkDeleteFailedTitle,
+            kept ? `${reason} ${kept}` : reason,
+            undefined,
+            outcome.firstFailure ? { sessionId: outcome.firstFailure.sessionId } : undefined,
+          );
+        } else {
+          toastApi.success(copy.bulkDeletedTitle(outcome.removed), kept);
+        }
+      } finally {
+        setBusy(false);
+        // Whatever survived is reconciled by the catalog refresh the sweep
+        // already ran; clearing here is about the request, which is answered
+        // either way. Leaving a marked set behind after a destructive sweep
+        // invites a second click on rows that may no longer exist.
+        setSelection(EMPTY_SESSION_SELECTION);
+      }
+    },
+    [commands, copy, locale, toastApi],
+  );
+
+  const onArchiveSelected = useCallback(() => runSweep('archive'), [runSweep]);
+  const onDeleteSelected = useCallback(() => runSweep('delete'), [runSweep]);
+
+  return useMemo(
+    () => ({
+      selectedIds: selection.selectedIds,
+      onGesture,
+      onClear,
+      onArchiveSelected,
+      onDeleteSelected,
+      busy,
+    }),
+    [busy, onArchiveSelected, onClear, onDeleteSelected, onGesture, selection.selectedIds],
+  );
+}

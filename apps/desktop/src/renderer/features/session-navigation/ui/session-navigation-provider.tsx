@@ -209,7 +209,7 @@ export function SessionNavigationProvider(props: SessionNavigationProviderProps)
   };
 
   return (
-    <SessionRailProvider data={data} chrome={chrome}>
+    <SessionRailProvider data={data} chrome={chrome} selection={controller.selection}>
       {props.children}
     </SessionRailProvider>
   );
