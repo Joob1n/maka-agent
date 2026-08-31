@@ -19,9 +19,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { SessionSummary } from '@maka/core/session';
-import type { SessionRailSelection } from '@maka/ui';
+import type { SessionRailRowSelection, SessionRailSelection } from '@maka/ui';
 import {
-  applySessionSelectionGesture,
   EMPTY_SESSION_SELECTION,
   enterSessionSelection,
   exitSessionSelection,
@@ -41,7 +40,7 @@ import type { SessionNavigationRowActions } from './session-row-actions.js';
 export function useSessionSelection(input: {
   sessions: readonly SessionSummary[];
   commands: SessionNavigationRowActions;
-}): SessionRailSelection {
+}): { selection: SessionRailSelection; rowSelection: SessionRailRowSelection } {
   const { sessions, commands } = input;
   const [selection, setSelection] = useState(EMPTY_SESSION_SELECTION);
   const [busy, setBusy] = useState(false);
@@ -69,17 +68,13 @@ export function useSessionSelection(input: {
   const listedSessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
   const listedRef = useRef(listedSessionIds);
 
-  const onGesture = useCallback<SessionRailSelection['onGesture']>((gesture) => {
-    setSelection((current) => applySessionSelectionGesture(current, gesture));
-  }, []);
-
   const onToggleRow = useCallback<SessionRailSelection['onToggleRow']>((sessionId, selected) => {
     setSelection((current) => {
       if (current.selectedIds.has(sessionId) === selected) return current;
       const selectedIds = new Set(current.selectedIds);
       if (selected) selectedIds.add(sessionId);
       else selectedIds.delete(sessionId);
-      return { active: true, selectedIds, anchorId: sessionId };
+      return { active: true, selectedIds };
     });
   }, []);
 
@@ -87,11 +82,7 @@ export function useSessionSelection(input: {
     setSelection((current) => {
       const entered = enterSessionSelection(current);
       if (sessionId === undefined) return entered;
-      return {
-        active: true,
-        selectedIds: new Set([...entered.selectedIds, sessionId]),
-        anchorId: sessionId,
-      };
+      return { active: true, selectedIds: new Set([...entered.selectedIds, sessionId]) };
     });
   }, []);
 
@@ -142,12 +133,30 @@ export function useSessionSelection(input: {
     [commands, runSweep],
   );
 
-  return useMemo(
+  /**
+   * The rows' half, memoized on the selection ALONE.
+   *
+   * Every row subscribes to this, and a context consumer re-renders whenever
+   * the value it reads changes — `memo` cannot stop it. Keeping
+   * `listedSessionIds` out of it is the whole point: that array is derived from
+   * the catalog and moves on a session switch, which would re-render all of the
+   * rail's rows for a switch that changed two of them (#4109).
+   */
+  const rowSelection = useMemo<SessionRailRowSelection>(
+    () => ({
+      active: selection.active,
+      selectedIds: selection.selectedIds,
+      onToggleRow,
+      onEnter,
+    }),
+    [onEnter, onToggleRow, selection.active, selection.selectedIds],
+  );
+
+  const wholeSelection = useMemo<SessionRailSelection>(
     () => ({
       active: selection.active,
       selectedIds: selection.selectedIds,
       listedSessionIds,
-      onGesture,
       onToggleRow,
       onEnter,
       onExit,
@@ -163,11 +172,15 @@ export function useSessionSelection(input: {
       onDeleteSelected,
       onEnter,
       onExit,
-      onGesture,
       onToggleAll,
       onToggleRow,
       selection.active,
       selection.selectedIds,
     ],
+  );
+
+  return useMemo(
+    () => ({ selection: wholeSelection, rowSelection }),
+    [rowSelection, wholeSelection],
   );
 }

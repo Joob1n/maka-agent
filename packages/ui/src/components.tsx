@@ -28,12 +28,12 @@ export { ModuleHubSelector } from './module-hub-selector.js';
 export type { ModuleHubHeader } from './module-hub-selector.js';
 export { SearchModal } from './search-modal.js';
 export { SessionListPanel } from './session-list-panel.js';
-export { SessionRailProvider, sessionSelectionGestureMode } from './session-rail-context.js';
+export { SessionRailProvider } from './session-rail-context.js';
 export type {
   SessionRailChrome,
   SessionRailData,
+  SessionRailRowSelection,
   SessionRailSelection,
-  SessionRailSelectionGesture,
   SessionViewMode,
 } from './session-rail-context.js';
 export type { SidebarUpdateReminder } from './session-sidebar-nav.js';

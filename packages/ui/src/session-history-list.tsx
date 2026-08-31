@@ -63,8 +63,8 @@ import { dotForStatus } from './status-vocabulary.js';
 import { SessionRenameDialog, type SessionRenameTarget } from './session-rename-dialog.js';
 import { CheckboxInput } from '@astryxdesign/core/CheckboxInput';
 import {
-  sessionSelectionGestureMode,
   useSessionRailData,
+  useSessionRailRowSelection,
   useSessionRailSelection,
 } from './session-rail-context.js';
 import { useUiLocale } from './locale-context.js';
@@ -182,6 +182,27 @@ export function SessionHistoryList() {
     }
   }
 
+  // Memoized on what it derives from. Rebuilt per render it would give
+  // `SessionListGroups` a new `props.groups` every time, which defeats the
+  // per-group memo below it — and this component re-renders on every session
+  // switch, because `rail.activeId` is part of the value it reads.
+  const groups = useMemo(
+    () =>
+      rail.groups
+        ? rail.groups.map((g) => ({
+            key: g.id,
+            label: g.label,
+            sessions: g.sessions,
+            project: g.project,
+          }))
+        : groupSessionsForHistory(rail.sessions, locale).map((g) => ({
+            key: g.id,
+            label: g.label,
+            sessions: g.sessions,
+          })),
+    [locale, rail.groups, rail.sessions],
+  );
+
   // Outer SideNav is the sole navigation landmark and it already carries this
   // panel's name; naming this element too put "任务列表" inside "任务列表",
   // which is one ambiguous match for anything selecting by that name and no
@@ -189,22 +210,7 @@ export function SessionHistoryList() {
   // handler, nothing an assistive tech user needs to be told about separately.
   return (
     <div className="maka-session-list" onKeyDown={handleListKeyDown}>
-      <SessionListGroups
-        groups={
-          rail.groups
-            ? rail.groups.map((g) => ({
-                key: g.id,
-                label: g.label,
-                sessions: g.sessions,
-                project: g.project,
-              }))
-            : groupSessionsForHistory(rail.sessions, locale).map((g) => ({
-                key: g.id,
-                label: g.label,
-                sessions: g.sessions,
-              }))
-        }
-      />
+      <SessionListGroups groups={groups} />
     </div>
   );
 }
@@ -271,11 +277,10 @@ function SessionListGroups(props: {
   // any one of them changing identity upstream rebuilt every row. It arrives as
   // `rail` now, so this array says what it always meant (#4109).
   const renderSessionRow = useCallback(
-    (session: SessionSummary, groupSessionIds: readonly string[]): ReactNode => (
+    (session: SessionSummary): ReactNode => (
       <SessionNavRow
         key={session.id}
         session={session}
-        groupSessionIds={groupSessionIds}
         active={session.id === rail.activeId}
         streaming={rail.streamingSessionIds?.has(session.id) ?? false}
         stale={rail.staleSessionIds?.has(session.id) ?? false}
@@ -359,8 +364,7 @@ function SessionListGroups(props: {
       {props.groups.map((group) => {
         // Once per group, never per row: a fresh array for each row would hand
         // every `SessionNavRow` a new prop identity and defeat its memo.
-        const groupSessionIds = group.sessions.map((session) => session.id);
-        const items = group.sessions.map((session) => renderSessionRow(session, groupSessionIds));
+        const items = group.sessions.map((session) => renderSessionRow(session));
         if (!group.label) {
           return (
             <div key={group.key} className="maka-session-group">
@@ -386,7 +390,7 @@ function ProjectNavRow(props: {
   streamingSessionIds?: ReadonlySet<string>;
   projectActions?: ProjectRowActions;
   onStartRename(opener: HTMLElement | null): void;
-  renderSession(session: SessionSummary, groupSessionIds: readonly string[]): ReactNode;
+  renderSession(session: SessionSummary): ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverDescriptionId = useId();
@@ -403,13 +407,6 @@ function ProjectNavRow(props: {
   // still truthy children for Astryx (!!children) and fabricates a disclosure.
   const hasSessions = props.sessions.length > 0;
   const hasActions = props.project !== undefined && props.projectActions !== undefined;
-  // Hoisted and memoized: built inside the row loop it would be rebuilt once
-  // per row, and each row would receive a new array identity — which is
-  // exactly what `SessionNavRow`'s memo exists to avoid.
-  const groupSessionIds = useMemo(
-    () => props.sessions.map((session) => session.id),
-    [props.sessions],
-  );
   return (
     <div ref={containerRef} data-project-id={props.groupKey} className="maka-project-row">
       <SideNavItem
@@ -439,7 +436,7 @@ function ProjectNavRow(props: {
         {/* sidebar.css keeps an 8px nest so session titles share the project x. */}
         {hasSessions ? (
           <VStack gap={0.5}>
-            {props.sessions.map((session) => props.renderSession(session, groupSessionIds))}
+            {props.sessions.map((session) => props.renderSession(session))}
           </VStack>
         ) : undefined}
       </SideNavItem>
@@ -493,8 +490,6 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   stale: boolean;
   worktree: boolean;
   meta?: string;
-  /** Rendered order of this row's group, so a range knows where it may reach. */
-  groupSessionIds: readonly string[];
   onSelectSession(sessionId: string): void;
   actions?: SessionRowActions;
   onStartRename(target: SessionRenameTarget, opener: HTMLElement | null): void;
@@ -502,10 +497,12 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hoverDescriptionId = useId();
   const locale = useUiLocale();
-  // Read here rather than passed down: `renderSessionRow` is memoized on the
-  // rail value, so threading the selection through it would rebuild every row
-  // on every click — the thing #4109 took the props out of the tree to stop.
-  const selection = useSessionRailSelection();
+  // The ROW half of the selection, not the whole of it. Read here rather than
+  // threaded through `renderSessionRow`, which is memoized on the rail value —
+  // but read from the narrow context, because a consumer re-renders on any
+  // change to the value it subscribes to and the wide one carries
+  // `listedSessionIds`, which moves whenever the catalog does (#4109).
+  const selection = useSessionRailRowSelection();
   const marked = selection?.selectedIds.has(props.session.id) ?? false;
   const copy = getConversationCopy(locale).sessions;
   const signals = sessionRowSignals(
@@ -586,19 +583,6 @@ const SessionNavRow = memo(function SessionNavRow(props: {
           )
         }
         onClick={(event) => {
-          // A modified click marks the row instead of opening it. Checked
-          // before the double-click branch: Shift-clicking a range lands two
-          // clicks on the same row often enough that a rename dialog in the
-          // middle of a selection is a real outcome, not a corner case.
-          const mode = selection ? sessionSelectionGestureMode(event) : undefined;
-          if (mode && selection) {
-            selection.onGesture({
-              sessionId: props.session.id,
-              mode,
-              groupSessionIds: props.groupSessionIds,
-            });
-            return;
-          }
           if (event.detail > 1 && props.actions) {
             props.onStartRename(
               {
@@ -657,7 +641,6 @@ const SessionNavRow = memo(function SessionNavRow(props: {
         <SessionItemActions
           session={props.session}
           actions={props.actions}
-          groupSessionIds={props.groupSessionIds}
           onStartRename={props.onStartRename}
         />
       )}
@@ -1012,15 +995,14 @@ function ProjectItemActions(props: {
 function SessionItemActions(props: {
   session: SessionSummary;
   actions: SessionRowActions;
-  groupSessionIds: readonly string[];
   onStartRename(target: SessionRenameTarget, opener: HTMLElement | null): void;
 }) {
   const trailingRef = useRef<HTMLSpanElement>(null);
   // The way in. ⌘-click is invisible to anyone who has not been told about it,
   // and this menu is where a person already looks for what a row can do — so
   // selection is discoverable from the same place as pin, rename, and archive.
-  // Once one row is marked the bar teaches the modifier that extends it.
-  const selection = useSessionRailSelection();
+  // The narrow context again: this renders once per row.
+  const selection = useSessionRailRowSelection();
   const locale = useUiLocale();
   const copy = getConversationCopy(locale).sessions;
   const actionContext = [

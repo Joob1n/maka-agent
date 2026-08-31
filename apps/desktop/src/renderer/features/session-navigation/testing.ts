@@ -42,7 +42,6 @@ export { deriveBranchBanner } from './model/branch-banner.js';
 export { deriveSessionRail } from './model/session-rail.js';
 export { deriveSessionRevisionNavigation } from './model/session-revisions.js';
 export {
-  applySessionSelectionGesture,
   EMPTY_SESSION_SELECTION,
   enterSessionSelection,
   exitSessionSelection,

@@ -35,8 +35,8 @@ import { SessionHistoryList } from '../session-history-list.js';
 import {
   SessionRailProvider,
   type SessionRailData,
+  type SessionRailRowSelection,
   type SessionRailSelection,
-  type SessionRailSelectionGesture,
 } from '../session-rail-context.js';
 
 /**
@@ -105,7 +105,6 @@ function summary(id: string): SessionSummary {
 const SESSIONS = ['a', 'b', 'c'].map(summary);
 
 type Harness = {
-  gestures: SessionSelectionGestureLog[];
   opened: string[];
   toggles: Array<[string, boolean]>;
   toggleAll: boolean[];
@@ -118,8 +117,6 @@ type Harness = {
   clickCheckbox(sessionId: string, checked: boolean): Promise<void>;
   document: Document;
 };
-
-type SessionSelectionGestureLog = SessionRailSelectionGesture;
 
 async function mount(
   options: { selectedIds?: readonly string[]; active?: boolean } = {},
@@ -135,20 +132,21 @@ async function mount(
   installDomStubs(window);
   Object.assign(globalThis, { document, window, IS_REACT_ACT_ENVIRONMENT: true });
 
-  const gestures: SessionSelectionGestureLog[] = [];
   const opened: string[] = [];
   const toggles: Array<[string, boolean]> = [];
   const toggleAll: boolean[] = [];
   const entered: Array<string | undefined> = [];
   let exits = 0;
   let deleteRequests = 0;
-  const selection: SessionRailSelection = {
+  const rowSelection: SessionRailRowSelection = {
     active: options.active ?? false,
     selectedIds: new Set(options.selectedIds ?? []),
-    listedSessionIds: SESSIONS.map((session) => session.id),
-    onGesture: (gesture) => gestures.push(gesture),
     onToggleRow: (sessionId, selected) => toggles.push([sessionId, selected]),
     onEnter: (sessionId) => entered.push(sessionId),
+  };
+  const selection: SessionRailSelection = {
+    ...rowSelection,
+    listedSessionIds: SESSIONS.map((session) => session.id),
     onExit: () => {
       exits += 1;
     },
@@ -171,7 +169,7 @@ async function mount(
   await act(() =>
     root.render(
       <LocaleProvider locale="en">
-        <SessionRailProvider data={data} selection={selection}>
+        <SessionRailProvider data={data} selection={selection} rowSelection={rowSelection}>
           <SessionHistoryList />
         </SessionRailProvider>
       </LocaleProvider>,
@@ -179,7 +177,6 @@ async function mount(
   );
 
   const harness: Harness = {
-    gestures,
     opened,
     toggles,
     toggleAll,
@@ -243,45 +240,6 @@ test('a plain click still opens the task', async () => {
   try {
     await harness.clickRow('b');
     assert.deepEqual(harness.opened, ['b']);
-    assert.deepEqual(harness.gestures, []);
-  } finally {
-    await harness.dispose();
-  }
-});
-
-test('a modified click marks the row instead of opening it', async () => {
-  const harness = await mount();
-  try {
-    await harness.clickRow('b', { metaKey: true });
-    // Not opened: navigating away from what the user is marking is the whole
-    // failure this branch exists to prevent.
-    assert.deepEqual(harness.opened, []);
-    assert.deepEqual(harness.gestures, [
-      { sessionId: 'b', mode: 'toggle', groupSessionIds: ['a', 'b', 'c'] },
-    ]);
-  } finally {
-    await harness.dispose();
-  }
-});
-
-test('Shift reports a range and carries the group it may reach across', async () => {
-  const harness = await mount();
-  try {
-    await harness.clickRow('c', { shiftKey: true });
-    assert.deepEqual(harness.opened, []);
-    assert.deepEqual(harness.gestures, [
-      { sessionId: 'c', mode: 'range', groupSessionIds: ['a', 'b', 'c'] },
-    ]);
-  } finally {
-    await harness.dispose();
-  }
-});
-
-test('Ctrl toggles too, for a rail that is not on a Mac', async () => {
-  const harness = await mount();
-  try {
-    await harness.clickRow('a', { ctrlKey: true });
-    assert.equal(harness.gestures[0]?.mode, 'toggle');
   } finally {
     await harness.dispose();
   }
