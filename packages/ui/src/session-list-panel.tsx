@@ -125,18 +125,29 @@ export function SessionListPanel() {
           <>
             <SessionSidebarNav />
             {groupingSwitch}
-            {/* Sticky, with the rest of the permanent chrome. A bar that
-                scrolled with the list would be one the user has to scroll back
-                to after marking rows at the bottom — the case multi-select
-                exists for. It renders nothing until rows are marked, and the
-                list element below is a constant, so a selection change
-                re-renders this panel and skips the ~1,000 fibers under it. */}
-            {!collapsed ? <SessionSelectionBar /> : null}
           </>
         }
         footer={<SessionSidebarFooter />}
       >
-        {!collapsed ? SESSION_HISTORY_LIST : null}
+        {/* The selection bar belongs to the LIST, not to the chrome, and is
+            rendered here rather than in `topContent` for that reason. SideNav
+            draws one hairline under the whole top region, so a bar up there
+            landed above that line — grouped with 按时间 / 按项目 and cut off
+            from the rows it governs, with its own hairline making a second line
+            9px from the first.
+
+            It is `position: sticky` inside the scroller instead, so it still
+            does not scroll away while the user marks rows further down.
+
+            `SESSION_HISTORY_LIST` keeps its element identity through this
+            fragment, so a selection change still skips the ~1,000 fibers under
+            it (#4109). */}
+        {!collapsed ? (
+          <>
+            <SessionSelectionBar />
+            {SESSION_HISTORY_LIST}
+          </>
+        ) : null}
       </SideNav>
     </div>
   );

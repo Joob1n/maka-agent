@@ -25,11 +25,21 @@
  * Shift-click re-measure rather than accumulate.
  */
 export interface SessionSelection {
+  /**
+   * Whether the rail is in selection mode.
+   *
+   * Separate from `selectedIds` being empty, because unticking the master box
+   * is "select none" and not "leave". A mode that exited itself the moment the
+   * last row was cleared would take the checkboxes away mid-gesture, and the
+   * user would have to find the way back in to correct one mis-click.
+   */
+  readonly active: boolean;
   readonly selectedIds: ReadonlySet<string>;
   readonly anchorId?: string;
 }
 
 export const EMPTY_SESSION_SELECTION: SessionSelection = Object.freeze({
+  active: false,
   selectedIds: Object.freeze(new Set<string>()) as ReadonlySet<string>,
 });
 
@@ -64,10 +74,10 @@ function toggleSession(selection: SessionSelection, sessionId: string): SessionS
     // The anchor follows the row the user last acted on even when that act was
     // a removal: leaving it on a row no longer in the selection would measure
     // the next range from somewhere the user cannot see marked.
-    return { selectedIds, anchorId: sessionId };
+    return { active: true, selectedIds, anchorId: sessionId };
   }
   selectedIds.add(sessionId);
-  return { selectedIds, anchorId: sessionId };
+  return { active: true, selectedIds, anchorId: sessionId };
 }
 
 function extendRange(
@@ -85,7 +95,11 @@ function extendRange(
   // on a fresh rail selects the one row rather than nothing, which is what
   // makes the modifier discoverable by trying it.
   if (anchorIndex === -1) {
-    return { selectedIds: new Set([...selection.selectedIds, gesture.sessionId]), anchorId: gesture.sessionId };
+    return {
+      active: true,
+      selectedIds: new Set([...selection.selectedIds, gesture.sessionId]),
+      anchorId: gesture.sessionId,
+    };
   }
   const from = Math.min(anchorIndex, targetIndex);
   const to = Math.max(anchorIndex, targetIndex);
@@ -94,7 +108,7 @@ function extendRange(
   // The anchor stays put. Re-anchoring on the target is what turns a corrected
   // range — Shift-click one row too far, then Shift-click back — into two
   // unions that can never shrink.
-  return { selectedIds, anchorId: selection.anchorId };
+  return { active: true, selectedIds, anchorId: selection.anchorId };
 }
 
 /**
@@ -119,5 +133,49 @@ export function pruneSessionSelection(
     selection.anchorId !== undefined && listed.has(selection.anchorId)
       ? selection.anchorId
       : undefined;
-  return selectedIds.size === 0 ? EMPTY_SESSION_SELECTION : { selectedIds, anchorId };
+  // Pruning empties the set; it does not end the mode. The rows went away
+  // because the catalog changed, not because the user was finished.
+  return { active: selection.active, selectedIds, anchorId };
+}
+
+/** Enters selection mode with nothing marked. */
+export function enterSessionSelection(selection: SessionSelection): SessionSelection {
+  return selection.active ? selection : { ...selection, active: true };
+}
+
+/** Leaves selection mode and drops what was marked. */
+export function exitSessionSelection(): SessionSelection {
+  return EMPTY_SESSION_SELECTION;
+}
+
+/**
+ * The master box: every listed row, or none of them.
+ *
+ * "All" means every row the rail is listing right now, which is what the user
+ * can see the box sitting above — not every task in the catalog. A box that
+ * silently included rows behind a collapsed project, or filtered out of view,
+ * would name a number the user never agreed to.
+ */
+export function setAllSessionsSelected(
+  selection: SessionSelection,
+  listedSessionIds: readonly string[],
+  selected: boolean,
+): SessionSelection {
+  if (!selected) return { active: selection.active, selectedIds: new Set() };
+  return {
+    active: true,
+    selectedIds: new Set(listedSessionIds),
+    anchorId: selection.anchorId,
+  };
+}
+
+/** What the master box shows: all, none, or some. */
+export function sessionSelectionMasterState(
+  selection: SessionSelection,
+  listedSessionIds: readonly string[],
+): boolean | 'indeterminate' {
+  if (selection.selectedIds.size === 0) return false;
+  if (listedSessionIds.length === 0) return false;
+  const allListed = listedSessionIds.every((id) => selection.selectedIds.has(id));
+  return allListed ? true : 'indeterminate';
 }

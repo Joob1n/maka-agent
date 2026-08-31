@@ -123,12 +123,24 @@ export interface SessionRailSelectionGesture {
  * a surface that never wired it up renders exactly as before.
  */
 export interface SessionRailSelection {
+  /**
+   * Whether the rail is in selection mode: rows carry a checkbox and the master
+   * row is above them. Distinct from an empty `selectedIds` — unticking the
+   * master box selects none, it does not leave.
+   */
+  active: boolean;
   selectedIds: ReadonlySet<string>;
+  /** Every row the rail is listing, in rendered order. What "all" means. */
+  listedSessionIds: readonly string[];
   onGesture(gesture: SessionRailSelectionGesture): void;
-  onClear(): void;
+  onToggleRow(sessionId: string, selected: boolean): void;
+  onEnter(sessionId?: string): void;
+  /** Leaves the mode and drops what was marked. */
+  onExit(): void;
+  onToggleAll(selected: boolean): void;
   onArchiveSelected(): void | Promise<void>;
   onDeleteSelected(): void | Promise<void>;
-  /** A sweep is running. The bar disables while one is, so a second click
+  /** A sweep is running. The commands disable while one is, so a second click
    *  cannot ask for the same set twice. */
   busy?: boolean;
 }

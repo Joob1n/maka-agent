@@ -107,17 +107,23 @@ const SESSIONS = ['a', 'b', 'c'].map(summary);
 type Harness = {
   gestures: SessionSelectionGestureLog[];
   opened: string[];
-  cleared: number;
+  toggles: Array<[string, boolean]>;
+  toggleAll: boolean[];
+  entered: Array<string | undefined>;
+  exits: number;
   deleteRequests: number;
   pressKey(key: string, focusedSessionId?: string): Promise<void>;
   dispose(): Promise<void>;
   clickRow(sessionId: string, modifiers?: Partial<MouseEventInit>): Promise<void>;
+  clickCheckbox(sessionId: string, checked: boolean): Promise<void>;
   document: Document;
 };
 
 type SessionSelectionGestureLog = SessionRailSelectionGesture;
 
-async function mount(options: { selectedIds?: readonly string[] } = {}): Promise<Harness> {
+async function mount(
+  options: { selectedIds?: readonly string[]; active?: boolean } = {},
+): Promise<Harness> {
   const original = {
     document: globalThis.document,
     window: globalThis.window,
@@ -131,14 +137,22 @@ async function mount(options: { selectedIds?: readonly string[] } = {}): Promise
 
   const gestures: SessionSelectionGestureLog[] = [];
   const opened: string[] = [];
-  let cleared = 0;
+  const toggles: Array<[string, boolean]> = [];
+  const toggleAll: boolean[] = [];
+  const entered: Array<string | undefined> = [];
+  let exits = 0;
   let deleteRequests = 0;
   const selection: SessionRailSelection = {
+    active: options.active ?? false,
     selectedIds: new Set(options.selectedIds ?? []),
+    listedSessionIds: SESSIONS.map((session) => session.id),
     onGesture: (gesture) => gestures.push(gesture),
-    onClear: () => {
-      cleared += 1;
+    onToggleRow: (sessionId, selected) => toggles.push([sessionId, selected]),
+    onEnter: (sessionId) => entered.push(sessionId),
+    onExit: () => {
+      exits += 1;
     },
+    onToggleAll: (selected) => toggleAll.push(selected),
     onArchiveSelected: () => undefined,
     onDeleteSelected: () => {
       deleteRequests += 1;
@@ -167,8 +181,11 @@ async function mount(options: { selectedIds?: readonly string[] } = {}): Promise
   const harness: Harness = {
     gestures,
     opened,
-    get cleared() {
-      return cleared;
+    toggles,
+    toggleAll,
+    entered,
+    get exits() {
+      return exits;
     },
     get deleteRequests() {
       return deleteRequests;
@@ -198,6 +215,19 @@ async function mount(options: { selectedIds?: readonly string[] } = {}): Promise
       assert.ok(row, `no clickable row for ${sessionId}`);
       await act(() => {
         row.dispatchEvent(clickEvent(window, modifiers));
+      });
+    },
+    clickCheckbox: async (sessionId, checked) => {
+      const box = document.querySelector(
+        `[data-session-id="${sessionId}"] .maka-session-row-check input`,
+      ) as HTMLInputElement | null;
+      assert.ok(box, `no checkbox for ${sessionId}`);
+      // React's checkbox `onChange` is driven by the native CLICK, not by a
+      // `change` event, and its value tracker swallows a programmatic
+      // `.checked` write that is not followed by one.
+      await act(() => {
+        box.checked = checked;
+        box.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
       });
     },
     dispose: async () => {
@@ -316,21 +346,21 @@ test('a rail with no selection wired up behaves exactly as before', async () => 
   }
 });
 
-test('Escape leaves a selection', async () => {
-  const harness = await mount({ selectedIds: ['b'] });
+test('Escape leaves the mode', async () => {
+  const harness = await mount({ active: true, selectedIds: ['b'] });
   try {
     await harness.pressKey('Escape');
-    assert.equal(harness.cleared, 1);
+    assert.equal(harness.exits, 1);
   } finally {
     await harness.dispose();
   }
 });
 
-test('Escape with nothing marked is not this handler\'s business', async () => {
+test('Escape outside the mode is not this handler\'s business', async () => {
   const harness = await mount();
   try {
     await harness.pressKey('Escape');
-    assert.equal(harness.cleared, 0);
+    assert.equal(harness.exits, 0);
   } finally {
     await harness.dispose();
   }
@@ -340,10 +370,56 @@ test('Delete asks for the marked set, not the focused row', async () => {
   // Deleting the focused row while several are marked is the shape of an
   // unrecoverable surprise: the user sees N marked and loses one they did not
   // single out.
-  const harness = await mount({ selectedIds: ['a', 'c'] });
+  const harness = await mount({ active: true, selectedIds: ['a', 'c'] });
   try {
     await harness.pressKey('Delete');
     assert.equal(harness.deleteRequests, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('no checkbox exists until the mode is on', async () => {
+  const harness = await mount();
+  try {
+    assert.equal(harness.document.querySelector('.maka-session-row-check'), null);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('in the mode every row carries a box, ticked to match', async () => {
+  const harness = await mount({ active: true, selectedIds: ['b'] });
+  try {
+    const boxes = [...harness.document.querySelectorAll('.maka-session-row-check input')];
+    assert.equal(boxes.length, 3);
+    assert.deepEqual(
+      boxes.map((box) => (box as HTMLInputElement).checked),
+      [false, true, false],
+    );
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('ticking a box reports the row and the direction', async () => {
+  const harness = await mount({ active: true });
+  try {
+    await harness.clickCheckbox('c', true);
+    assert.deepEqual(harness.toggles, [['c', true]]);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+test('a row click still opens the task while the mode is on', async () => {
+  // The box is the selection affordance; the row keeps its job. Making the
+  // whole row toggle would cost the rail the one thing it is for.
+  const harness = await mount({ active: true });
+  try {
+    await harness.clickRow('b');
+    assert.deepEqual(harness.opened, ['b']);
+    assert.deepEqual(harness.toggles, []);
   } finally {
     await harness.dispose();
   }

@@ -38,6 +38,7 @@ import {
   AlertTriangle,
   Archive,
   ArchiveRestore,
+  CircleCheckBig,
   FolderOpen,
   Pencil,
   Pin,
@@ -60,6 +61,7 @@ import { StatusDot, type StatusDotVariant } from '@astryxdesign/core/StatusDot';
 import { describeBlockedReason, presentSessionStatus } from './session-status-presentation.js';
 import { dotForStatus } from './status-vocabulary.js';
 import { SessionRenameDialog, type SessionRenameTarget } from './session-rename-dialog.js';
+import { CheckboxInput } from '@astryxdesign/core/CheckboxInput';
 import {
   sessionSelectionGestureMode,
   useSessionRailData,
@@ -149,13 +151,15 @@ export function SessionHistoryList() {
     // effect of one keypress.
     const active = document.activeElement as HTMLElement | null;
     if (!active || active.matches('input, textarea, [contenteditable="true"]')) return;
-    const marked = selection !== null && selection.selectedIds.size > 0;
+    const selecting = selection?.active === true;
+    const marked = selecting && selection.selectedIds.size > 0;
     if (event.key === 'Escape') {
-      // Without this the only way out of a selection is un-clicking every row,
-      // and a modifier pressed by accident becomes a mode the user is stuck in.
-      if (!marked) return;
+      // Escape leaves the mode, matching the 取消 button. Without it the only
+      // way out is finding that button, and a mode entered by accident from the
+      // row menu becomes one the user is stuck in.
+      if (!selecting) return;
       event.preventDefault();
-      selection?.onClear();
+      selection.onExit();
       return;
     }
     if (marked) {
@@ -543,7 +547,23 @@ const SessionNavRow = memo(function SessionNavRow(props: {
       data-stale={props.stale ? 'true' : undefined}
       data-worktree={props.worktree ? 'true' : undefined}
       data-selected={marked ? 'true' : undefined}
+      data-selecting={selection?.active ? 'true' : undefined}
     >
+      {/* Outside the SideNavItem, not in its icon slot: that slot is the status
+          dot's fixed gutter, and a checkbox there would take the one column the
+          rail uses to say what a task is doing. The box gets its own leading
+          column, which only exists while the mode does. */}
+      {selection?.active ? (
+        <span className="maka-session-row-check">
+          <CheckboxInput
+            size="sm"
+            value={marked}
+            label={props.session.name}
+            isLabelHidden
+            onChange={(checked) => selection.onToggleRow(props.session.id, checked)}
+          />
+        </span>
+      ) : null}
       <SideNavItem
         label={props.session.name}
         aria-describedby={hoverDescriptionId}
@@ -637,6 +657,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
         <SessionItemActions
           session={props.session}
           actions={props.actions}
+          groupSessionIds={props.groupSessionIds}
           onStartRename={props.onStartRename}
         />
       )}
@@ -991,9 +1012,15 @@ function ProjectItemActions(props: {
 function SessionItemActions(props: {
   session: SessionSummary;
   actions: SessionRowActions;
+  groupSessionIds: readonly string[];
   onStartRename(target: SessionRenameTarget, opener: HTMLElement | null): void;
 }) {
   const trailingRef = useRef<HTMLSpanElement>(null);
+  // The way in. ⌘-click is invisible to anyone who has not been told about it,
+  // and this menu is where a person already looks for what a row can do — so
+  // selection is discoverable from the same place as pin, rename, and archive.
+  // Once one row is marked the bar teaches the modifier that extends it.
+  const selection = useSessionRailSelection();
   const locale = useUiLocale();
   const copy = getConversationCopy(locale).sessions;
   const actionContext = [
@@ -1054,6 +1081,18 @@ function SessionItemActions(props: {
           if (intent) window.requestAnimationFrame(intent);
         }}
         items={[
+          ...(selection && !selection.active
+            ? [
+                {
+                  label: copy.selectRow,
+                  icon: CircleCheckBig,
+                  // Enters the mode AND marks this row: the person picked a
+                  // row, not an abstract mode, and landing them in an empty
+                  // selection would discard the choice they just made.
+                  onClick: () => selection.onEnter(props.session.id),
+                },
+              ]
+            : []),
           {
             label: props.session.isFlagged ? copy.unpin : copy.pin,
             icon: props.session.isFlagged ? PinOff : Pin,

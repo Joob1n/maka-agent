@@ -44,7 +44,11 @@ export { deriveSessionRevisionNavigation } from './model/session-revisions.js';
 export {
   applySessionSelectionGesture,
   EMPTY_SESSION_SELECTION,
+  enterSessionSelection,
+  exitSessionSelection,
   pruneSessionSelection,
+  sessionSelectionMasterState,
+  setAllSessionsSelected,
   type SessionSelection,
   type SessionSelectionGesture,
 } from './model/session-selection.js';

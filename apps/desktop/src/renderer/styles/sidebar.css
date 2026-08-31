@@ -556,18 +556,101 @@
 }
 
 /*
- * The bar sits in the sticky top region, below the grouping switch, and takes
- * the same block padding so the three chrome rows keep one rhythm. The hairline
- * is what separates a set of commands from the list they act on; without it the
- * count reads as the first row of the list.
+ * The bar heads the LIST, not the chrome, so it carries no rule of its own.
+ * SideNav already draws one under the whole sticky top region; a second one
+ * here put two hairlines 9px apart and grouped the bar upwards, away from the
+ * rows it governs.
  */
 .maka-session-selection-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
   padding-block: var(--spacing-1) var(--spacing-2);
-  border-block-end: var(--border-width-hairline) solid var(--border-soft);
+  /*
+   * Opaque, because rows scroll underneath it. `--surface-canvas` is not a
+   * guess: the rail's ground is painted by `astryx-layout-panel` and resolves
+   * to the same oklch(0.975 0 0) this token does.
+   */
+  background: var(--surface-canvas);
 }
 
-/* Pushes the actions to the trailing edge, so the count keeps the leading one
-   whatever the locale does to the button labels' width. */
-.maka-session-selection-bar-spacer {
+/*
+ * Master box, count, way out. The box leads so it shares the rows' leading
+ * column: "all of these" is a claim the eye should be able to check against the
+ * boxes directly beneath it, not one it has to take on trust.
+ */
+.maka-session-selection-bar-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Takes the leftover width so the way-out button stays on the trailing edge. */
+.maka-session-selection-count {
   flex: 1 1 auto;
+}
+
+/*
+ * The row's own leading column, which exists only while the mode does. Same
+ * gap as the head above, so a box and the box governing it sit on one line.
+ */
+.maka-session-row-check {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  z-index: 1;
+}
+
+/*
+ * Rows shift out of the way of their own box rather than the box overlapping
+ * the status dot. Padding on the row, not a margin on the item, so the hover
+ * and selected backgrounds still span the full width.
+ */
+.maka-session-row[data-selecting='true'] {
+  padding-inline-start: calc(20px + var(--space-2));
+}
+
+/*
+ * `min-width: 0` is what a flex child needs to be allowed to ellipsize rather
+ * than be crushed, and `nowrap` is what stops the crush from becoming one
+ * character per line — which is what a three-button single row did to it at
+ * 244px. Neither is decorative: the count is the number the confirm will name.
+ */
+/*
+ * `min-width: 0` is what a flex child needs to be allowed to ellipsize rather
+ * than be crushed, and `nowrap` is what stops the crush from becoming one
+ * character per line — which is what a three-button single row did to it at
+ * 244px. Neither is decorative: this is the number the confirm will name.
+ */
+.maka-session-selection-count {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--typography-caption);
+  color: var(--maka-text-supporting);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Two equal halves, not a flex row that lets the longer label win. Grid keeps
+ * 归档 and 删除 the same size at every rail width, so neither reads as the
+ * primary action — one of them is destructive and must not be emphasised by
+ * accident.
+ */
+.maka-session-selection-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+}
+
+.maka-session-selection-actions > button {
+  width: 100%;
+  min-width: 0;
 }

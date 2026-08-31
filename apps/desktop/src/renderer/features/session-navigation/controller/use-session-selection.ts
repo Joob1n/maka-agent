@@ -25,7 +25,10 @@ import { getShellCopy, localizedShellErrorMessage } from '../../../locales/shell
 import {
   applySessionSelectionGesture,
   EMPTY_SESSION_SELECTION,
+  enterSessionSelection,
+  exitSessionSelection,
   pruneSessionSelection,
+  setAllSessionsSelected,
 } from '../model/session-selection.js';
 import type { SessionNavigationRowActions } from './session-row-actions.js';
 import type { SessionNavigationToastApi } from './use-session-navigation-controller.js';
@@ -66,13 +69,43 @@ export function useSessionSelection(input: {
   useLayoutEffect(() => {
     selectionRef.current = selection;
     busyRef.current = busy;
+    listedRef.current = listedSessionIds;
   });
+
+  const listedSessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
+  const listedRef = useRef(listedSessionIds);
 
   const onGesture = useCallback<SessionRailSelection['onGesture']>((gesture) => {
     setSelection((current) => applySessionSelectionGesture(current, gesture));
   }, []);
 
-  const onClear = useCallback(() => setSelection(EMPTY_SESSION_SELECTION), []);
+  const onToggleRow = useCallback<SessionRailSelection['onToggleRow']>((sessionId, selected) => {
+    setSelection((current) => {
+      if (current.selectedIds.has(sessionId) === selected) return current;
+      const selectedIds = new Set(current.selectedIds);
+      if (selected) selectedIds.add(sessionId);
+      else selectedIds.delete(sessionId);
+      return { active: true, selectedIds, anchorId: sessionId };
+    });
+  }, []);
+
+  const onEnter = useCallback<SessionRailSelection['onEnter']>((sessionId) => {
+    setSelection((current) => {
+      const entered = enterSessionSelection(current);
+      if (sessionId === undefined) return entered;
+      return {
+        active: true,
+        selectedIds: new Set([...entered.selectedIds, sessionId]),
+        anchorId: sessionId,
+      };
+    });
+  }, []);
+
+  const onExit = useCallback(() => setSelection(exitSessionSelection()), []);
+
+  const onToggleAll = useCallback<SessionRailSelection['onToggleAll']>((selected) => {
+    setSelection((current) => setAllSessionsSelected(current, listedRef.current, selected));
+  }, []);
 
   const runSweep = useCallback(
     async (kind: 'archive' | 'delete') => {
@@ -142,7 +175,11 @@ export function useSessionSelection(input: {
         // already ran; clearing here is about the request, which is answered
         // either way. Leaving a marked set behind after a destructive sweep
         // invites a second click on rows that may no longer exist.
-        setSelection(EMPTY_SESSION_SELECTION);
+        //
+        // The MODE stays on. The person was in the middle of tidying up, and
+        // taking the checkboxes away after each sweep would make them re-enter
+        // for the next one.
+        setSelection((current) => ({ active: current.active, selectedIds: new Set() }));
       }
     },
     [commands, copy, locale, toastApi],
@@ -153,13 +190,30 @@ export function useSessionSelection(input: {
 
   return useMemo(
     () => ({
+      active: selection.active,
       selectedIds: selection.selectedIds,
+      listedSessionIds,
       onGesture,
-      onClear,
+      onToggleRow,
+      onEnter,
+      onExit,
+      onToggleAll,
       onArchiveSelected,
       onDeleteSelected,
       busy,
     }),
-    [busy, onArchiveSelected, onClear, onDeleteSelected, onGesture, selection.selectedIds],
+    [
+      busy,
+      listedSessionIds,
+      onArchiveSelected,
+      onDeleteSelected,
+      onEnter,
+      onExit,
+      onGesture,
+      onToggleAll,
+      onToggleRow,
+      selection.active,
+      selection.selectedIds,
+    ],
   );
 }

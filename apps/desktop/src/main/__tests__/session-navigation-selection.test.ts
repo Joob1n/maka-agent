@@ -23,7 +23,11 @@ import { sessionSelectionGestureMode } from '@maka/ui';
 import {
   applySessionSelectionGesture,
   EMPTY_SESSION_SELECTION,
+  enterSessionSelection,
+  exitSessionSelection,
   pruneSessionSelection,
+  sessionSelectionMasterState,
+  setAllSessionsSelected,
   type SessionSelection,
 } from '../../renderer/features/session-navigation/testing.js';
 
@@ -159,8 +163,74 @@ describe('pruneSessionSelection', () => {
     assert.equal(pruneSessionSelection(selection, ['a', 'b']), selection);
   });
 
-  test('an emptied selection settles on the shared empty value', () => {
+  test('an emptied selection keeps the mode it was in', () => {
+    // It used to settle on the shared EMPTY value, which also carries
+    // `active: false` — so a catalog change that pruned the last row would have
+    // taken the checkboxes away while the user was still selecting.
     const selection = toggle(EMPTY_SESSION_SELECTION, 'a');
-    assert.equal(pruneSessionSelection(selection, []), EMPTY_SESSION_SELECTION);
+    const pruned = pruneSessionSelection(selection, []);
+    assert.deepEqual(ids(pruned), []);
+    assert.equal(pruned.active, true);
+  });
+});
+
+describe('selection mode', () => {
+  test('entering marks nothing on its own', () => {
+    const entered = enterSessionSelection(EMPTY_SESSION_SELECTION);
+    assert.equal(entered.active, true);
+    assert.deepEqual(ids(entered), []);
+  });
+
+  test('leaving drops the mode and the marks together', () => {
+    const marked = toggle(EMPTY_SESSION_SELECTION, 'b');
+    assert.equal(marked.active, true);
+    assert.equal(exitSessionSelection().active, false);
+    assert.deepEqual(ids(exitSessionSelection()), []);
+  });
+
+  test('unticking every row is select-none, not leave', () => {
+    // A mode that ended itself on the last untick would take the checkboxes
+    // away mid-gesture, and one mis-click would cost the user the way back.
+    const all = setAllSessionsSelected(toggle(EMPTY_SESSION_SELECTION, 'a'), GROUP, true);
+    const none = setAllSessionsSelected(all, GROUP, false);
+    assert.deepEqual(ids(none), []);
+    assert.equal(none.active, true);
+  });
+
+  test('pruning to nothing keeps the mode', () => {
+    // The rows went away because the catalog changed, not because the user was
+    // finished.
+    const pruned = pruneSessionSelection(toggle(EMPTY_SESSION_SELECTION, 'a'), []);
+    assert.deepEqual(ids(pruned), []);
+    assert.equal(pruned.active, true);
+  });
+});
+
+describe('the master box', () => {
+  test('marks exactly the rows the rail is listing', () => {
+    // Not every task in the catalog: the box sits above these rows, and a
+    // selection that reached past them would name a number nobody agreed to.
+    const all = setAllSessionsSelected(EMPTY_SESSION_SELECTION, ['a', 'b'], true);
+    assert.deepEqual(ids(all), ['a', 'b']);
+  });
+
+  test('reads unchecked, indeterminate, then checked', () => {
+    assert.equal(sessionSelectionMasterState(EMPTY_SESSION_SELECTION, GROUP), false);
+    assert.equal(sessionSelectionMasterState(toggle(EMPTY_SESSION_SELECTION, 'b'), GROUP), 'indeterminate');
+    assert.equal(
+      sessionSelectionMasterState(setAllSessionsSelected(EMPTY_SESSION_SELECTION, GROUP, true), GROUP),
+      true,
+    );
+  });
+
+  test('an empty list is unchecked, never checked', () => {
+    // `every` over an empty array is vacuously true, which would tick the box
+    // above no rows at all.
+    assert.equal(sessionSelectionMasterState(EMPTY_SESSION_SELECTION, []), false);
+  });
+
+  test('a mark outside the listed rows does not make it checked', () => {
+    const stray = toggle(EMPTY_SESSION_SELECTION, 'zzz');
+    assert.equal(sessionSelectionMasterState(stray, GROUP), 'indeterminate');
   });
 });

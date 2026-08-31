@@ -18,66 +18,89 @@
  */
 
 import { Button } from '@astryxdesign/core/Button';
-import { HStack } from '@astryxdesign/core/HStack';
-import { Text } from '@astryxdesign/core/Text';
+import { CheckboxInput } from '@astryxdesign/core/CheckboxInput';
 import { getConversationCopy } from './conversation-copy.js';
 import { ICON_SIZE, Archive, Trash2 } from './icons.js';
 import { useUiLocale } from './locale-context.js';
 import { useSessionRailSelection } from './session-rail-context.js';
 
 /**
- * What the rail shows once rows are marked.
+ * The rail's selection mode, headed.
  *
- * It lives in the rail's sticky top region rather than above the rows: a bar
- * that scrolls away with the list is a bar the user has to scroll back to after
- * marking the rows at the bottom, which is exactly the case multi-select is for.
+ * The master box sits directly above the rows it governs and in the same
+ * leading column as theirs, so "all of these" is a claim the eye can check
+ * rather than a label to be trusted. It is `indeterminate` whenever some but
+ * not all listed rows are marked — the one state a plain checked/unchecked pair
+ * cannot express, and the usual state during a selection.
  *
- * Nothing renders until something is marked. The rail at rest is unchanged, so
- * the count is the only thing that ever announces itself, and it announces a
- * number the user produced.
+ * "All" means every row the rail is listing, which is what sits under the box.
+ * Not every task in the catalog: a box that silently included rows behind a
+ * collapsed project would name a number the user never agreed to.
+ *
+ * The commands are `secondary`, not `ghost`: ghost renders as bare text, and a
+ * label with no container beside a checkbox and a count does not read as
+ * something to press. Both carry the same container so neither is the primary —
+ * one of them is destructive and must not be emphasised by accident.
+ *
+ * TWO ROWS, because one does not fit. The rail is 180px at its narrowest and
+ * 260px by default; the first attempt put count and three text buttons on one
+ * line, which measured 228px of a 244px bar and squeezed the count to 12px,
+ * where it wrapped one character per line. Vertical space in a rail is cheap.
  */
 export function SessionSelectionBar() {
   const selection = useSessionRailSelection();
   const copy = getConversationCopy(useUiLocale()).sessions;
-  const count = selection?.selectedIds.size ?? 0;
-  if (!selection || count === 0) return null;
+  if (!selection?.active) return null;
+  const listed = selection.listedSessionIds;
+  const count = selection.selectedIds.size;
   const busy = selection.busy === true;
+  const allMarked = listed.length > 0 && listed.every((id) => selection.selectedIds.has(id));
+  const master: boolean | 'indeterminate' = count === 0 ? false : allMarked ? true : 'indeterminate';
   return (
     <div className="maka-session-selection-bar" aria-label={copy.selectionBarAriaLabel} role="group">
-      <HStack gap={1} vAlign="center">
+      <div className="maka-session-selection-bar-head">
+        <CheckboxInput
+          size="sm"
+          value={master}
+          label={copy.selectAllAriaLabel}
+          isLabelHidden
+          isDisabled={busy || listed.length === 0}
+          onChange={(checked) => selection.onToggleAll(checked)}
+        />
         {/* `aria-live` so the count reaches a screen reader as it changes: the
-            bar is not focused while the user is clicking rows, so nothing else
+            bar is not focused while the user is ticking rows, so nothing else
             would say how many are marked. */}
-        <Text size="sm" aria-live="polite">
-          {copy.selectedCount(count)}
-        </Text>
-        <span className="maka-session-selection-bar-spacer" />
+        <span className="maka-session-selection-count" aria-live="polite">
+          {copy.selectedCount(count, listed.length)}
+        </span>
         <Button
           variant="ghost"
           size="sm"
+          // Not disabled while a sweep runs: leaving asks nothing of the Host,
+          // and a user who changed their mind should not have to wait for the
+          // action they no longer want.
+          onClick={() => selection.onExit()}
+          label={copy.selectionClear}
+        />
+      </div>
+      <div className="maka-session-selection-actions">
+        <Button
+          variant="secondary"
+          size="sm"
           icon={<Archive size={ICON_SIZE.meta} />}
-          isDisabled={busy}
+          isDisabled={busy || count === 0}
           onClick={() => void selection.onArchiveSelected()}
           label={copy.selectionArchive}
         />
         <Button
-          variant="ghost"
+          variant="secondary"
           size="sm"
           icon={<Trash2 size={ICON_SIZE.meta} />}
-          isDisabled={busy}
+          isDisabled={busy || count === 0}
           onClick={() => void selection.onDeleteSelected()}
           label={copy.selectionDelete}
         />
-        <Button
-          variant="ghost"
-          size="sm"
-          // Not disabled while a sweep runs: clearing asks for nothing of the
-          // Host, and a user who changed their mind should not have to wait for
-          // the action they no longer want.
-          onClick={() => selection.onClear()}
-          label={copy.selectionClear}
-        />
-      </HStack>
+      </div>
     </div>
   );
 }
