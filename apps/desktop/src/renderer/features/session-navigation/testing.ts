@@ -50,7 +50,6 @@ export {
   sessionSelectionMasterState,
   setAllSessionsSelected,
   type SessionSelection,
-  type SessionSelectionGesture,
 } from './model/session-selection.js';
 export {
   readSessionListViewMode,
