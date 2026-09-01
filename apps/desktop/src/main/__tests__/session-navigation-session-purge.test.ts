@@ -50,6 +50,8 @@ function restored(id: string): SessionSummary {
 
 type SweepHarness = {
   removed: string[];
+  /** Each `previewRemoval` call, in order. */
+  previews: string[];
   /** Each `archive` call, in order. */
   archived: string[];
   /** Each `remove` call as `[sessionId, requireArchived]`. */
@@ -58,6 +60,8 @@ type SweepHarness = {
   selections: Array<string | undefined>;
   /** Titles of the success toasts a row action raised. */
   toasts: string[];
+  /** Their descriptions, positionally — the half that carries the counts. */
+  toastDescriptions: (string | undefined)[];
   listCalls: number;
 };
 
@@ -71,6 +75,11 @@ function installService(
   options: {
     rejectIds?: readonly string[];
     rejectArchiveIds?: readonly string[];
+    /** Subtasks the Host says a delete would archive, per source id. */
+    previewSubtasks?: Readonly<Record<string, number>>;
+    /** Ids whose preview rejects, standing in for a Host that cannot answer. */
+    rejectPreviewIds?: readonly string[];
+
     rejectWithUndefinedIds?: readonly string[];
     surviving?: readonly SessionSummary[];
     /** Runs after each accepted removal, to model what another client did meanwhile. */
@@ -112,7 +121,11 @@ function installService(
       options.onRemove?.(id);
       return { disposition: 'removed', archivedSubtaskCount: options.archivedByRemoval?.[id] ?? 0 };
     },
-    previewRemoval: async () => 0,
+    previewRemoval: async (id: string) => {
+      harness.previews.push(id);
+      if (options.rejectPreviewIds?.includes(id)) throw new Error(`preview-unavailable:${id}`);
+      return options.previewSubtasks?.[id] ?? 0;
+    },
   };
 }
 
@@ -123,6 +136,8 @@ function createActions(input: {
   pending?: Set<string>;
   refreshed?: SessionSummary[];
   service: SessionNavigationSessionService;
+  /** Answers the confirm and records what it was asked, for the sweeps. */
+  onConfirm?: (options: { title: string; description: string }) => boolean;
 }) {
   return createSessionNavigationRowActions({
     uiLocale: 'en',
@@ -140,11 +155,12 @@ function createActions(input: {
       input.activeIdRef.current = id;
     },
     toastApi: {
-      success: (title: string) => {
+      success: (title: string, description?: string) => {
         input.harness.toasts.push(title);
+        input.harness.toastDescriptions.push(description);
       },
       error: () => undefined,
-      confirm: async () => true,
+      confirm: async (options) => input.onConfirm?.(options) ?? true,
     },
   });
 }
@@ -152,11 +168,13 @@ function createActions(input: {
 function harness(): SweepHarness {
   return {
     removed: [],
+    previews: [],
     archived: [],
     removeOptions: [],
     cleared: [],
     selections: [],
     toasts: [],
+    toastDescriptions: [],
     listCalls: 0,
   };
 }
@@ -580,5 +598,111 @@ describe('archiveSessions', () => {
     // add up to the number of tasks the user selected.
     assert.deepEqual(outcome.failed, ['a']);
     assert.equal(outcome.archived, 1);
+  });
+});
+
+describe('deleteSelected', () => {
+  it('warns that linked subtasks will be archived, and reports what was', async () => {
+    // The Host archives a deleted parent's ordinary subagent tasks rather than
+    // deleting them. Without the warning they reappear under Archived with no
+    // explanation; without the report the user never learns how many did.
+    const h = harness();
+    const sessions = ['a', 'b'].map((id) => summary(id, { isArchived: false }));
+    const activeIdRef = { current: undefined as string | undefined };
+    const service = installService(h, {
+      previewSubtasks: { a: 2 },
+      archivedByRemoval: { a: 2, b: 1 },
+    });
+    const confirms: Array<{ description: string }> = [];
+    const actions = createActions({
+      harness: h,
+      sessions,
+      activeIdRef,
+      service,
+      onConfirm: (options) => {
+        confirms.push({ description: options.description });
+        return true;
+      },
+    });
+
+    await actions.deleteSelected(['a', 'b']);
+
+    // One preview per selected task: the renderer's projection cannot answer
+    // this, so it is asked for every id the confirm is about to name.
+    assert.deepEqual(h.previews, ['a', 'b']);
+    assert.equal(confirms.length, 1);
+    assert.match(confirms[0]!.description, /moved to Archived/);
+    assert.deepEqual(h.toasts, ['Deleted 2 tasks']);
+    assert.deepEqual(h.toastDescriptions, ['3 subtasks moved to Archived']);
+  });
+
+  it('says the subtask warning is uncertain when one preview cannot be read', async () => {
+    // Under-reporting a destructive set is worse than admitting the number is
+    // unknown: a silent zero reads as "nothing else will move".
+    const h = harness();
+    const sessions = ['a', 'b'].map((id) => summary(id, { isArchived: false }));
+    const activeIdRef = { current: undefined as string | undefined };
+    const service = installService(h, {
+      previewSubtasks: { a: 2 },
+      rejectPreviewIds: ['b'],
+    });
+    const confirms: string[] = [];
+    const actions = createActions({
+      harness: h,
+      sessions,
+      activeIdRef,
+      service,
+      onConfirm: (options) => {
+        confirms.push(options.description);
+        return true;
+      },
+    });
+
+    await actions.deleteSelected(['a', 'b']);
+
+    assert.equal(confirms.length, 1);
+    assert.match(confirms[0]!, /Any ordinary subtasks/);
+  });
+
+  it('says nothing about subtasks when the selection has none', async () => {
+    const h = harness();
+    const sessions = [summary('a', { isArchived: false })];
+    const activeIdRef = { current: undefined as string | undefined };
+    const service = installService(h);
+    const confirms: string[] = [];
+    const actions = createActions({
+      harness: h,
+      sessions,
+      activeIdRef,
+      service,
+      onConfirm: (options) => {
+        confirms.push(options.description);
+        return true;
+      },
+    });
+
+    await actions.deleteSelected(['a']);
+
+    assert.doesNotMatch(confirms[0]!, /Archived/);
+    assert.deepEqual(h.toastDescriptions, [undefined]);
+  });
+
+  it('does nothing when the confirm is declined', async () => {
+    const h = harness();
+    const sessions = [summary('a', { isArchived: false })];
+    const activeIdRef = { current: undefined as string | undefined };
+    const service = installService(h);
+    const actions = createActions({
+      harness: h,
+      sessions,
+      activeIdRef,
+      service,
+      onConfirm: () => false,
+    });
+
+    await actions.deleteSelected(['a']);
+
+    assert.deepEqual(h.removed, []);
+    assert.deepEqual(h.toasts, []);
   });
 });

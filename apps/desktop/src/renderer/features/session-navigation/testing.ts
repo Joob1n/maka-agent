@@ -36,6 +36,8 @@ export {
   type SessionNavigationPorts,
   type UseSessionNavigationControllerInput,
 } from './controller/use-session-navigation-controller.js';
+export { useSessionSelection } from './controller/use-session-selection.js';
+export type { SessionNavigationRowActions } from './controller/session-row-actions.js';
 export { useSessionNavigationReads } from './controller/use-session-navigation-reads.js';
 export { sessionMatchesRail } from './model/session-nav-filter.js';
 export { deriveBranchBanner } from './model/branch-banner.js';

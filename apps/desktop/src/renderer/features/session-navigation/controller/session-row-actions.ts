@@ -485,12 +485,43 @@ export function createSessionNavigationRowActions(deps: {
     );
   }
 
-  /** The rail's own bulk delete. See `archiveSelected` for why the wording is here. */
+  /**
+   * The rail's own bulk delete. See `archiveSelected` for why the wording is here.
+   *
+   * The confirm warns about linked subtasks for the same reason single-row
+   * delete does: the Host archives a deleted parent's ordinary subagent tasks
+   * rather than deleting them, so without the warning they reappear under
+   * Archived with no explanation. The Host owns that plan — the renderer's
+   * catalog projection lacks the operator marker — so the count is asked for,
+   * one preview per selected task, and a single failure makes the whole warning
+   * uncertain rather than silently under-reporting the set.
+   *
+   * N previews before a destructive confirm is N round trips, which is the
+   * price of naming a number the user can act on. The toast afterwards reports
+   * the Host's executed total, not this estimate.
+   */
   async function deleteSelected(sessionIds: readonly string[]): Promise<void> {
     if (sessionIds.length === 0) return;
+    let previewedSubtasks: number | undefined = 0;
+    for (const sessionId of sessionIds) {
+      try {
+        const count = await service.previewRemoval(sessionId);
+        if (previewedSubtasks !== undefined) previewedSubtasks += count;
+      } catch {
+        previewedSubtasks = undefined;
+      }
+    }
+    const subtaskNote =
+      previewedSubtasks === undefined
+        ? copy.bulkDeleteSubtaskNoteUncertain()
+        : previewedSubtasks > 0
+          ? copy.bulkDeleteSubtaskNote()
+          : undefined;
     const ok = await toastApi.confirm({
       title: copy.bulkDeleteTitle(sessionIds.length),
-      description: copy.bulkDeleteDescription,
+      description: subtaskNote
+        ? `${copy.bulkDeleteDescription} ${subtaskNote}`
+        : copy.bulkDeleteDescription,
       confirmLabel: copy.deleteLabel,
       cancelLabel: copy.cancelLabel,
       destructive: true,
@@ -501,8 +532,14 @@ export function createSessionNavigationRowActions(deps: {
     // the other is how a count quietly stops adding up.
     const kept =
       outcome.restored.length > 0 ? copy.bulkKeptRestored(outcome.restored.length) : undefined;
+    // The Host's executed number, not the preview's estimate.
+    const archived =
+      outcome.archivedSubtasks > 0 ? copy.deletedSubtaskNote(outcome.archivedSubtasks) : undefined;
     if (outcome.verified && outcome.remaining.length === 0) {
-      toastApi.success(copy.bulkDeletedTitle(outcome.removed), kept);
+      toastApi.success(
+        copy.bulkDeletedTitle(outcome.removed),
+        [kept, archived].filter(Boolean).join(' ') || undefined,
+      );
       return;
     }
     const reason = !outcome.verified
@@ -512,7 +549,7 @@ export function createSessionNavigationRowActions(deps: {
         : copy.bulkFailedBody(outcome.remaining.length);
     toastApi.error(
       copy.bulkDeleteFailedTitle,
-      kept ? `${reason} ${kept}` : reason,
+      [reason, kept, archived].filter(Boolean).join(' '),
       undefined,
       outcome.firstFailure ? { sessionId: outcome.firstFailure.sessionId } : undefined,
     );

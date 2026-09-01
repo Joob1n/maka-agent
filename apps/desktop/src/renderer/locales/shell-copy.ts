@@ -288,6 +288,10 @@ type ShellCopy = {
     bulkFailedBody(count: number): string;
     /** The catalog could not be read back, so nothing can be claimed. */
     bulkUnverified: string;
+    /** Appended to the bulk delete confirm when the selection has linked subtasks. */
+    bulkDeleteSubtaskNote(): string;
+    /** Appended when the subtask preview could not be read for the whole selection. */
+    bulkDeleteSubtaskNoteUncertain(): string;
   };
   skillActions: {
     refreshSkillsFailedTitle: string;
@@ -928,6 +932,9 @@ const SHELL_COPY_BY_LOCALE = {
       bulkArchiveFailedTitle: '部分任务未能归档',
       bulkFailedBody: (count: number) => `还有 ${count} 个没有处理成功。`,
       bulkUnverified: '无法确认处理结果，请刷新后查看。',
+      bulkDeleteSubtaskNote: () => '它们的普通子任务不会被删除，将保留并移入归档。',
+      bulkDeleteSubtaskNoteUncertain: () =>
+        '它们的普通子任务（如有）不会被删除，将保留并移入归档。',
     },
     skillActions: {
       refreshSkillsFailedTitle: '刷新技能失败',
@@ -1472,6 +1479,9 @@ const SHELL_COPY_BY_LOCALE = {
       bulkArchiveFailedTitle: 'Some tasks were not archived',
       bulkFailedBody: (count: number) => `${count} of them did not go through.`,
       bulkUnverified: 'The outcome could not be confirmed. Refresh to see what remains.',
+      bulkDeleteSubtaskNote: () => 'Their ordinary subtasks will be kept and moved to Archived.',
+      bulkDeleteSubtaskNoteUncertain: () =>
+        'Any ordinary subtasks they have will be kept and moved to Archived.',
     },
     skillActions: {
       refreshSkillsFailedTitle: 'Could not refresh Skills',

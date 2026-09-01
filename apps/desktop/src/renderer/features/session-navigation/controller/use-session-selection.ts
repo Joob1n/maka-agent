@@ -110,15 +110,25 @@ export function useSessionSelection(input: {
         await run(sessionIds);
       } finally {
         setBusy(false);
-        // Whatever survived is reconciled by the catalog refresh the sweep
-        // already ran; clearing here is about the request, which is answered
-        // either way. Leaving a marked set behind after a destructive sweep
-        // invites a second press on rows that may no longer exist.
+        // Unmark exactly what this sweep asked about — never whatever happens
+        // to be marked when it lands.
+        //
+        // `Done` stays enabled during a sweep, so a person can leave the mode,
+        // re-enter it from another row's menu and mark B while A's request is
+        // still with the Host. Clearing the whole set here would then answer
+        // A's completion by discarding B, which the user never asked about.
         //
         // The MODE stays on. The person was in the middle of tidying up, and
         // taking the checkboxes away after each sweep would make them re-enter
         // for the next one.
-        setSelection((current) => ({ active: current.active, selectedIds: new Set() }));
+        setSelection((current) => {
+          const remaining = new Set(current.selectedIds);
+          let changed = false;
+          for (const sessionId of sessionIds) {
+            if (remaining.delete(sessionId)) changed = true;
+          }
+          return changed ? { active: current.active, selectedIds: remaining } : current;
+        });
       }
     },
     [],
