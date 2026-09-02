@@ -306,7 +306,7 @@ export async function planHistoryCompaction(
     // other producer is validated here.
     if (typeof compacted === 'string') {
       // An external producer reports no usage; only the structural checks apply.
-      const defect = findCheckpointSummaryDefect(compacted, { coveredRuntimeEvents });
+      const defect = findCheckpointSummaryDefect(compacted);
       if (defect) {
         return { decision: 'fail_open', reason: 'summarizer_failed', diagnosticReason: defect };
       }

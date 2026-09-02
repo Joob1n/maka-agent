@@ -38,7 +38,7 @@ import {
 } from './model-history.js';
 import { withProviderStreamTracking } from './provider-request-telemetry.js';
 import { effectiveReplayToolResultOutput } from './durable-tool-result-projection.js';
-import { providerFailureDiagnostic } from './provider-error-classification.js';
+import { classifyError, providerFailureDiagnostic } from './provider-error-classification.js';
 
 export interface BuildOpenAiCodexHistoryCompactorOptions {
   resolveModel: () => unknown;
@@ -131,6 +131,9 @@ export function buildOpenAiCodexHistoryCompactor(options: BuildOpenAiCodexHistor
       return state;
     } catch (error) {
       if (error instanceof HistoryCompactSummarizerError) throw error;
+      if (classifyError(error) === 'ContextLength') {
+        throw new HistoryCompactSummarizerError('input_too_large', { cause: error });
+      }
       throw new HistoryCompactSummarizerError('provider_error', { cause: error });
     }
   };

@@ -1168,9 +1168,43 @@ describe('buildLlmHistorySummarizer', () => {
     );
   });
 
-  test('the usage floor covers the full replaced span, not just the newly folded increment', async () => {
-    // Steady-state roll-forward: the checkpoint replaces everything it covers,
-    // so a small increment must not let a fragment replace a large span.
+  test("a provider's context-length rejection is the fold's input_too_large signal", async () => {
+    // The summarizer's provider is the one judge of whether the fold fits its
+    // window. A fake provider that rejects above N characters must surface as
+    // `input_too_large`, the reason the planner retreats on, not as a generic
+    // provider error that fails the fold open.
+    const generateText: AiSdkGenerateTextLike = async (opts) => {
+      if (JSON.stringify(opts.messages).length > 2_000) {
+        throw new Error(
+          "This model's maximum context length is 1000 tokens. However, your messages exceed the context window.",
+        );
+      }
+      return { text: VALID_SUMMARY, finishReason: 'stop' };
+    };
+    const summarize = buildLlmHistorySummarizer({ resolveModel: () => 'fake-model', generateText });
+    await assert.rejects(
+      summarize(
+        inputWith([
+          ev({ role: 'user', author: 'user', content: { kind: 'text', text: 'x'.repeat(5_000) } }),
+        ]),
+      ),
+      (error: unknown) =>
+        error instanceof HistoryCompactSummarizerError && error.reason === 'input_too_large',
+    );
+    assert.equal(
+      await summarize(
+        inputWith([ev({ role: 'user', author: 'user', content: { kind: 'text', text: 'small' } })]),
+      ),
+      VALID_SUMMARY,
+    );
+  });
+
+  test('the usage floor judges an initial fold and stands down on a roll-forward', async () => {
+    // On an initial fold the summarizer's input IS the covered span, so a
+    // 50-token summary of a 20,000-token span is a fragment. On a roll-forward
+    // the input is the previous summary plus the increment, not the span, so
+    // the same numbers say nothing about the whole and the floor must not
+    // reject the fold on them.
     const old = ev({
       role: 'user',
       author: 'user',
@@ -1196,12 +1230,16 @@ describe('buildLlmHistorySummarizer', () => {
     });
 
     await assert.rejects(
-      summarize({
+      summarize(inputWith([old, newer])),
+      /malformed_summary_too_small_for_fold/,
+    );
+    assert.equal(
+      await summarize({
         ...inputWith([old, newer]),
         previousCheckpoint,
         newlyFoldedRuntimeEvents: [newer],
       }),
-      /malformed_summary_too_small_for_fold/,
+      VALID_SUMMARY,
     );
   });
 

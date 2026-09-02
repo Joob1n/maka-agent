@@ -34,6 +34,7 @@ import {
 } from './history-compact-error.js';
 import { isTextHistoryCompactCheckpoint } from './history-compact-checkpoint.js';
 import { normalizeAiSdkUsage, type AiSdkUsageLike } from './model-adapter.js';
+import { classifyError } from './provider-error-classification.js';
 import { withProviderGenerateTracking } from './provider-request-telemetry.js';
 
 export { HistoryCompactSummarizerError } from './history-compact-error.js';
@@ -171,19 +172,21 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
         });
         const usage = normalizeAiSdkUsage(result.usage);
         const truncated = rawFinishReasonString(result.finishReason) === 'length';
+        // The size floor compares the summary with what it replaces. On a
+        // roll-forward the request carries the previous summary plus the new
+        // increment, so its input tokens are not the covered span and the
+        // floor would judge the wrong number; it applies to the initial fold
+        // only (#4559).
+        const spanUsage =
+          previousCheckpoint === undefined && usage !== undefined && usage.inputTokens > 0
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+            : undefined;
         const defect = truncated
           ? undefined
-          : findCheckpointSummaryDefect(result.text, {
-              coveredRuntimeEvents: input.source.foldedRuntimeEvents,
-              ...(usage !== undefined && usage.inputTokens > 0
-                ? {
-                    summarizerUsage: {
-                      inputTokens: usage.inputTokens,
-                      outputTokens: usage.outputTokens,
-                    },
-                  }
-                : {}),
-            });
+          : findCheckpointSummaryDefect(
+              result.text,
+              spanUsage ? { summarizerUsage: spanUsage } : undefined,
+            );
         return { text: result.text, defect, truncated };
       };
 
@@ -231,6 +234,12 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
     } catch (error) {
       if (isAbortError(error)) throw error;
       if (error instanceof HistoryCompactSummarizerError) throw error;
+      // The summarizer's provider is the one judge of whether this fold fits
+      // its own window: a context-length rejection is the signal the planner
+      // retreats on, so it must keep its name here (#4559).
+      if (classifyError(error) === 'ContextLength') {
+        throw new HistoryCompactSummarizerError('input_too_large', { cause: error });
+      }
       throw new HistoryCompactSummarizerError('provider_error', { cause: error });
     }
   };

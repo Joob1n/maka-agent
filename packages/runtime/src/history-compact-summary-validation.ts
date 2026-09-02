@@ -17,7 +17,6 @@
  * under the License.
  */
 
-import type { RuntimeEvent } from '@maka/core/runtime-event';
 import type { MalformedHistoryCompactSummaryReason } from './history-compact-error.js';
 
 // The single authority on what a history-compact checkpoint summary must look
@@ -91,13 +90,12 @@ const LARGE_FOLD_SUMMARY_TOKENS_FLOOR = 200;
 const TRUNCATED_TAIL_PATTERN = /(?:\.{3}|[:：,，、;；…(（—])\s*$/u;
 
 export interface CheckpointSummaryFoldContext {
-  /** The FULL covered span the checkpoint replaces — not the newly folded
-   * increment, so rolling roll-forward compaction cannot slip a fragment
-   * past the size floor. */
-  coveredRuntimeEvents: readonly RuntimeEvent[];
   /**
-   * The summarizer call's real usage, as its provider counted it. Absent when
-   * the producer reports none; the size floor is then not applied.
+   * The summarizer call's real usage for an INITIAL fold, as its provider
+   * counted it: input is the covered span, output is the summary. Absent when
+   * the producer reports none or the fold rolls a previous checkpoint
+   * forward (its input is then the increment, not the span); the size floor
+   * is not applied in either case.
    */
   summarizerUsage?: { inputTokens: number; outputTokens: number };
 }

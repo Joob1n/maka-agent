@@ -105,6 +105,8 @@ interface MidTurnFixtureOptions {
   withoutContextWindow?: boolean;
   /** Keep the model-reported window as metadata without making it a Maka target. */
   declareContextWindow?: boolean;
+  /** The model's declared output limit, a provider fact the trigger reserves for the reply. */
+  modelMaxOutputTokens?: number;
   /**
    * Derive the policy from the runtime default (buildDefaultContextBudgetPolicy)
    * instead of the hand-built one, so a test can exercise the shipped default.
@@ -469,6 +471,9 @@ function buildFixture(options: MidTurnFixtureOptions = {}): MidTurnFixture {
         {
           id: 'mock-model-id',
           ...(options.withoutContextWindow ? {} : { contextWindow }),
+          ...(options.modelMaxOutputTokens !== undefined
+            ? { maxOutputTokens: options.modelMaxOutputTokens }
+            : {}),
         },
       ],
       ...(options.withoutContextWindow || options.declareContextWindow === false
@@ -1514,18 +1519,83 @@ describe('the shipped runtime default drives the proactive long-turn journey (is
 
   test('an anchor is discarded unless a run header proves it came from this model', async () => {
     // Input tokens are a count in one model's tokenizer; nothing converts them.
-    // A header naming another model and no header at all fail the same way.
-    for (const priorRunHeaders of [[{ ...priorRunHeader(), modelId: 'some-other-model' }], []]) {
+    // The anchor sits ABOVE the declared window, so it is the header check
+    // alone that decides: a matching header folds at step 0, while a header
+    // naming another model and no header at all leave the request alone.
+    const anchor = priorUsageEvent({ inputTokens: 30_000, outputTokens: 10 });
+    for (const [priorRunHeaders, folds] of [
+      [[priorRunHeader()], true],
+      [[{ ...priorRunHeader(), modelId: 'some-other-model' }], false],
+      [[], false],
+    ] as const) {
       const fixture = buildFixture({
         priorChars: 2_000,
-        contextWindow: 40_000,
+        contextWindow: 20_000,
         finalAtSecondCall: true,
-        extraPriorEvents: [priorUsageEvent({ inputTokens: 30_000, outputTokens: 10 })],
-        priorRunHeaders,
+        extraPriorEvents: [anchor],
+        priorRunHeaders: [...priorRunHeaders],
       });
       await runFixtureTurn(fixture);
 
-      assert.equal(fixture.recorded.length, 0);
+      assert.equal(fixture.recorded.length, folds ? 1 : 0);
+    }
+  });
+
+  test('a synthetic /compact usage row does not shadow the real anchor', async () => {
+    // A manual /compact writes `input: 0, output: 0` without a provider send,
+    // so it carries no anchor: the reverse scan skips it and still finds the
+    // last real request, which is above the window and folds step 0.
+    const fixture = buildFixture({
+      priorChars: 2_000,
+      contextWindow: 20_000,
+      finalAtSecondCall: true,
+      extraPriorEvents: [
+        priorUsageEvent({ inputTokens: 30_000, outputTokens: 10 }),
+        {
+          ...runtimeTextEvent('prior-compact-usage', 'turn-0', 'model', ''),
+          id: 'prior-compact-usage',
+          runId: 'run-0',
+          invocationId: 'run-0',
+          role: 'system' as const,
+          author: 'system' as const,
+          content: undefined,
+          actions: { tokenUsage: { input: 0, output: 0 } },
+        },
+      ],
+      priorRunHeaders: [priorRunHeader()],
+    });
+    await runFixtureTurn(fixture);
+
+    assert.equal(fixture.recorded.length, 1);
+    const fold = compactionDecisions(fixture).find(
+      (decision) => decision.stage === 'activeStep' && decision.decision === 'replaced',
+    );
+    assert.equal(fold?.phase, 'pre_turn');
+  });
+
+  test("the model's declared output limit is reserved for the reply", async () => {
+    // With the window declared at the provider's real size, an accepted
+    // request can never exceed it on its own; the reply the next request must
+    // leave room for is what tips it. The limit is a provider fact from the
+    // catalog entry, never an estimate; with none declared the reserve is 0.
+    // Anchor 520 against a 1,000 window: alone it is under; with a 600-token
+    // reply reserved it is over, and step 0 folds. The later steps' usage
+    // (120 + 600) stays under, so exactly one fold is recorded.
+    for (const [modelMaxOutputTokens, folds] of [
+      [600, true],
+      [undefined, false],
+    ] as const) {
+      const fixture = buildFixture({
+        priorChars: 200,
+        contextWindow: 1_000,
+        finalAtSecondCall: true,
+        ...(modelMaxOutputTokens !== undefined ? { modelMaxOutputTokens } : {}),
+        extraPriorEvents: [priorUsageEvent({ inputTokens: 500, outputTokens: 20 })],
+        priorRunHeaders: [priorRunHeader()],
+      });
+      await runFixtureTurn(fixture);
+
+      assert.equal(fixture.recorded.length, folds ? 1 : 0, `limit ${modelMaxOutputTokens}`);
     }
   });
 

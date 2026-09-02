@@ -107,6 +107,8 @@ import type { ModelCallAttempt, ModelCallKind } from '@maka/core/model-call-atte
 import type { ProviderRequestTracker } from './provider-request-telemetry.js';
 import { planHistoryCompaction } from './history-compaction.js';
 import { resolveDeclaredContextWindow } from './context-budget-policy.js';
+import { lookupModelMetadata } from '@maka/core/model-metadata';
+import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
 import {
   collectHistoricalImageToolResults,
   type HistoricalImageToolResult,
@@ -811,7 +813,9 @@ export class AiSdkCompaction {
     );
     if (persisted) {
       state.baselineTokens = persisted.inputTokens + (persisted.outputTokens ?? 0);
+      state.lastAcceptedTotalTokens = state.baselineTokens;
     }
+    state.replyReserveTokens = declaredModelOutputLimit(this.input.connection, this.input.modelId);
     return state;
   }
 
@@ -866,6 +870,8 @@ export class AiSdkCompaction {
       // input count is no baseline at all — unknown, never zero.
       if (options.completedSteps.length > 0) {
         state.baselineTokens = usageBaselineTokens(options.completedSteps.at(-1)?.usage);
+        if (state.baselineTokens !== undefined)
+          state.lastAcceptedTotalTokens = state.baselineTokens;
       }
       // The turn's first request folds as a pre_turn boundary, like the
       // reactive step-0 recovery; later steps fold mid_turn.
@@ -891,10 +897,14 @@ export class AiSdkCompaction {
       // window, or the provider cut the previous reply at its output limit.
       const lengthFold = state.pendingLengthFold;
       state.pendingLengthFold = false;
+      // The next request is at least the baseline, and its reply may run to
+      // the model's output limit when that limit is a known provider fact.
+      // Both are real numbers; with no known limit the reserve is zero and the
+      // declared window is a pure target the user chose to stay under.
       const overWindow =
         state.capacity !== undefined &&
         state.baselineTokens !== undefined &&
-        state.baselineTokens > state.capacity;
+        state.baselineTokens + state.replyReserveTokens >= state.capacity;
       if (!overWindow && !lengthFold) {
         return keepProjection();
       }
@@ -1384,6 +1394,20 @@ export class MidTurnCapacityCompactState {
    */
   baselineTokens: number | undefined;
   /**
+   * Input plus output of the last request the provider accepted, as it
+   * counted them. Unlike `baselineTokens` it survives a fold: it is not a
+   * trigger input but the number a rejected user can declare as their window,
+   * proven to fit because the provider already accepted it (#4559).
+   */
+  lastAcceptedTotalTokens: number | undefined;
+  /**
+   * Room the next reply may need: the model's declared output limit when the
+   * connection or metadata states one, else 0. A provider fact, never an
+   * estimate; it lets the trigger fire before a request that would otherwise
+   * be accepted but leave the reply no room (#4559).
+   */
+  replyReserveTokens = 0;
+  /**
    * Set when the provider cut the previous reply at its output limit
    * (`finishReason: length`). The reply ran out of room, which no local
    * number predicted; fold once before the next request.
@@ -1422,6 +1446,18 @@ export class MidTurnCapacityCompactState {
      */
     readonly capacity: number | undefined,
   ) {}
+}
+
+/**
+ * The model's declared output limit, from the connection's catalog entry or
+ * generated metadata — a provider fact the trigger may reserve for the next
+ * reply. 0 when nothing declares one.
+ */
+function declaredModelOutputLimit(connection: RuntimeExecutionConnection, modelId: string): number {
+  const limit =
+    connection.models?.find((model) => model.id === modelId)?.maxOutputTokens ??
+    lookupModelMetadata(connection.providerType, modelId).maxOutputTokens;
+  return typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? limit : 0;
 }
 
 /**

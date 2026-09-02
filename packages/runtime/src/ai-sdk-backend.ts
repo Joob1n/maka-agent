@@ -2162,21 +2162,23 @@ export class AiSdkBackend implements AgentBackend {
                   if (!stepUsage) sawUnusableStepUsage = true;
                   // Silent eviction / rewrite check (#4559): this step only
                   // appended (no fold, no prune, no image omission) yet the
-                  // provider counted fewer input tokens than the baseline it
-                  // was judged from.
+                  // provider counted fewer input tokens than for the previous
+                  // request. Input against input: the previous reply's
+                  // reasoning may not be resent, so input + output is not the
+                  // floor of the next input on every wire.
                   const completedRequestIndex = runtimeSteps - 1;
                   if (
                     !contextProviderDroppingNoteWritten &&
                     midTurnState &&
                     completedRequestIndex >= 1 &&
-                    midTurnState.baselineTokens !== undefined &&
+                    lastStepInputTokens !== undefined &&
                     midTurnState.replacedStepNumber !== completedRequestIndex &&
                     pruneAppliedAtStep !== completedRequestIndex &&
                     midTurnState.omittedImageToolResults.size === 0 &&
                     stepUsage !== undefined &&
                     Number.isFinite(stepUsage.inputTokens) &&
                     stepUsage.inputTokens > 0 &&
-                    stepUsage.inputTokens < midTurnState.baselineTokens
+                    stepUsage.inputTokens < lastStepInputTokens
                   ) {
                     contextProviderDroppingNoteWritten = true;
                     const note: SystemNoteMessage = {
@@ -2429,33 +2431,6 @@ export class AiSdkBackend implements AgentBackend {
               // more step; with the send-level budget already spent there is
               // nothing left to grant it, so the error is terminal.
               const stepBudgetRemains = maxSteps === undefined || runtimeSteps < maxSteps;
-              // Window suggestion (#4559): the provider rejected a request whose
-              // baseline is a proven-fit total (input + output of an accepted
-              // request). Once per send, expose that fact as a setting hint.
-              if (
-                !contextWindowSuggestionNoteWritten &&
-                failure.kind === 'context_overflow' &&
-                midTurnState &&
-                midTurnState.baselineTokens !== undefined &&
-                (midTurnState.capacity === undefined ||
-                  midTurnState.baselineTokens < midTurnState.capacity)
-              ) {
-                contextWindowSuggestionNoteWritten = true;
-                const note: SystemNoteMessage = {
-                  type: 'system_note',
-                  id: this.newId(),
-                  turnId,
-                  ts: this.now(),
-                  kind: 'context_window_suggestion',
-                  data: {
-                    suggestedContextWindow: midTurnState.baselineTokens,
-                    ...(midTurnState.capacity !== undefined
-                      ? { declaredContextWindow: midTurnState.capacity }
-                      : {}),
-                  },
-                };
-                await this.input.appendMessage(note).catch(() => {});
-              }
               const recovered =
                 stepBudgetRemains && attemptHasNoObservableOutput()
                   ? await this.compaction.recoverFromOverflowError({
@@ -2498,6 +2473,37 @@ export class AiSdkBackend implements AgentBackend {
                   : undefined;
                 attemptMessages = recoveredProjection?.messages ?? recovered.messages;
                 continue;
+              }
+              // Window suggestion (#4559): the provider rejected a request and
+              // no recovery is left — the one fold is spent, or there was no
+              // seam. The baseline is a proven-fit total (input + output of an
+              // accepted request), so it is a number the user can declare; the
+              // trigger is `>=`, so declaring exactly it folds before this
+              // point next time. Once per send, and only when the turn is
+              // about to surface the error rather than continue.
+              const acceptedTotal = midTurnState?.lastAcceptedTotalTokens;
+              if (
+                !contextWindowSuggestionNoteWritten &&
+                failure.kind === 'context_overflow' &&
+                midTurnState &&
+                acceptedTotal !== undefined &&
+                (midTurnState.capacity === undefined || acceptedTotal < midTurnState.capacity)
+              ) {
+                contextWindowSuggestionNoteWritten = true;
+                const note: SystemNoteMessage = {
+                  type: 'system_note',
+                  id: this.newId(),
+                  turnId,
+                  ts: this.now(),
+                  kind: 'context_window_suggestion',
+                  data: {
+                    suggestedContextWindow: acceptedTotal,
+                    ...(midTurnState.capacity !== undefined
+                      ? { declaredContextWindow: midTurnState.capacity }
+                      : {}),
+                  },
+                };
+                await this.input.appendMessage(note).catch(() => {});
               }
               const idleWatchdogRecovery =
                 settledWatchdogTimeout?.phase === 'idle' &&

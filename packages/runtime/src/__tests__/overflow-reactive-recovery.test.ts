@@ -1831,11 +1831,16 @@ describe('reactive overflow recovery in the streaming backend', () => {
     },
   ]) {
     test(`suggests a Maka window after provider overflow ${scenario.name}`, async () => {
+      // The one fold is spent on the first rejection and the resend is
+      // rejected again: the turn surfaces the error, and only then does the
+      // note offer the last accepted total (120, before any fold) as a
+      // window. A send that overflows once, folds and completes says nothing.
       const fixture = buildReactiveFixture({
-        script: ['tool', 'overflow', 'done'],
+        script: ['tool', 'overflow', 'overflow'],
         ...scenario,
       });
       await runTurn(fixture);
+      assert.equal(complete(fixture)?.stopReason, 'error');
 
       const note = fixture.messages.find(
         (message): message is { type: 'system_note'; kind: string; data?: unknown } =>
@@ -1849,9 +1854,27 @@ describe('reactive overflow recovery in the streaming backend', () => {
     });
   }
 
-  test('does not suggest a smaller Maka window when the declaration was already crossed', async () => {
+  test('a send that overflows once, folds and completes suggests nothing', async () => {
     const fixture = buildReactiveFixture({
       script: ['tool', 'overflow', 'done'],
+      withoutContextWindow: true,
+    });
+    await runTurn(fixture);
+    assert.equal(complete(fixture)?.stopReason, 'end_turn');
+    // The fold itself is noted (context_compacted); the window suggestion is not.
+    assert.equal(
+      fixture.messages.some(
+        (message) =>
+          (message as { type?: string; kind?: string }).type === 'system_note' &&
+          (message as { kind?: string }).kind === 'context_window_suggestion',
+      ),
+      false,
+    );
+  });
+
+  test('does not suggest a smaller Maka window when the declaration was already crossed', async () => {
+    const fixture = buildReactiveFixture({
+      script: ['tool', 'overflow', 'overflow'],
       contextWindow: 100,
       declareContextWindow: true,
     });

@@ -1345,6 +1345,21 @@ function systemNoteText(message: SystemNoteMessage): string | undefined {
       return 'Context compacted to keep this task within the model window.';
     case 'context_compaction_failed_open':
       return 'Context summary failed; the session continued without a new summary.';
+    case 'context_provider_dropping':
+      return 'The provider is dropping or rewriting context: content was appended but its reported usage did not grow. Declare a context window for this model so Maka compacts first.';
+    case 'context_window_suggestion': {
+      const data = message.data as
+        | { suggestedContextWindow?: unknown; declaredContextWindow?: unknown }
+        | undefined;
+      const tokens =
+        typeof data?.suggestedContextWindow === 'number' ? data.suggestedContextWindow : undefined;
+      const declared =
+        typeof data?.declaredContextWindow === 'number' ? data.declaredContextWindow : undefined;
+      if (tokens === undefined) return 'The provider rejected this request as too large.';
+      return declared === undefined
+        ? `The provider rejected this request. No context window is declared for this model; the last accepted request was about ${tokens} tokens — declare that as the window so Maka compacts first.`
+        : `The provider rejected this request at about ${tokens} tokens, below the declared window of ${declared}. The declaration is likely larger than the provider's window; consider lowering it to ${tokens}.`;
+    }
     case 'step_limit':
       return STEP_LIMIT_NOTICE_TEXT;
     case 'error':
