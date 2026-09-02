@@ -215,30 +215,36 @@ export function mergeContextBudgetDiagnosticPatches(
   return mergeContextBudgetDiagnostic(left as ContextBudgetDiagnostic, right);
 }
 
-export function shouldAppendContextCompactedNote(
+// A history fold reaches the user as one note per send, whichever stage
+// performed it: the replay of an existing checkpoint at turn start
+// (`priorReplay`) or a fold the request-projection hook made before a request
+// of this send (`activeStep`, pre_turn or mid_turn). Since #4486 every new fold
+// happens in the hook, so a note keyed on replay alone would arrive one turn
+// late — the turn that was compacted would show nothing (#4559).
+function hasHistoryCompactDecision(
   contextBudget: ContextBudgetDiagnostic | undefined,
+  decision: 'replaced' | 'failedOpen',
 ): boolean {
   return (
     contextBudget?.compactionDecisions?.some(
-      (decision) =>
-        decision.stage === 'priorReplay' &&
-        decision.boundaryKind === 'historyCompact' &&
-        decision.decision === 'replaced',
+      (candidate) =>
+        (candidate.stage === 'priorReplay' || candidate.stage === 'activeStep') &&
+        candidate.boundaryKind === 'historyCompact' &&
+        candidate.decision === decision,
     ) === true
   );
+}
+
+export function shouldAppendContextCompactedNote(
+  contextBudget: ContextBudgetDiagnostic | undefined,
+): boolean {
+  return hasHistoryCompactDecision(contextBudget, 'replaced');
 }
 
 export function shouldAppendContextCompactionFailedOpenNote(
   contextBudget: ContextBudgetDiagnostic | undefined,
 ): boolean {
-  return (
-    contextBudget?.compactionDecisions?.some(
-      (decision) =>
-        decision.stage === 'priorReplay' &&
-        decision.boundaryKind === 'historyCompact' &&
-        decision.decision === 'failedOpen',
-    ) === true
-  );
+  return hasHistoryCompactDecision(contextBudget, 'failedOpen');
 }
 
 export function minimalContextBudgetDiagnostic(): ContextBudgetDiagnostic {
