@@ -312,11 +312,14 @@ describe('buildLlmHistorySummarizer', () => {
       ['fc1', 'fc2'],
     );
     const shape = messages.map((m) => `${m.role}:${m.content.map((part) => part.type).join('+')}`);
-    assert.deepEqual(shape.slice(-4), [
+    // The request always ends on the summary instruction; the folded span is
+    // everything before it.
+    assert.deepEqual(shape.slice(-5), [
       'assistant:tool-call+tool-call',
       'tool:tool-result',
       'tool:tool-result',
       'assistant:text',
+      'user:text',
     ]);
   });
 
@@ -378,15 +381,46 @@ describe('buildLlmHistorySummarizer', () => {
       'tool:tool-result',
       'tool:tool-result',
       'tool:tool-result',
+      'user:text',
     ]);
     assert.deepEqual(
       messages[1]!.content.map((part) => part.toolCallId),
       ['fc1', 'fc2', 'fc3'],
     );
     assert.deepEqual(
-      messages.slice(2).map((m) => m.content[0]!.toolCallId),
+      messages.slice(2, -1).map((m) => m.content[0]!.toolCallId),
       ['fc1', 'fc2', 'fc3'],
     );
+  });
+
+  test('ends every summary request with a user instruction the model can answer', async () => {
+    // A chat-template model handed a conversation that ends on its own turn
+    // emits end-of-sequence and nothing else (observed on Ollama qwen2.5:
+    // finish `stop`, one output token, empty text). The request therefore
+    // closes with an instruction, on the first attempt and on the repair.
+    const seen: Array<{ messages: unknown[] }> = [];
+    const generateText: AiSdkGenerateTextLike = async (opts) => {
+      seen.push(opts);
+      return seen.length === 1
+        ? { text: 'not a summary', finishReason: 'stop' }
+        : { text: VALID_SUMMARY, finishReason: 'stop' };
+    };
+    const summarize = buildLlmHistorySummarizer({ resolveModel: () => ({}), generateText });
+    await summarize(
+      inputWith([
+        ev({ role: 'user', author: 'user', content: { kind: 'text', text: 'question' } }),
+        ev({ role: 'model', author: 'agent', content: { kind: 'text', text: 'answer' } }),
+      ]),
+    );
+    assert.equal(seen.length, 2);
+    for (const call of seen) {
+      const last = call.messages.at(-1) as {
+        role: string;
+        content: Array<{ type: string; text?: string }>;
+      };
+      assert.equal(last.role, 'user');
+      assert.match(last.content[0]!.text ?? '', /write the structured summary/i);
+    }
   });
 
   test('does not merge distinct settled steps into one assistant message', async () => {
@@ -434,6 +468,7 @@ describe('buildLlmHistorySummarizer', () => {
       'tool:tool-result',
       'assistant:tool-call',
       'tool:tool-result',
+      'user:text',
     ]);
   });
 
@@ -496,6 +531,7 @@ describe('buildLlmHistorySummarizer', () => {
       'tool:tool-result',
       'assistant:tool-call',
       'tool:tool-result',
+      'user:text',
     ]);
     assert.deepEqual(
       messages[0]!.content.map((part) => part.toolCallId),

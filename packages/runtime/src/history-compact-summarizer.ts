@@ -80,6 +80,9 @@ const SUMMARIZATION_SYSTEM_PROMPT = [
   'Keep each section concise. Preserve exact file paths, function names, commands, and error messages.',
 ].join('\n');
 
+const SUMMARY_REQUEST_INSTRUCTION =
+  'Now write the structured summary of the conversation above. Output only the summary.';
+
 function shortenSummarizationSystemPrompt(): string {
   return [
     SUMMARIZATION_SYSTEM_PROMPT,
@@ -123,6 +126,16 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
           ],
         });
       }
+      // The folded span usually ends on an assistant message. A chat-template
+      // model handed a conversation that already ends with its own turn emits
+      // an end-of-sequence token and nothing else (Ollama qwen2.5: finish
+      // `stop`, one output token, empty text), so the request must end with
+      // an instruction the model can answer. Hosted providers do not need the
+      // nudge and are not disturbed by it (#4559).
+      projectedMessages.push({
+        role: 'user',
+        content: [{ type: 'text', text: SUMMARY_REQUEST_INSTRUCTION }],
+      });
       // Nothing is trimmed on a local estimate: whether this input fits the
       // summarizer's window is its provider's answer (`input_too_large`, which
       // the planner retreats on), and the output is capped outright (#4559).
