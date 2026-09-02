@@ -24,14 +24,16 @@ import {
   SUMMARY_FORMAT_TEMPLATE,
 } from './history-compact-summary-validation.js';
 import { effectiveReplayToolResultOutput } from './durable-tool-result-projection.js';
-import type { HistoryCompactSummaryInput } from './ai-sdk-compaction-contract.js';
+import {
+  DEFAULT_HISTORY_COMPACT_MAX_OUTPUT_TOKENS,
+  type HistoryCompactSummaryInput,
+} from './ai-sdk-compaction-contract.js';
 import {
   HistoryCompactSummarizerError,
   isMalformedHistoryCompactSummaryReason,
 } from './history-compact-error.js';
 import { isTextHistoryCompactCheckpoint } from './history-compact-checkpoint.js';
-import { fitHistoryCompactMessages } from './history-compact-input-fit.js';
-import type { AiSdkUsageLike } from './model-adapter.js';
+import { normalizeAiSdkUsage, type AiSdkUsageLike } from './model-adapter.js';
 import { withProviderGenerateTracking } from './provider-request-telemetry.js';
 
 export { HistoryCompactSummarizerError } from './history-compact-error.js';
@@ -78,6 +80,14 @@ const SUMMARIZATION_SYSTEM_PROMPT = [
   'Keep each section concise. Preserve exact file paths, function names, commands, and error messages.',
 ].join('\n');
 
+function shortenSummarizationSystemPrompt(): string {
+  return [
+    SUMMARIZATION_SYSTEM_PROMPT,
+    '',
+    'Your previous attempt was cut off at the output limit. Produce the same summary in well under half the length: keep every section, drop detail rather than sections.',
+  ].join('\n');
+}
+
 function repairSummarizationSystemPrompt(reason: string): string {
   return [
     SUMMARIZATION_SYSTEM_PROMPT,
@@ -113,11 +123,10 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
           ],
         });
       }
-      const initialMessages = fitHistoryCompactMessages(projectedMessages, {
-        maxInputEstimatedTokens: input.inputBudget?.maxEstimatedTokens,
-        charsPerToken: input.inputBudget?.charsPerToken,
-        fixedInputChars: SUMMARIZATION_SYSTEM_PROMPT.length,
-      });
+      // Nothing is trimmed on a local estimate: whether this input fits the
+      // summarizer's window is its provider's answer (`input_too_large`, which
+      // the planner retreats on), and the output is capped outright (#4559).
+      const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_HISTORY_COMPACT_MAX_OUTPUT_TOKENS;
       // Handed over whole by the backend, which owns every input a tracker
       // needs — including the run, which no summarizer wiring can know (#1679).
       const providerRequestTracker = input.providerRequestTracker;
@@ -133,34 +142,46 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
             ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
           })
         : options.resolveModel();
-      const generateSummary = async (
-        step: number,
-        instructions: string,
-        messages: ModelMessage[],
-      ) => {
+      let step = 0;
+      const generateSummary = async (instructions: string, messages: ModelMessage[]) => {
         providerRequestTracker?.setStep(step);
+        step += 1;
         const result = await generateText({
           model,
           instructions,
           messages,
+          maxOutputTokens,
           ...(options.providerOptions !== undefined
             ? { providerOptions: options.providerOptions }
             : {}),
           ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
         });
-        if (rawFinishReasonString(result.finishReason) === 'length') {
-          throw new HistoryCompactSummarizerError('output_length');
-        }
-        const defect = findCheckpointSummaryDefect(result.text, {
-          coveredRuntimeEvents: input.source.foldedRuntimeEvents,
-          ...(input.inputBudget?.charsPerToken !== undefined
-            ? { charsPerToken: input.inputBudget.charsPerToken }
-            : {}),
-        });
-        return { text: result.text, defect };
+        const usage = normalizeAiSdkUsage(result.usage);
+        const truncated = rawFinishReasonString(result.finishReason) === 'length';
+        const defect = truncated
+          ? undefined
+          : findCheckpointSummaryDefect(result.text, {
+              coveredRuntimeEvents: input.source.foldedRuntimeEvents,
+              ...(usage !== undefined && usage.inputTokens > 0
+                ? {
+                    summarizerUsage: {
+                      inputTokens: usage.inputTokens,
+                      outputTokens: usage.outputTokens,
+                    },
+                  }
+                : {}),
+            });
+        return { text: result.text, defect, truncated };
       };
 
-      const initial = await generateSummary(0, SUMMARIZATION_SYSTEM_PROMPT, initialMessages);
+      let initial = await generateSummary(SUMMARIZATION_SYSTEM_PROMPT, projectedMessages);
+      if (initial.truncated) {
+        // The provider cut the summary at the output cap. One shorter attempt;
+        // a second cut is the provider saying this span will not summarize
+        // inside the cap, and the fold fails open.
+        initial = await generateSummary(shortenSummarizationSystemPrompt(), projectedMessages);
+        if (initial.truncated) throw new HistoryCompactSummarizerError('output_length');
+      }
       if (!initial.defect) return initial.text;
       if (!isMalformedHistoryCompactSummaryReason(initial.defect)) {
         throw new HistoryCompactSummarizerError(initial.defect);
@@ -170,14 +191,10 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
       // be bounded: one stricter attempt, then the caller's failure circuit
       // records the stable defect for this compaction input.
       const repairInstructions = repairSummarizationSystemPrompt(initial.defect);
-      const repairMessages = fitHistoryCompactMessages(projectedMessages, {
-        maxInputEstimatedTokens: input.inputBudget?.maxEstimatedTokens,
-        charsPerToken: input.inputBudget?.charsPerToken,
-        fixedInputChars: repairInstructions.length,
-      });
       let repaired: Awaited<ReturnType<typeof generateSummary>>;
       try {
-        repaired = await generateSummary(1, repairInstructions, repairMessages);
+        repaired = await generateSummary(repairInstructions, projectedMessages);
+        if (repaired.truncated) throw new HistoryCompactSummarizerError('output_length');
       } catch (error) {
         if (isAbortError(error)) throw error;
         throw new HistoryCompactSummarizerError(initial.defect, {

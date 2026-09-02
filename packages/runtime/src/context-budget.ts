@@ -49,12 +49,9 @@ import type { StaleToolResultPrunePolicy } from './tool-result-archive.js';
 import { type ActiveToolResultPrunePolicy } from './active-tool-result-prune.js';
 import {
   applyRuntimeEventHistoryCompact as applyRuntimeEventHistoryCompactNarrow,
-  evaluateHistoryCompactCheckpointReplay as evaluateHistoryCompactCheckpointReplayNarrow,
   isHistoryCompactContentEvent,
   type HistoryCompactionPolicy,
-  type HistoryCompactionReplayOptions,
   type HistoryCompactionReplayResult,
-  type HistoryCompactionCheckpointReplayFit,
 } from './history-compaction.js';
 
 import type { RuntimeEvent } from '@maka/core/runtime-event';
@@ -68,11 +65,11 @@ import type { HistoryCompactCheckpoint } from './history-compact-checkpoint.js';
 export interface ContextBudgetPolicy {
   name?: string;
   /**
-   * Approximate max model-visible prior-history tokens. This is an estimate
-   * used for shaping, not provider billing.
+   * Chars-per-token conversion for the CONTENT policies below (how large one
+   * Tool Result may be before it is archived) and for diagnostics. It takes
+   * part in no context-fit decision: whether a request fits is the provider's
+   * answer (#4559). Defaults to 4.
    */
-  maxHistoryEstimatedTokens?: number;
-  /** Estimate conversion. Defaults to 4 chars/token, intentionally conservative for mixed text. */
   charsPerToken?: number;
   /** Optional replay-only pruning for stale oversized tool results before whole-turn compaction. */
   staleToolResultPrune?: StaleToolResultPrunePolicy;
@@ -90,10 +87,11 @@ export interface BudgetedRuntimeContext {
   diagnostic: ContextBudgetDiagnostic;
   /**
    * The checkpoint this projection was actually replayed through — present only
-   * when it passed the prefix match and the replay fit, i.e. when these events
-   * really are `[block, tail]` rather than the raw prefix.
+   * when the prefix matched and these events really are `[block, tail]` rather
+   * than the raw prefix. Whether the resulting request fits is the provider's
+   * decision.
    *
-   * A loaded checkpoint that failed either gate is a checkpoint the caller
+   * A loaded checkpoint whose prefix does not match is a checkpoint the caller
    * holds and the projection ignored; the two must not be confused by anyone
    * reporting what a prompt was built from (#2323).
    */
@@ -107,9 +105,7 @@ export function applyRuntimeEventContextBudget(
   const prunePolicy = policy?.staleToolResultPrune;
   const pruneEnabled = prunePolicy?.enabled === true;
   const historyCompactEnabled = policy?.historyCompact?.enabled === true;
-  const enabled = Boolean(
-    policy?.maxHistoryEstimatedTokens || pruneEnabled || historyCompactEnabled,
-  );
+  const enabled = pruneEnabled || historyCompactEnabled;
   if (!enabled) return undefined;
   if (!policy) return undefined;
   const charsPerToken = policy?.charsPerToken ?? 4;
@@ -117,9 +113,7 @@ export function applyRuntimeEventContextBudget(
   const compacted = applyRuntimeEventHistoryCompactNarrow(
     events,
     policy?.historyCompact,
-    policy?.charsPerToken,
-    policy?.maxHistoryEstimatedTokens,
-    { charsPerToken },
+    charsPerToken,
   );
   // Stale Tool Result pruning is no longer a step of the budget: it is a
   // durable projection transition committed before this projection runs, and
@@ -133,9 +127,6 @@ export function applyRuntimeEventContextBudget(
   const diagnostic: ContextBudgetDiagnostic = {
     enabled: true,
     ...(policy?.name ? { policyName: policy.name } : {}),
-    ...(policy.maxHistoryEstimatedTokens !== undefined
-      ? { maxHistoryEstimatedTokens: policy.maxHistoryEstimatedTokens }
-      : {}),
     estimatedTokensBefore,
     estimatedTokensAfter: estimateRuntimeEventsTokens(keptEvents, charsPerToken),
     keptTurns: keptTurnIds.size,
@@ -191,9 +182,6 @@ export function buildContextBudgetDiagnosticShell(
   return {
     enabled: true,
     ...(policy?.name ? { policyName: policy.name } : {}),
-    ...(policy?.maxHistoryEstimatedTokens !== undefined
-      ? { maxHistoryEstimatedTokens: policy.maxHistoryEstimatedTokens }
-      : {}),
     estimatedTokensBefore: estimateRuntimeEventsTokens(before, charsPerToken),
     estimatedTokensAfter: estimateRuntimeEventsTokens(after, charsPerToken),
     keptTurns: turnCountAfter,
@@ -289,28 +277,10 @@ function mergeCompactionDecisionDiagnostics(
 export function applyRuntimeEventHistoryCompact(
   events: readonly RuntimeEvent[],
   policy: ContextBudgetPolicy | undefined,
-  options: HistoryCompactionReplayOptions = {},
 ): HistoryCompactionReplayResult {
   return applyRuntimeEventHistoryCompactNarrow(
     events,
     policy?.historyCompact,
     policy?.charsPerToken,
-    policy?.maxHistoryEstimatedTokens,
-    options,
-  );
-}
-
-export function evaluateHistoryCompactCheckpointReplay(
-  checkpoint: HistoryCompactCheckpoint,
-  replayTail: readonly RuntimeEvent[],
-  policy: ContextBudgetPolicy | undefined,
-  options: HistoryCompactionReplayOptions = {},
-): HistoryCompactionCheckpointReplayFit {
-  return evaluateHistoryCompactCheckpointReplayNarrow(
-    checkpoint,
-    replayTail,
-    policy?.charsPerToken,
-    policy?.maxHistoryEstimatedTokens,
-    options,
   );
 }

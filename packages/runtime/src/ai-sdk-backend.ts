@@ -266,10 +266,7 @@ import {
   shouldAppendContextCompactionFailedOpenNote,
   type ContextBudgetPolicy,
 } from './context-budget.js';
-import {
-  evaluateHistoryCompactCheckpointReplay,
-  isHistoryCompactContentEvent,
-} from './history-compaction.js';
+import { isHistoryCompactContentEvent } from './history-compaction.js';
 import {
   canContinueHistoryCompactCheckpointForModel,
   historyCompactCheckpointToModelMessage,
@@ -1556,6 +1553,9 @@ export class AiSdkBackend implements AgentBackend {
     // result.usage.inputTokens is cumulative across steps and would produce
     // misleading >100% percentages, so the per-step value is captured here.
     let lastStepInputTokens: number | undefined;
+    // Output tokens of the same step: with the input they are the baseline the
+    // next request is judged from (everything the model produced is re-sent).
+    let lastStepOutputTokens: number | undefined;
     let streamStatus: LlmCallRecord['status'] = 'success';
     let streamErrorClass: string | undefined;
     let runtimeSteps = 0;
@@ -1563,6 +1563,12 @@ export class AiSdkBackend implements AgentBackend {
     let contextBudgetForTelemetry: ContextBudgetDiagnostic | undefined;
     let contextCompactedNoteWritten = false;
     let contextCompactionFailedOpenNoteWritten = false;
+    let contextProviderDroppingNoteWritten = false;
+    let contextWindowSuggestionNoteWritten = false;
+    // Request index (0-based) at which the active prune last rewrote the
+    // request. A step Maka pruned is not append-only, so usage may legitimately
+    // shrink.
+    let pruneAppliedAtStep: number | undefined;
     const trace = new RunTrace({
       sessionId: this.sessionId,
       turnId,
@@ -1958,6 +1964,7 @@ export class AiSdkBackend implements AgentBackend {
           turnId,
           activeToolResultPruneIncludesNewestStep,
           (patch) => {
+            pruneAppliedAtStep = runtimeSteps;
             activeToolResultPruneDiagnosticPatch = mergeActiveToolResultPruneDiagnosticPatches(
               activeToolResultPruneDiagnosticPatch,
               patch,
@@ -1969,22 +1976,9 @@ export class AiSdkBackend implements AgentBackend {
           midTurnCapacityHook,
           activeToolResultPruneHook,
         );
-        // The verdict owner wraps the WHOLE shaping pipeline: hooks shape, one
-        // owner measures the final payload and decides pass/terminate.
-        const requestProjection =
-          midTurnState && midTurnCapacityHook && shapedProjection
-            ? this.compaction.buildMidTurnFinalRequestRescue({
-                shaped: shapedProjection,
-                reentry: composeRequestProjection(
-                  undefined,
-                  midTurnCapacityHook,
-                  activeToolResultPruneHook,
-                )!,
-                state: midTurnState,
-                providerTools,
-                charsPerToken: this.input.contextBudget?.charsPerToken ?? 4,
-              })
-            : shapedProjection;
+        // Hooks shape; nothing measures the final payload. Whether it fits is
+        // the provider's answer (#4559).
+        const requestProjection = shapedProjection;
 
         const completedProviderSteps: RequestProjectionContext['completedSteps'][number][] = [];
         let requestMessages: ModelMessage[] = messages;
@@ -2166,9 +2160,44 @@ export class AiSdkBackend implements AgentBackend {
                   const stepUsage = event.usage;
                   providerStepUsage = stepUsage;
                   if (!stepUsage) sawUnusableStepUsage = true;
+                  // Silent eviction / rewrite check (#4559): this step only
+                  // appended (no fold, no prune, no image omission) yet the
+                  // provider counted fewer input tokens than the baseline it
+                  // was judged from.
+                  const completedRequestIndex = runtimeSteps - 1;
+                  if (
+                    !contextProviderDroppingNoteWritten &&
+                    midTurnState &&
+                    completedRequestIndex >= 1 &&
+                    midTurnState.baselineTokens !== undefined &&
+                    midTurnState.replacedStepNumber !== completedRequestIndex &&
+                    pruneAppliedAtStep !== completedRequestIndex &&
+                    midTurnState.omittedImageToolResults.size === 0 &&
+                    stepUsage !== undefined &&
+                    Number.isFinite(stepUsage.inputTokens) &&
+                    stepUsage.inputTokens > 0 &&
+                    stepUsage.inputTokens < midTurnState.baselineTokens
+                  ) {
+                    contextProviderDroppingNoteWritten = true;
+                    const note: SystemNoteMessage = {
+                      type: 'system_note',
+                      id: this.newId(),
+                      turnId,
+                      ts: this.now(),
+                      kind: 'context_provider_dropping',
+                    };
+                    await this.input.appendMessage(note).catch(() => {});
+                  }
                   // Fail closed: reset on every step boundary so a missing final
                   // step's usage does not leave a stale value from an earlier step.
                   lastStepInputTokens = stepUsage?.inputTokens;
+                  lastStepOutputTokens = stepUsage?.outputTokens;
+                  // The provider cut this reply at its output limit: it ran out
+                  // of room, which no local number predicted. Fold once before
+                  // the next request of this turn (#4559).
+                  if (midTurnState && event.finishReason === 'length') {
+                    midTurnState.pendingLengthFold = true;
+                  }
                   if (stepUsage) {
                     completedStepUsage = mergeNormalizedUsage(completedStepUsage, stepUsage);
                     this.cumulativeUsageCheckpoint = mergeNormalizedUsage(
@@ -2400,6 +2429,33 @@ export class AiSdkBackend implements AgentBackend {
               // more step; with the send-level budget already spent there is
               // nothing left to grant it, so the error is terminal.
               const stepBudgetRemains = maxSteps === undefined || runtimeSteps < maxSteps;
+              // Window suggestion (#4559): the provider rejected a request whose
+              // baseline is a proven-fit total (input + output of an accepted
+              // request). Once per send, expose that fact as a setting hint.
+              if (
+                !contextWindowSuggestionNoteWritten &&
+                failure.kind === 'context_overflow' &&
+                midTurnState &&
+                midTurnState.baselineTokens !== undefined &&
+                (midTurnState.capacity === undefined ||
+                  midTurnState.baselineTokens < midTurnState.capacity)
+              ) {
+                contextWindowSuggestionNoteWritten = true;
+                const note: SystemNoteMessage = {
+                  type: 'system_note',
+                  id: this.newId(),
+                  turnId,
+                  ts: this.now(),
+                  kind: 'context_window_suggestion',
+                  data: {
+                    suggestedContextWindow: midTurnState.baselineTokens,
+                    ...(midTurnState.capacity !== undefined
+                      ? { declaredContextWindow: midTurnState.capacity }
+                      : {}),
+                  },
+                };
+                await this.input.appendMessage(note).catch(() => {});
+              }
               const recovered =
                 stepBudgetRemains && attemptHasNoObservableOutput()
                   ? await this.compaction.recoverFromOverflowError({
@@ -2409,9 +2465,7 @@ export class AiSdkBackend implements AgentBackend {
                       turnId,
                       stepNumber: runtimeSteps,
                       currentMessages: attemptMessages,
-                      providerTools,
                       activeTools: activeToolsForRequest,
-                      systemPromptChars: requestSystemPrompt?.length ?? 0,
                       queue,
                       onDiagnosticPatch: onMidTurnDiagnosticPatch,
                       origin: scope,
@@ -2740,13 +2794,17 @@ export class AiSdkBackend implements AgentBackend {
               }
               return undefined;
             })();
-            // The anchor the NEXT turn estimates its first request from — see
+            // The anchor the NEXT turn judges its first request from — see
             // `LastRequestAnchor`. `input` below is the sum across this send's
-            // steps and anchors nothing. Either half missing (no usable usage
-            // sample, or no mid-turn seam to measure the payload) drops the
-            // whole pair and the next turn cold starts.
+            // steps and anchors nothing; the LAST step's real input and output
+            // are what the next request re-sends. No usable input count, no
+            // anchor: the next turn then has no proactive fold until its first
+            // accepted request.
             const anchorInputTokens = finitePositive(lastStepInputTokens);
-            const anchorPayloadChars = finitePositive(midTurnState?.lastRequestPayloadChars);
+            const anchorOutputTokens =
+              lastStepOutputTokens !== undefined && Number.isFinite(lastStepOutputTokens)
+                ? Math.max(0, lastStepOutputTokens)
+                : undefined;
             // One shared usage payload for the durable message and the live
             // event: twin per-field literals drifted before (#4019), so a field
             // now has exactly one definition site.
@@ -2775,11 +2833,13 @@ export class AiSdkBackend implements AgentBackend {
                 ? { contextRemaining: contextRemainingForUsage }
                 : {}),
               ...(providerRequestTraceId ? { providerRequestTraceId } : {}),
-              ...(anchorInputTokens !== undefined && anchorPayloadChars !== undefined
+              ...(anchorInputTokens !== undefined
                 ? {
                     lastRequestAnchor: {
                       inputTokens: anchorInputTokens,
-                      payloadChars: anchorPayloadChars,
+                      ...(anchorOutputTokens !== undefined
+                        ? { outputTokens: anchorOutputTokens }
+                        : {}),
                     },
                   }
                 : {}),
@@ -3400,81 +3460,9 @@ export class AiSdkBackend implements AgentBackend {
       );
     }
 
-    const maxHistoryTokens = contextBudget?.maxHistoryEstimatedTokens;
-    // FALLBACK, not a second authority: step 0's anchored estimate measures the
-    // whole outgoing payload against the real window, where this gate only
-    // weighs prior history events at chars/4. It stands in only where that
-    // estimate cannot reach — no anchor, no mid-turn seam, or no declared
-    // window — so an oversized history never goes out unshaped.
-    const needsCompaction =
-      !(
-        midTurnState?.capacity !== undefined && midTurnState.lastRequestInputTokens !== undefined
-      ) &&
-      maxHistoryTokens !== undefined &&
-      estimateRuntimeEventsTokens(runtimeContext, contextBudget?.charsPerToken) > maxHistoryTokens;
-    if (
-      needsCompaction &&
-      contextBudget?.historyCompact?.enabled === true &&
-      this.compaction.hasHistoryCompactCheckpointWriter()
-    ) {
-      const automaticMemoryDecision = automaticMemory
-        ? this.automaticMemoryCompactionDecision()
-        : undefined;
-      const automaticMemorySource = automaticMemoryDecision
-        ? lastNonCompactRuntimeEvent(priorRuntimeContext)
-        : undefined;
-      const compactResult = await this.compaction.compactHistory(
-        {
-          turnId: input.turnId,
-          runId: scope.runId,
-          runtimeContext: priorRuntimeContext,
-          runtimeContextRunHeaders: input.runtimeContextRunHeaders,
-        },
-        automaticMemorySource
-          ? {
-              runId: automaticMemorySource.runId,
-              turnId: automaticMemorySource.turnId,
-              runtimeEventId: automaticMemorySource.id,
-              disposition: automaticMemoryDecision!.disposition,
-            }
-          : undefined,
-      );
-      let durableCheckpoint = compactResult.checkpoint;
-      if (!durableCheckpoint && compactResult.outcome.kind === 'unchanged') {
-        try {
-          durableCheckpoint = await Promise.resolve(this.input.loadHistoryCompactCheckpoint?.());
-        } catch {
-          durableCheckpoint = undefined;
-        }
-      }
-      if (durableCheckpoint) {
-        const replay = buildHistoryCompactCheckpointFailOpenContext(
-          durableCheckpoint,
-          priorRuntimeContext,
-          contextBudget!,
-          priorRuntimeContext,
-        );
-        runtimeContext = replay.events;
-        projectedHistoryCompactCheckpoint = replay.checkpoint;
-        if (
-          replay.checkpoint &&
-          compactResult.outcome.kind === 'compacted' &&
-          automaticMemoryDecision?.dispatch &&
-          automaticMemory
-        ) {
-          this.dispatchAutomaticMemoryCompaction(scope, {
-            checkpoint: replay.checkpoint,
-            activeTools: [],
-          });
-        }
-      }
-      contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-        contextBudgetDiagnostic ??
-          buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-        compactResult.contextBudget ?? {},
-      );
-    }
-
+    // No pre-turn estimate gate: the turn's first request is judged by the
+    // request-projection hook from the previous request's real usage, and by
+    // the provider when it goes out (#4559).
     // The boundary belongs to the runtime-event projection above. A gate that
     // falls back to the stored-message projection returns a prompt no
     // checkpoint shaped, so it reports none rather than one the request never
@@ -4855,42 +4843,17 @@ function buildHistoryCompactCheckpointFailOpenContext(
       byTurn.set(event.turnId, [event]);
     }
   }
-  const maxTokens = policy.maxHistoryEstimatedTokens ?? Number.POSITIVE_INFINITY;
-  const replayPrefix = projectHistoryCompactCheckpointReplay(
-    checkpoint,
-    match.coveredRuntimeEvents,
-    [],
-  );
-  let selectedTokens =
-    checkpoint.version === 3
-      ? checkpoint.estimatedTokens
-      : estimateRuntimeEventsTokens(replayPrefix, charsPerToken);
-  const selectedGroups: RuntimeEvent[][] = [];
-  for (let index = turnOrder.length - 1; index >= 0; index -= 1) {
-    const group = byTurn.get(turnOrder[index]!) ?? [];
-    const groupTokens = estimateRuntimeEventsTokens(group, charsPerToken);
-    if (selectedTokens + groupTokens > maxTokens) break;
-    selectedGroups.unshift(group);
-    selectedTokens += groupTokens;
-  }
+  // Replay is structural: the checkpoint plus everything after its boundary.
+  // No size-based selection stands between them and dispatch; whether the
+  // result fits is the provider's answer (#4559).
+  const selectedGroups: RuntimeEvent[][] = turnOrder.map((turnId) => byTurn.get(turnId) ?? []);
   const replayTail = selectedGroups.flat();
   const replayEvents = projectHistoryCompactCheckpointReplay(
     checkpoint,
     match.coveredRuntimeEvents,
     replayTail,
   );
-  const replayTailForFit = checkpoint.version === 3 ? replayEvents : replayEvents.slice(1);
-  return evaluateHistoryCompactCheckpointReplay(
-    checkpoint,
-    replayTailForFit,
-    policy?.charsPerToken,
-    policy?.maxHistoryEstimatedTokens,
-    {
-      sourceReplayEvents: [...match.coveredRuntimeEvents, ...replayTail],
-    },
-  ).fits
-    ? { events: replayEvents, checkpoint }
-    : { events: [...retainedCandidates] };
+  return { events: replayEvents, checkpoint };
 }
 
 function projectMemoryConversationPrefix(

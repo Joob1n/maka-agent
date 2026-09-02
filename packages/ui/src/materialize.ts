@@ -140,10 +140,25 @@ export interface ToolActivityItem {
   shellRunSource?: "owned" | "unavailable";
 }
 
-function systemNoteLabel(kind: string, locale: UiLocale): string {
+function systemNoteLabel(kind: string, data: unknown, locale: UiLocale): string {
   const copy = getConversationCopy(locale).messages.systemNotes;
   if (kind === "context_compacted") return copy.contextCompacted;
   if (kind === "context_compaction_failed_open") return copy.contextCompactionFailedOpen;
+  if (kind === "context_provider_dropping") return copy.contextProviderDropping;
+  if (kind === "context_window_suggestion") {
+    const suggestion = data as
+      | { suggestedContextWindow?: unknown; declaredContextWindow?: unknown }
+      | undefined;
+    const tokens =
+      typeof suggestion?.suggestedContextWindow === "number"
+        ? suggestion.suggestedContextWindow
+        : 0;
+    const declared =
+      typeof suggestion?.declaredContextWindow === "number"
+        ? suggestion.declaredContextWindow
+        : undefined;
+    return copy.contextWindowSuggestion(tokens, declared);
+  }
   if (kind === "step_limit") return copy.stepLimit;
   return kind;
 }
@@ -187,7 +202,7 @@ export function materializeChat(
       items.push({
         id: message.id,
         role: "system",
-        text: systemNoteLabel(message.kind, locale),
+        text: systemNoteLabel(message.kind, message.data, locale),
         ts: message.ts,
       });
     }
@@ -772,7 +787,7 @@ export function materializeTurns(
       turn.notes.push({
         id: message.id,
         role: "system",
-        text: systemNoteLabel(message.kind, locale),
+        text: systemNoteLabel(message.kind, message.data, locale),
         ts: message.ts,
       });
     } else if (message.type === "token_usage") {

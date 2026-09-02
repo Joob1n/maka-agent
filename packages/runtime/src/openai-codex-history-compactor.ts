@@ -30,7 +30,6 @@ import {
 } from './history-compact-checkpoint.js';
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import type { ModelMessage } from './model-protocol.js';
-import { fitHistoryCompactMessages } from './history-compact-input-fit.js';
 import {
   admitProviderReasoningReplayItems,
   buildRuntimeEventModelReplayPlan,
@@ -91,10 +90,9 @@ export function buildOpenAiCodexHistoryCompactor(options: BuildOpenAiCodexHistor
       if (canContinuePrevious) {
         projectedMessages.unshift(historyCompactCheckpointToModelMessage(previous));
       }
-      const messages = fitHistoryCompactMessages(projectedMessages, {
-        maxInputEstimatedTokens: input.inputBudget?.maxEstimatedTokens,
-        charsPerToken: input.inputBudget?.charsPerToken,
-      });
+      // Whether this input fits the compaction endpoint is its own answer;
+      // nothing is trimmed on a local estimate beforehand (#4559).
+      const messages = projectedMessages;
 
       const providerRequestTracker = input.providerRequestTracker;
       const ai = await loadAiSdkModule();

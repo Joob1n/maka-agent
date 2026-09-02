@@ -128,12 +128,12 @@ const BIG_RESULT = 'BIG_RESULT_'.repeat(200);
 interface ReactiveFixtureOptions {
   script: CallKind[];
   contextWindow?: number;
+  declareContextWindow?: boolean;
   /**
    * A model that declares no context window, on a provider whose default
    * policy sets no history budget either — so nothing can synthesize one.
    */
   withoutContextWindow?: boolean;
-  reserveTokens?: number;
   midTurnEnabled?: boolean;
   withoutPriorTurns?: boolean;
   bigPriors?: boolean;
@@ -206,6 +206,7 @@ interface ReactiveFixture {
   priorEvents: RuntimeEvent[];
   priorRunHeaders: AgentRunHeader[];
   events: SessionEvent[];
+  messages: unknown[];
   llmCalls: ReactiveLlmCall[];
   /** Canonical settlements, whole, when `canonicalAccounting` is on. */
   commits: ModelCallCommit<ModelCallAttempt>[];
@@ -217,11 +218,11 @@ interface ReactiveFixture {
 
 function buildReactiveFixture(options: ReactiveFixtureOptions): ReactiveFixture {
   const contextWindow = options.contextWindow ?? 200_000;
-  const reserveTokens = options.reserveTokens ?? 1_000;
   const recorded: HistoryCompactCheckpoint[] = [];
   const commits: ModelCallCommit<ModelCallAttempt>[] = [];
   const toolExecutions: string[] = [];
   const events: SessionEvent[] = [];
+  const messages: unknown[] = [];
   const llmCalls: ReactiveLlmCall[] = [];
   const retryDelays: number[] = [];
   const counters = { summarizerCalls: 0 };
@@ -578,7 +579,8 @@ function buildReactiveFixture(options: ReactiveFixtureOptions): ReactiveFixture 
   const backend = createTestAiSdkBackend({
     sessionId: 'session-1',
     header: header(),
-    appendMessage: async () => {
+    appendMessage: async (message) => {
+      messages.push(message);
       if (!options.slowAppendMessage) return;
       for (let i = 0; i < 5; i += 1) await flushMacrotask();
     },
@@ -593,6 +595,9 @@ function buildReactiveFixture(options: ReactiveFixtureOptions): ReactiveFixture 
           ? { id: 'mock-model-id' }
           : { id: 'mock-model-id', contextWindow },
       ],
+      ...(options.declareContextWindow
+        ? { relayModelProfiles: { 'mock-model-id': { contextWindow } } }
+        : {}),
     },
     apiKey: 'sk-test',
     ...(options.reasoningReplayTail ? { providerStateIdentity: PROVIDER_STATE_IDENTITY } : {}),
@@ -650,10 +655,9 @@ function buildReactiveFixture(options: ReactiveFixtureOptions): ReactiveFixture 
       name: 'reactive-test',
       // An undeclared window on this provider carries no history budget either,
       // matching what the default policy builds for it.
-      ...(options.withoutContextWindow ? {} : { maxHistoryEstimatedTokens: 100_000 }),
       historyCompact: {
         enabled: true,
-        ...(midTurnEnabled ? { midTurn: { enabled: true, reserveTokens } } : {}),
+        ...(midTurnEnabled ? { midTurn: { enabled: true } } : {}),
       },
       ...(options.activeToolResultPrune
         ? { activeToolResultPrune: { enabled: true, maxCurrentResultEstimatedTokens: 100 } }
@@ -711,6 +715,7 @@ function buildReactiveFixture(options: ReactiveFixtureOptions): ReactiveFixture 
     priorEvents,
     priorRunHeaders,
     events,
+    messages,
     llmCalls,
     commits,
     retryDelays,
@@ -1494,13 +1499,9 @@ describe('reactive overflow recovery in the streaming backend', () => {
 
   test('the recovery baseline is the request the provider rejected, not the attempt-initial messages', async () => {
     // Review P1-1 repro: four completed tool steps grow the provider-visible
-    // request far beyond the attempt's INITIAL messages. The fold shrinks the
-    // real rejected request but is larger than that initial request, so a
-    // baseline anchored to the initial messages refuses it as
-    // replacement_not_smaller and the turn dies on the exact scenario reactive
-    // recovery exists for — same-turn tool growth. The unique baseline owner
-    // is the verdict owner's per-request payload measure of the request that
-    // actually went out.
+    // request far beyond the attempt's INITIAL messages. Recovery must fold the
+    // durable rejected-request history rather than relying on that stale base;
+    // same-turn tool growth must remain recoverable.
     const fixture = buildReactiveFixture({
       script: ['tool', 'tool', 'tool', 'tool', 'overflow', 'done'],
     });
@@ -1552,7 +1553,7 @@ describe('reactive overflow recovery in the streaming backend', () => {
 
   test("a completed retry step's assistant text is never dropped by a post-retry compaction (review P1-A)", async () => {
     // Review round-2 P1-A repro: provider request boundaries and the Runtime's
-    // flushedSteps / replacedStepNumber / lastShapeFailure are send-level.
+    // flushedSteps / replacedStepNumber state are send-level.
     // After a retry, a mismatched request-local boundary could satisfy the
     // durability wait before the retry step's text_complete is durable, and
     // because the
@@ -1565,14 +1566,11 @@ describe('reactive overflow recovery in the streaming backend', () => {
     // already pushed — so `consumed >= pushed` holds and only the send-global
     // flushedSteps bound can still hold the ledger read back.
     const fixture = buildReactiveFixture({
-      // High water 400: the first attempt's boundary (~usage 100 + small
-      // delta) stays under it, the retry step's huge result (~BIG_RESULT/4)
-      // crosses it, so the capacity trigger fires exactly at the retry's own
-      // step boundary.
+      // The first attempt's boundary stays below the declared target, while
+      // the retry step's large result exercises the next request boundary.
       script: ['tool', 'overflow', 'bigtool', 'done'],
       bigPriors: true,
       contextWindow: 2_000,
-      reserveTokens: 1_600,
       slowAppendMessage: true,
     });
     await runTurn(fixture);
@@ -1785,14 +1783,11 @@ describe('reactive overflow recovery in the streaming backend', () => {
   });
 
   test('a checkpoint fold never covers an injected steering message', async () => {
-    // Round-5 F2: injected steering is PINNED out of the foldable span, so a
-    // measurement of the folded request is a measurement of what the provider
-    // actually receives — the accumulator re-appends the directive either way.
-    //
+    // Round-5 F2: injected steering is PINNED out of the foldable span, so the
+    // accumulator re-appends the directive exactly once after the fold.
     // Scenario: steer once at step 1 (6k chars), then again at step 2 (12k)
-    // so the fold's cut can reach PAST the first steering event. Unpinned,
-    // the fold would swallow the first steer and the request that goes out
-    // would carry chars nothing measured.
+    // so the fold's cut can reach PAST the first steering event. Unpinned, the
+    // fold would swallow the first steer.
     const fixture = buildReactiveFixture({
       script: ['tool', 'tool', 'done'],
       contextWindow: 2_000,
@@ -1827,44 +1822,49 @@ describe('reactive overflow recovery in the streaming backend', () => {
     assert.equal(fixture.events.filter((event) => event.type === 'steering_message').length, 2);
   });
 
-  test('the capacity verdict measures the steering payload the provider will actually receive', async () => {
-    // The base request (priors + one tool step) fits the window; the injected
-    // steering alone pushes the REAL request over it. Steering joins the
-    // request BEFORE shaping, so the single final-request verdict measures
-    // the payload the provider will receive and rescues it (one capacity
-    // fold) instead of silently sending an over-window request. The old
-    // order — append after the verdict — made the verdict blind to steering:
-    // no fold, no exhaustion, an unmeasured over-window request.
-    const bulkSteer = `CAPACITY_STEER_SENTINEL ${'S'.repeat(20_000)}`;
-    const fixture = buildReactiveFixture({
-      script: ['tool', 'done'],
-      contextWindow: 5_000,
-      bigPriors: true,
-    });
-    let pullCount = 0;
-    await runTurn(fixture, 'immediate', () => {
-      pullCount += 1;
-      // Steer at the SECOND step boundary, after the tool step: the verdict
-      // owner (step >= 1) must see the grown payload, not the step-0 baseline.
-      return pullCount === 2
-        ? [{ id: 'lease-bulk', messageId: 'message-bulk', content: { text: bulkSteer } }]
-        : [];
-    });
+  for (const scenario of [
+    { name: 'without a declaration', withoutContextWindow: true, declareContextWindow: false },
+    {
+      name: 'below a declared provider window',
+      contextWindow: 200_000,
+      declareContextWindow: true,
+    },
+  ]) {
+    test(`suggests a Maka window after provider overflow ${scenario.name}`, async () => {
+      const fixture = buildReactiveFixture({
+        script: ['tool', 'overflow', 'done'],
+        ...scenario,
+      });
+      await runTurn(fixture);
 
-    const outcome = complete(fixture);
-    if (outcome?.stopReason === 'end_turn') {
-      // Rescued: the capacity owner reacted to the steering-inclusive payload
-      // with a mid-turn fold, and the delivered request still carries the
-      // steering exactly once.
-      assert.equal(fixture.recorded.length >= 1 || fixture.summarizerCalls() >= 1, true);
-      const finalPrompt = JSON.stringify(fixture.model.doStreamCalls.at(-1)?.prompt);
-      assert.equal(countOccurrences(finalPrompt, 'CAPACITY_STEER_SENTINEL'), 1);
-    } else {
-      // Not rescuable: the verdict terminates explicitly instead of sending
-      // an unmeasured over-window request.
-      assert.equal(outcome?.stopReason, 'error');
-    }
-    assert.equal(fixture.events.filter((event) => event.type === 'steering_message').length, 1);
+      const note = fixture.messages.find(
+        (message): message is { type: 'system_note'; kind: string; data?: unknown } =>
+          (message as { type?: string }).type === 'system_note',
+      );
+      assert.equal(note?.kind, 'context_window_suggestion');
+      assert.deepEqual(note?.data, {
+        suggestedContextWindow: 120,
+        ...(scenario.declareContextWindow ? { declaredContextWindow: 200_000 } : {}),
+      });
+    });
+  }
+
+  test('does not suggest a smaller Maka window when the declaration was already crossed', async () => {
+    const fixture = buildReactiveFixture({
+      script: ['tool', 'overflow', 'done'],
+      contextWindow: 100,
+      declareContextWindow: true,
+    });
+    await runTurn(fixture);
+
+    assert.equal(
+      fixture.messages.some(
+        (message) =>
+          (message as { type?: string; kind?: string }).type === 'system_note' &&
+          (message as { kind?: string }).kind === 'context_window_suggestion',
+      ),
+      false,
+    );
   });
 });
 

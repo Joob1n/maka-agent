@@ -792,6 +792,8 @@ export function userFacingText(message: Pick<UserMessage, 'text' | 'displayText'
 const USER_VISIBLE_SESSION_SYSTEM_NOTES = new Set([
   'context_compacted',
   'context_compaction_failed_open',
+  'context_provider_dropping',
+  'context_window_suggestion',
   'step_limit',
 ]);
 
@@ -1155,6 +1157,8 @@ export interface SystemNoteMessage {
     | 'model_change'
     | 'context_compacted'
     | 'context_compaction_failed_open'
+    | 'context_provider_dropping'
+    | 'context_window_suggestion'
     | 'step_limit'
     | 'error'
     | 'abort';
@@ -1399,6 +1403,8 @@ const SYSTEM_NOTE_KINDS = new Set([
   'model_change',
   'context_compacted',
   'context_compaction_failed_open',
+  'context_provider_dropping',
+  'context_window_suggestion',
   'step_limit',
   'error',
   'abort',

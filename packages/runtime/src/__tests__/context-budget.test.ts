@@ -37,7 +37,6 @@ test('estimates only model-visible provider context', () => {
 test('capacity policy keeps the canonical ledger until a checkpoint replaces it', () => {
   const events = [textEvent('user', 'large history '.repeat(100))];
   const result = applyRuntimeEventContextBudget(events, {
-    maxHistoryEstimatedTokens: 1,
     historyCompact: { enabled: true },
   });
   assert.deepEqual(result?.events, events);

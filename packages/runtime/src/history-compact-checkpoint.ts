@@ -225,7 +225,6 @@ export function buildHistoryCompactCheckpoint(
   if (!providerState && input.summaryFormat !== 'legacy_freeform') {
     const defect = findCheckpointSummaryDefect(summary!, {
       coveredRuntimeEvents: input.coveredRuntimeEvents,
-      ...(input.charsPerToken !== undefined ? { charsPerToken: input.charsPerToken } : {}),
     });
     if (defect) {
       throw new Error(`History compact checkpoint summary failed validation: ${defect}`);

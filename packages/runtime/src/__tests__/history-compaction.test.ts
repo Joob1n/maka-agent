@@ -21,8 +21,6 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import {
-  estimateNextRequestTokens,
-  exceedsHighWater,
   applyRuntimeEventHistoryCompact,
   planHistoryCompaction,
   selectSafeCompactionPrefix,
@@ -30,43 +28,6 @@ import {
 } from '../history-compaction.js';
 import { HistoryCompactSummarizerError } from '../history-compact-summarizer.js';
 import { matchHistoryCompactCheckpointPrefix } from '../history-compact-checkpoint.js';
-
-describe('context compaction trigger measurement', () => {
-  test('anchors on real provider usage plus a tail char/4 delta', () => {
-    // last step: 100 input + 40 output real tokens, then 400 chars of new tool results
-    assert.equal(
-      estimateNextRequestTokens({ priorUsageTokens: 140, appendedChars: 400, charsPerToken: 4 }),
-      140 + 100,
-    );
-  });
-
-  test('credits a SIGNED negative payload delta after a compaction shrank the projection', () => {
-    // The last usage sample measured the PRE-compaction request; the payload
-    // delta is negative after the fold, so the estimate must shrink with it —
-    // clamping the delta at zero would judge the compacted request by the
-    // pre-compaction usage and wrongly exhaust a rescued turn.
-    assert.equal(
-      estimateNextRequestTokens({ priorUsageTokens: 700, appendedChars: -1_200, charsPerToken: 4 }),
-      400,
-    );
-    // The estimate never goes below zero even when the shrink exceeds usage.
-    assert.equal(
-      estimateNextRequestTokens({ priorUsageTokens: 100, appendedChars: -4_000, charsPerToken: 4 }),
-      0,
-    );
-  });
-
-  test('falls back to whole-projection char/4 on cold start (no usage)', () => {
-    // Unanchored, the caller passes the whole payload as the delta against a
-    // zero baseline, so the same formula yields the cold-start estimate.
-    assert.equal(estimateNextRequestTokens({ appendedChars: 800, charsPerToken: 4 }), 200);
-  });
-
-  test('high-water crosses at contextWindow minus reserve', () => {
-    assert.equal(exceedsHighWater(100_000, 128_000, 16_384), false);
-    assert.equal(exceedsHighWater(120_000, 128_000, 16_384), true);
-  });
-});
 
 describe('safe compaction prefix selection', () => {
   test('folds the largest immutable non-partial prefix, leaving the reserved tail', () => {
@@ -215,7 +176,7 @@ describe('plan context compaction', () => {
     assert.deepEqual(result.replacementEvents[1], events[2]);
   });
 
-  test('backs the safe prefix down locally when the full summary input does not fit', async () => {
+  test('retreats the safe prefix by half for each input-too-large rejection', async () => {
     const events = [
       user('old-user', 'old-turn'),
       model('old-model', 'old-turn', 'old result'),
@@ -230,7 +191,7 @@ describe('plan context compaction', () => {
         reserveTailEvents: 0,
         summarize: ({ coveredRuntimeEvents }) => {
           attemptedCoverage.push(coveredRuntimeEvents.map((event) => event.id));
-          if (coveredRuntimeEvents.length === events.length) {
+          if (attemptedCoverage.length <= 2) {
             throw new HistoryCompactSummarizerError('input_too_large');
           }
           return structuredSummary('A bounded automatic summary.');
@@ -242,12 +203,24 @@ describe('plan context compaction', () => {
     if (result.decision !== 'compacted') return;
     assert.deepEqual(attemptedCoverage, [
       ['old-user', 'old-model', 'recent-user', 'recent-model'],
-      ['old-user', 'old-model', 'recent-user'],
+      ['old-user', 'old-model'],
+      ['old-user'],
     ]);
     assert.deepEqual(
       result.tailRuntimeEvents.map((event) => event.id),
-      ['recent-model'],
+      ['old-model', 'recent-user', 'recent-model'],
     );
+  });
+
+  test('fails open after repeated input-too-large retreat reaches no safe span', async () => {
+    const result = await planHistoryCompaction(
+      planInput({
+        summarize: () => {
+          throw new HistoryCompactSummarizerError('input_too_large');
+        },
+      }),
+    );
+    assert.deepEqual(result, { decision: 'fail_open', reason: 'no_safe_completed_span' });
   });
 
   test('persisted checkpoint replay-validates against the same ledger prefix (recovery)', async () => {
@@ -263,14 +236,12 @@ describe('plan context compaction', () => {
     assert.equal(match.coveredEventCount, result.coveredRuntimeEvents.length);
 
     // Normal thresholds: even though the raw ledger is far below the default
-    // high water, the accepted mid_turn checkpoint replays — recovery never
+    // local threshold, the accepted mid_turn checkpoint replays — recovery never
     // re-injects the replaced raw span.
-    const replay = applyRuntimeEventHistoryCompact(
-      events,
-      { enabled: true, checkpoint: result.checkpoint },
-      4,
-      1_000_000,
-    );
+    const replay = applyRuntimeEventHistoryCompact(events, {
+      enabled: true,
+      checkpoint: result.checkpoint,
+    });
     assert.equal(replay.checkpoint?.checkpointId, result.checkpoint.checkpointId);
     const replayIds = replay.events.map((event) => event.id);
     assert.equal(replayIds[0], `history-compact:${result.checkpoint.checkpointId}`);
