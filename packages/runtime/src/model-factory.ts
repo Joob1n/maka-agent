@@ -236,7 +236,13 @@ export function getAIModel(input: ModelFactoryInput): LanguageModelV4 {
         name: runtimeProviderName(adapter, connection),
         apiKey,
         baseURL,
-        includeUsage: adapter.includeUsage,
+        // Ask every Chat Completions server for stream usage unless the
+        // registry opts a provider out. Usage is the only signal the runtime's
+        // context handling reads (#4559): without `stream_options.include_usage`
+        // an OpenAI-compatible relay or a local Ollama returns none, and the
+        // proactive compaction baseline, the eviction check, and the usage
+        // indicator all go dark for exactly the connections that need them.
+        includeUsage: adapter.includeUsage ?? true,
         fetch: reasoningTransport.fetch,
         transformRequestBody,
         ...(adapter.replayAssistantReasoningDetails

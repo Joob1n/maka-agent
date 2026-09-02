@@ -1071,6 +1071,56 @@ describe('models.dev provider conformance', () => {
     assert.equal(probedPath, '/v1/responses');
   });
 
+  for (const [label, providerType] of [
+    ['a plain OpenAI-compatible relay', 'openai-compatible'],
+    ['local Ollama', 'ollama'],
+  ] as const) {
+    test(`${label} requests usage in streamed chat completions by default`, async () => {
+      // Usage is the only signal the runtime's context handling reads (#4559).
+      // A Chat Completions server returns none unless asked, so every
+      // OpenAI-compatible adapter asks unless the registry opts it out.
+      let requestBody: Record<string, unknown> | undefined;
+      const server = await startJsonServer(async (request, response) => {
+        assert.equal(request.method, 'POST');
+        assert.equal(request.url, '/v1/chat/completions');
+        requestBody = JSON.parse(await readBody(request)) as Record<string, unknown>;
+        respondOpenAIStream(response, [
+          {
+            id: 'chatcmpl-compatible-stream',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'relay-model',
+            choices: [
+              { index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+            ],
+            usage: { prompt_tokens: 21, completion_tokens: 1, total_tokens: 22 },
+          },
+        ]);
+      });
+      const connection: LlmConnection = {
+        slug: providerType,
+        name: label,
+        providerType,
+        baseUrl: `${server.url}/v1`,
+        defaultModel: 'relay-model',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+
+      const result = streamText({
+        model: getAIModel({ connection, apiKey: 'test-key', modelId: 'relay-model' }),
+        prompt: 'Reply ok.',
+      });
+
+      assert.equal(await result.text, 'ok');
+      assert.deepEqual(requestBody?.stream_options, { include_usage: true });
+      const usage = await result.usage;
+      assert.equal(usage.inputTokens, 21);
+      assert.equal(usage.outputTokens, 1);
+    });
+  }
+
   test('Ollama Cloud requests usage in streamed chat completions', async () => {
     let requestBody: Record<string, unknown> | undefined;
     const server = await startJsonServer(async (request, response) => {
