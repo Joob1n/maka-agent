@@ -50,57 +50,10 @@ import {
  * provider, and a rejection is recovered from by compacting and retrying once.
  */
 
-export interface EstimateNextRequestTokensInput {
-  /**
-   * The last request's real INPUT tokens as reported by the provider — never
-   * input+output, because `appendedChars` is a delta against that request's
-   * payload and already carries the step's freshly generated output.
-   * Undefined on cold start or when the sample is unusable (no positive
-   * input count); the baseline is then zero and `appendedChars` carries the
-   * whole payload.
-   */
-  priorUsageTokens?: number;
-  /**
-   * SIGNED char delta of the next request's payload versus the last measured
-   * request payload. Negative after compaction/pruning shrank the projection —
-   * the estimate must credit the shrink, or a compacted request would still be
-   * judged by the pre-compaction usage sample.
-   */
-  appendedChars: number;
-  /** Estimate conversion; defaults to 4 chars/token. */
-  charsPerToken?: number;
-}
-
-/**
- * Estimate the token size of the next provider request: the last request's real
- * usage plus a signed char/4 payload delta for content the provider has not yet
- * counted (or no longer carries). Without a usable usage sample the caller
- * passes the whole payload as the delta against a zero baseline, so this stays
- * one formula. This mirrors how surveyed peers avoid pure character guessing.
- */
-export function estimateNextRequestTokens(input: EstimateNextRequestTokensInput): number {
-  const charsPerToken = Math.max(1, input.charsPerToken ?? 4);
-  const prior =
-    input.priorUsageTokens !== undefined && Number.isFinite(input.priorUsageTokens)
-      ? Math.max(0, Math.floor(input.priorUsageTokens))
-      : 0;
-  return Math.max(0, prior + estimateSignedChars(input.appendedChars, charsPerToken));
-}
-
-/** Proactive threshold: the next request would cross `contextWindow - reserve`. */
-export function exceedsHighWater(
-  estimatedTokens: number,
-  contextWindow: number,
-  reserveTokens: number,
-): boolean {
-  const highWater = Math.max(1, contextWindow - Math.max(0, reserveTokens));
-  return estimatedTokens > highWater;
-}
-
 export interface SafePrefixOptions {
   /** Keep at least this many trailing events uncovered as the verbatim tail. */
   reserveTailEvents?: number;
-  /** Retry a smaller prefix after a local summarizer input-fit rejection. */
+  /** Retry a smaller prefix after the summarizer provider rejects its input. */
   maxCoveredCount?: number;
   /**
    * Events that must stay in the verbatim tail: the boundary retreats to
@@ -197,13 +150,6 @@ function straddlesToolPair(spans: readonly ToolPairSpan[], cut: number): boolean
     if (callCovered !== responseCovered) return true;
   }
   return false;
-}
-
-function estimateSignedChars(chars: number | undefined, charsPerToken: number): number {
-  const value = Math.trunc(chars ?? 0);
-  if (!Number.isFinite(value) || value === 0) return 0;
-  const magnitude = Math.ceil(Math.abs(value) / charsPerToken);
-  return value > 0 ? magnitude : -magnitude;
 }
 
 // ============================================================================
@@ -335,7 +281,12 @@ export async function planHistoryCompaction(
     } catch (error) {
       if (error instanceof HistoryCompactSummarizerError) {
         if (error.reason === 'input_too_large') {
-          maxCoveredCount = boundary.coveredCount - 1;
+          // The summarizer's provider said this span does not fit its own
+          // window; that is the only fit signal the fold listens to. Retreat by
+          // half rather than by one event: each retreat is a real provider
+          // round trip, and the loop exits through no_safe_completed_span when
+          // even the smallest legal span is refused.
+          maxCoveredCount = Math.floor(boundary.coveredCount / 2);
           continue;
         }
         return {
@@ -354,10 +305,8 @@ export async function planHistoryCompaction(
     // history. The default summarizer already threw with the same reasons; any
     // other producer is validated here.
     if (typeof compacted === 'string') {
-      const defect = findCheckpointSummaryDefect(compacted, {
-        coveredRuntimeEvents,
-        charsPerToken,
-      });
+      // An external producer reports no usage; only the structural checks apply.
+      const defect = findCheckpointSummaryDefect(compacted);
       if (defect) {
         return { decision: 'fail_open', reason: 'summarizer_failed', diagnosticReason: defect };
       }
@@ -411,23 +360,8 @@ export interface HistoryCompactionPolicy {
   enabled: boolean;
   checkpoint?: HistoryCompactCheckpoint;
   highWaterName?: string;
-  midTurn?: { enabled: true; reserveTokens?: number };
+  midTurn?: { enabled: true };
 }
-
-export interface HistoryCompactionReplayOptions {
-  charsPerToken?: number;
-  maxHistoryEstimatedTokens?: number;
-  sourceReplayEvents?: readonly RuntimeEvent[];
-}
-
-export type HistoryCompactionCheckpointReplayFit =
-  | { fits: true; checkpointTokens: number; replayTokens: number }
-  | {
-      fits: false;
-      checkpointTokens: number;
-      replayTokens: number;
-      reason: 'prefix_over_budget' | 'replacement_not_smaller';
-    };
 
 export interface HistoryCompactionReplayResult {
   events: RuntimeEvent[];
@@ -435,49 +369,11 @@ export interface HistoryCompactionReplayResult {
   diagnosticPatch: Partial<ContextBudgetDiagnostic>;
 }
 
-/** The single current-policy gate for every checkpoint entering model replay. */
-export function evaluateHistoryCompactCheckpointReplay(
-  checkpoint: HistoryCompactCheckpoint,
-  replayTail: readonly RuntimeEvent[],
-  charsPerToken: number | undefined,
-  maxHistoryEstimatedTokens: number | undefined = undefined,
-  options: HistoryCompactionReplayOptions = {},
-): HistoryCompactionCheckpointReplayFit {
-  const charsPerTokenResolved = options.charsPerToken ?? charsPerToken ?? 4;
-  const checkpointTokens =
-    checkpoint.version === 3
-      ? checkpoint.estimatedTokens
-      : estimateRuntimeEventsTokens(
-          [historyCompactCheckpointToRuntimeEvent(checkpoint)],
-          charsPerTokenResolved,
-        );
-  const replayTokens =
-    checkpointTokens + estimateRuntimeEventsTokens(replayTail, charsPerTokenResolved);
-  const maxHistoryTokens = finitePositive(
-    options.maxHistoryEstimatedTokens ?? maxHistoryEstimatedTokens,
-  );
-  if (maxHistoryTokens !== undefined && replayTokens > maxHistoryTokens) {
-    return { fits: false, checkpointTokens, replayTokens, reason: 'prefix_over_budget' };
-  }
-  if (options.sourceReplayEvents) {
-    const sourceReplayTokens = estimateRuntimeEventsTokens(
-      options.sourceReplayEvents,
-      charsPerTokenResolved,
-    );
-    if (replayTokens >= sourceReplayTokens) {
-      return { fits: false, checkpointTokens, replayTokens, reason: 'replacement_not_smaller' };
-    }
-  }
-  return { fits: true, checkpointTokens, replayTokens };
-}
-
 /** Replay the latest durable checkpoint when it exactly covers the ledger prefix. */
 export function applyRuntimeEventHistoryCompact(
   events: readonly RuntimeEvent[],
   policy: HistoryCompactionPolicy | undefined,
   charsPerToken = 4,
-  maxHistoryEstimatedTokens?: number,
-  options: HistoryCompactionReplayOptions = {},
 ): HistoryCompactionReplayResult {
   const checkpoint = policy?.enabled === true ? policy.checkpoint : undefined;
   if (!checkpoint) return { events: [...events], diagnosticPatch: {} };
@@ -495,32 +391,17 @@ export function applyRuntimeEventHistoryCompact(
       }),
     };
   }
-  const headAnchor =
-    checkpoint.phase === 'mid_turn'
-      ? midTurnHeadAnchorEvent(checkpoint, match.coveredRuntimeEvents)
-      : undefined;
-  const replayTail = headAnchor
-    ? [headAnchor, ...match.successorRuntimeEvents]
-    : [...match.successorRuntimeEvents];
-  const fit = evaluateHistoryCompactCheckpointReplay(
-    checkpoint,
-    replayTail,
-    charsPerToken,
-    maxHistoryEstimatedTokens,
-    { ...options, sourceReplayEvents: options.sourceReplayEvents ?? compactableEvents },
-  );
-  if (!fit.fits) {
-    return {
-      events: [...events],
-      diagnosticPatch: compactionDecisionDiagnosticPatch({
-        stage: 'priorReplay',
-        sourceKind: 'runtimeEvents',
-        decision: 'failedOpen',
-        boundaryKind: 'historyCompact',
-        failOpenReason: fit.reason,
-      }),
-    };
-  }
+  // A matching checkpoint always replays as `[block, tail]`: the fold chose
+  // the boundary structurally, and whether the result fits is the provider's
+  // answer, not a local estimate's (#4559). The token figures below are
+  // diagnostics only.
+  const checkpointTokens =
+    checkpoint.version === 3
+      ? checkpoint.estimatedTokens
+      : estimateRuntimeEventsTokens(
+          [historyCompactCheckpointToRuntimeEvent(checkpoint)],
+          charsPerToken,
+        );
   return {
     events: projectHistoryCompactCheckpointReplay(
       checkpoint,
@@ -541,7 +422,7 @@ export function applyRuntimeEventHistoryCompact(
         bodySha256: [checkpoint.coverage.sourceDigest],
       },
       estimatedTokensBefore: estimateRuntimeEventsTokens(match.coveredRuntimeEvents, charsPerToken),
-      estimatedTokensAfter: fit.checkpointTokens,
+      estimatedTokensAfter: checkpointTokens,
     }),
   };
 }
