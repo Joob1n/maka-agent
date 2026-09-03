@@ -164,7 +164,7 @@ V2 中模型主要看到 `summary`；V3 中 provider 看到自己的 opaque comp
 3. 加载最新且兼容的 ledger-backed checkpoint；
 4. 在 immutable RuntimeEvent 序列上校验并 replay 已有 checkpoint；
 5. 只对未覆盖的 projected remainder 执行 stale oversized Tool Result prune；
-6. 如果 active request 有用户声明的 Maka 窗口，且上一次成功请求的真实 usage 超过它，选择 safe prefix 与 retained tail；
+6. 如果 active request 有用户声明的 Maka 窗口，且上一次成功请求的真实 usage 加上回复预留（模型声明的 `maxOutputTokens`，未知时为 0）达到它，选择 safe prefix 与 retained tail；
 7. 如果旧 checkpoint 不足以覆盖新的 fold，调用 compactor 滚动生成 successor；
 8. successor 通过校验并 durable record 后才能使用；
 9. V2 checkpoint 投影为 synthetic text RuntimeEvent；V3 checkpoint 则作为显式 projection metadata 传递，然后拼接未覆盖 raw tail；
@@ -180,11 +180,11 @@ V2 中模型主要看到 `summary`；V3 中 provider 看到自己的 opaque comp
 
 ## Trigger 在 compaction 开始前结束
 
-Capacity 是用户为所选模型声明的 context window，否则就不存在；Runtime 不会自己造一个。provider 的 `/models` 报告和生成 metadata 只在设置项旁作为提示，不是阈值。有声明时，active-turn compaction 只在上一次成功请求的真实 `inputTokens + outputTokens` 超过它时触发。没有声明或没有可用 baseline 时，不主动按 capacity 折叠。provider 的 `finishReason: length` 或真实 context-length rejection 仍然是 provider 证据；请求是否放得下始终由 provider 决定。
+Capacity 是用户为所选模型声明的 context window，否则就不存在；Runtime 不会自己造一个。provider 的 `/models` 报告和生成 metadata 只在设置项旁作为提示，不是阈值。有声明时，active-turn compaction 只在上一次成功请求的真实 `inputTokens + outputTokens` 加上回复预留（模型声明的 `maxOutputTokens`，未知时为 0）达到它时触发。没有声明或没有可用 baseline 时，不主动按 capacity 折叠。provider 的 `finishReason: length` 或真实 context-length rejection 仍然是 provider 证据；请求是否放得下始终由 provider 决定。
 
 Trigger owner 使用这个 capacity，但不参与 compaction：
 
-- active-turn evaluator 在上一次成功请求超过用户声明的 capacity，或 provider 以 `finishReason: length` 结束回复时发出 Compact command；
+- active-turn evaluator 在上一次成功请求的真实 usage 加上回复预留达到用户声明的 capacity，或 provider 以 `finishReason: length` 结束回复时发出 Compact command；
 - provider-overflow recovery 在真实 overflow 后发出同一 command；
 - 手动 `context.compact` 直接发出 command，不伪造 high-water crossing。
 

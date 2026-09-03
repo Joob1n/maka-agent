@@ -213,6 +213,13 @@ export function buildLlmHistorySummarizer(options: BuildLlmHistorySummarizerOpti
         if (repaired.truncated) throw new HistoryCompactSummarizerError('output_length');
       } catch (error) {
         if (isAbortError(error)) throw error;
+        // The repair prompt is longer than the first one. If that is what pushed
+        // the fold past the summarizer provider's window, the rejection is the
+        // planner's retreat signal, not a repair failure to file under the
+        // initial defect (#4559).
+        if (classifyError(error) === 'ContextLength') {
+          throw new HistoryCompactSummarizerError('input_too_large', { cause: error });
+        }
         throw new HistoryCompactSummarizerError(initial.defect, {
           cause:
             error instanceof HistoryCompactSummarizerError

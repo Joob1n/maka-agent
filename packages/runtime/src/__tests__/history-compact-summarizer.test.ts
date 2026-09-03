@@ -692,6 +692,32 @@ describe('buildLlmHistorySummarizer', () => {
     assert.equal(calls, 2);
   });
 
+  test('a context-length rejection of the repair request stays the input_too_large signal', async () => {
+    // The initial request fit; the stricter repair prompt is longer and the
+    // provider rejected it. That rejection must reach the planner as
+    // `input_too_large` so it retreats, not be filed under the initial defect.
+    let calls = 0;
+    const summarize = buildLlmHistorySummarizer({
+      resolveModel: () => 'fake-model',
+      generateText: async () => {
+        calls += 1;
+        if (calls === 1) return { text: 'free-form incomplete summary', finishReason: 'stop' };
+        throw new Error(
+          "This model's maximum context length is 1000 tokens. However, your messages exceed the context window.",
+        );
+      },
+    });
+
+    await assert.rejects(
+      summarize(
+        inputWith([ev({ role: 'user', author: 'user', content: { kind: 'text', text: 'hi' } })]),
+      ),
+      (error) =>
+        error instanceof HistoryCompactSummarizerError && error.reason === 'input_too_large',
+    );
+    assert.equal(calls, 2);
+  });
+
   test('preserves cancellation when a malformed-summary repair is aborted', async () => {
     let calls = 0;
     const abortError = Object.assign(new Error('stopped during repair'), { name: 'AbortError' });

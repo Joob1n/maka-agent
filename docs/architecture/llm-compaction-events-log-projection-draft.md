@@ -180,11 +180,11 @@ Third, the checkpoint is not itself a canonical RuntimeEvent. Coverage and tail 
 
 ## Triggering ends before compaction begins
 
-Capacity is the context window the user declared for the selected model, or nothing at all; Runtime never manufactures one. A provider's `/models` report and generated metadata are display hints beside the setting, not thresholds. When a declaration exists, active-turn compaction triggers only when the previous accepted request's real `inputTokens + outputTokens` exceeds it. With no declaration or no usable baseline there is no proactive capacity trigger. A provider `finishReason: length` or a real context-length rejection remains actionable provider evidence; whether a request fits is always the provider's decision.
+Capacity is the context window the user declared for the selected model, or nothing at all; Runtime never manufactures one. A provider's `/models` report and generated metadata are display hints beside the setting, not thresholds. When a declaration exists, active-turn compaction triggers only when the previous accepted request's real `inputTokens + outputTokens`, plus a reply reserve equal to the model's declared `maxOutputTokens` (zero when unknown), reaches it. With no declaration or no usable baseline there is no proactive capacity trigger. A provider `finishReason: length` or a real context-length rejection remains actionable provider evidence; whether a request fits is always the provider's decision.
 
 Trigger owners use that capacity but do not participate in compaction:
 
-- the active-turn evaluator emits a Compact command when the previous accepted request crosses the user-declared capacity, or when the provider ends the reply with `finishReason: length`;
+- the active-turn evaluator emits a Compact command when the previous accepted request's real usage plus the reply reserve reaches the user-declared capacity, or when the provider ends the reply with `finishReason: length`;
 - provider-overflow recovery emits the same command after a real overflow;
 - manual `context.compact` emits it directly, without manufacturing a high-water crossing.
 
