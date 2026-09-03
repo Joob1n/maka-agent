@@ -1235,6 +1235,28 @@ function defineMidTurnSuite(consumer: ConsumerMode): void {
     assert.equal(fixture.summarizerCalls, 0);
   });
 
+  test('does not repeat the reported-window note once the session is already past the line', async () => {
+    // On these providers usage keeps growing past the reported window, so the
+    // note fires on the crossing, not on every send. A persisted anchor that
+    // is already over the line carries that across sessions.
+    const fixture = buildFixture({
+      contextWindow: 100,
+      declareContextWindow: false,
+      finalAtSecondCall: true,
+      firstStepUsage: { input: 150, output: 40 },
+      extraPriorEvents: [priorUsageEvent({ inputTokens: 300, outputTokens: 20 })],
+      priorRunHeaders: [priorRunHeader()],
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    assert.equal(
+      fixture.messages.some(
+        (message) => (message as { kind?: string }).kind === 'context_reported_window_exceeded',
+      ),
+      false,
+    );
+  });
+
   test('does not report the reported window when the user declared one', async () => {
     // With a declaration the overrun note owns this case; two notes for one
     // fact would be noise.

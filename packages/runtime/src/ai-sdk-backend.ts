@@ -2244,10 +2244,17 @@ export class AiSdkBackend implements AgentBackend {
                   // design stays dark there: no rejection to recover from, no
                   // plateau to read, and no declaration to arm the proactive
                   // threshold, so the session degrades quietly and
-                  // indefinitely (#4634). Report the two real numbers once per
-                  // send and leave the decision with the user: a reported
-                  // window is a hint, and Maka still declares nothing on their
-                  // behalf.
+                  // indefinitely (#4634). Report the two real numbers and
+                  // leave the decision with the user: a reported window is a
+                  // hint, and Maka still declares nothing on their behalf.
+                  //
+                  // Once per crossing, not once per send. On these providers
+                  // usage keeps growing past the line (305K → 322K observed),
+                  // so the note fires on the transition: the previous accepted
+                  // total was still inside the reported window and this one is
+                  // not. The baseline carries that previous total across
+                  // sessions through the persisted anchor, so a resumed
+                  // session does not repeat a crossing it already reported.
                   if (
                     !contextReportedWindowNoteWritten &&
                     midTurnState !== undefined &&
@@ -2262,7 +2269,15 @@ export class AiSdkBackend implements AgentBackend {
                       this.input.modelId,
                     );
                     const used = stepUsage.inputTokens + Math.max(0, stepUsage.outputTokens);
-                    if (reported !== undefined && used > reported) {
+                    // `baselineTokens` still describes the request before this
+                    // one: the capacity hook sets it from the previous step, or
+                    // from the persisted anchor on a send's first request.
+                    const previousTotal = midTurnState.baselineTokens;
+                    const crossedNow =
+                      reported !== undefined &&
+                      used > reported &&
+                      (previousTotal === undefined || previousTotal <= reported);
+                    if (reported !== undefined && crossedNow) {
                       contextReportedWindowNoteWritten = true;
                       const note: SystemNoteMessage = {
                         type: 'system_note',
