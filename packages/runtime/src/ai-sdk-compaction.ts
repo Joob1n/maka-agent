@@ -1069,6 +1069,11 @@ export class AiSdkCompaction {
       phase: input.phase ?? 'mid_turn',
       orderedEvents,
       headAnchor: { runtimeEventId: state.headAnchor.id, turnId },
+      runHeaders: state.priorRunHeaders,
+      acceptedRoute: {
+        modelId: this.input.modelId,
+        ...(this.targetConnectionId !== undefined ? { connectionId: this.targetConnectionId } : {}),
+      },
       reserveTailEvents: 1,
       charsPerToken,
       now: this.now(),
