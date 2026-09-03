@@ -1164,6 +1164,56 @@ describe('models.dev provider conformance', () => {
     assert.equal(usage.totalTokens, 9);
   });
 
+  test('a relay that rejects stream_options fails loudly with the provider error, no silent retry', async () => {
+    // The usage request is the contract, not a best effort. A strict relay
+    // that does not know `stream_options` answers 400; the runtime surfaces
+    // that answer as the provider's own error and does not resend without
+    // the field, because a connection that cannot report usage has no context
+    // baseline and the user should learn that from the error, not from a
+    // compaction that never happens (#4559).
+    let requests = 0;
+    let requestBody: Record<string, unknown> | undefined;
+    const server = await startJsonServer(async (request, response) => {
+      requests += 1;
+      requestBody = JSON.parse(await readBody(request)) as Record<string, unknown>;
+      respondJson(response, 400, {
+        error: {
+          message: 'Unrecognized request argument supplied: stream_options',
+          type: 'invalid_request_error',
+          param: 'stream_options',
+          code: null,
+        },
+      });
+    });
+    const connection: LlmConnection = {
+      slug: 'strict-relay',
+      name: 'Strict relay',
+      providerType: 'openai-compatible',
+      baseUrl: `${server.url}/v1`,
+      defaultModel: 'relay-model',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    const result = streamText({
+      model: getAIModel({ connection, apiKey: 'test-key', modelId: 'relay-model' }),
+      prompt: 'Reply ok.',
+    });
+
+    // The AI SDK reports a failed request as an `error` stream part, which is
+    // what the runtime's send loop reads and surfaces as the provider error.
+    const errors: unknown[] = [];
+    for await (const part of result.fullStream) {
+      if (part.type === 'error') errors.push(part.error);
+    }
+    assert.equal(errors.length, 1);
+    const message = errors[0] instanceof Error ? errors[0].message : String(errors[0]);
+    assert.match(message, /stream_options/);
+    assert.deepEqual(requestBody?.stream_options, { include_usage: true });
+    assert.equal(requests, 1);
+  });
+
   test('Hugging Face discovers tool-capable routed models and preserves its two-stage OpenAI wire', async () => {
     const discoveredModelId = 'openai/gpt-oss-120b';
     const modelId = `${discoveredModelId}:preferred`;
