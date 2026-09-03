@@ -1347,6 +1347,18 @@ function systemNoteText(message: SystemNoteMessage): string | undefined {
       return 'Context summary failed; the session continued without a new summary.';
     case 'context_provider_dropping':
       return 'The provider is dropping or rewriting context: content was appended but its reported usage did not grow. Declare a context window for this model so Maka compacts first.';
+    case 'context_window_overrun': {
+      const data = message.data as
+        | { usedTokens?: unknown; declaredContextWindow?: unknown }
+        | undefined;
+      const used = typeof data?.usedTokens === 'number' ? data.usedTokens : undefined;
+      const declared =
+        typeof data?.declaredContextWindow === 'number' ? data.declaredContextWindow : undefined;
+      if (used === undefined || declared === undefined) {
+        return 'This exchange ran past the context window declared for this model.';
+      }
+      return `This exchange used about ${used} tokens against the declared window of ${declared}: the reply needed more room than was left. Maka compacts before the next request; raise the window if the replies should stay whole.`;
+    }
     case 'context_window_suggestion': {
       const data = message.data as
         | { suggestedContextWindow?: unknown; declaredContextWindow?: unknown }

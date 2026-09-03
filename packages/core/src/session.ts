@@ -794,6 +794,7 @@ const USER_VISIBLE_SESSION_SYSTEM_NOTES = new Set([
   'context_compaction_failed_open',
   'context_provider_dropping',
   'context_window_suggestion',
+  'context_window_overrun',
   'step_limit',
 ]);
 
@@ -1159,6 +1160,7 @@ export interface SystemNoteMessage {
     | 'context_compaction_failed_open'
     | 'context_provider_dropping'
     | 'context_window_suggestion'
+    | 'context_window_overrun'
     | 'step_limit'
     | 'error'
     | 'abort';
@@ -1405,6 +1407,7 @@ const SYSTEM_NOTE_KINDS = new Set([
   'context_compaction_failed_open',
   'context_provider_dropping',
   'context_window_suggestion',
+  'context_window_overrun',
   'step_limit',
   'error',
   'abort',

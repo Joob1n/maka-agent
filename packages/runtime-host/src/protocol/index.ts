@@ -101,8 +101,9 @@ export const RUNTIME_HOST_PROTOCOL_VERSION = 0 as const;
 // Increment when the same protocol version no longer guarantees safe Client-Host
 // interoperability. Mismatches are rejected before domain commands are admitted.
 export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 105 as const;
-// 105: Session transcripts gain two `system_note` kinds
-// (`context_provider_dropping`, `context_window_suggestion`) and `token_usage`
+// 105: Session transcripts gain three `system_note` kinds
+// (`context_provider_dropping`, `context_window_suggestion`,
+// `context_window_overrun`) and `token_usage`
 // records reshape `lastRequestAnchor` to `{ inputTokens, outputTokens }`, all
 // behind closed allowlists in @maka/core. An older client that handshakes
 // would fail `decodeStoredMessage` on the first transcript carrying them, so

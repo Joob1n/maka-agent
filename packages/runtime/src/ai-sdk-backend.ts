@@ -1566,6 +1566,7 @@ export class AiSdkBackend implements AgentBackend {
     let contextCompactedNoteWritten = false;
     let contextCompactionFailedOpenNoteWritten = false;
     let contextProviderDroppingNoteWritten = false;
+    let contextWindowOverrunNoteWritten = false;
     let contextWindowSuggestionNoteWritten = false;
     // Request index (0-based) at which the active prune last rewrote the
     // request. A step Maka pruned is not append-only, so usage may legitimately
@@ -2207,6 +2208,36 @@ export class AiSdkBackend implements AgentBackend {
                   }
                   // Fail closed: reset on every step boundary so a missing final
                   // step's usage does not leave a stale value from an earlier step.
+                  // The reply needed more room than the declared window had
+                  // left after this request's own input. Both halves are the
+                  // provider's numbers, read after the fact: the reserve that
+                  // should have kept them apart was measured from a smaller
+                  // previous reply. Say so once per send; the next request
+                  // folds anyway because the baseline now exceeds the window.
+                  if (
+                    !contextWindowOverrunNoteWritten &&
+                    midTurnState?.capacity !== undefined &&
+                    stepUsage !== undefined &&
+                    Number.isFinite(stepUsage.inputTokens) &&
+                    stepUsage.inputTokens > 0 &&
+                    Number.isFinite(stepUsage.outputTokens) &&
+                    stepUsage.outputTokens > 0 &&
+                    stepUsage.inputTokens + stepUsage.outputTokens > midTurnState.capacity
+                  ) {
+                    contextWindowOverrunNoteWritten = true;
+                    const note: SystemNoteMessage = {
+                      type: 'system_note',
+                      id: this.newId(),
+                      turnId,
+                      ts: this.now(),
+                      kind: 'context_window_overrun',
+                      data: {
+                        usedTokens: stepUsage.inputTokens + stepUsage.outputTokens,
+                        declaredContextWindow: midTurnState.capacity,
+                      },
+                    };
+                    await this.input.appendMessage(note).catch(() => {});
+                  }
                   lastStepInputTokens = stepUsage?.inputTokens;
                   lastStepOutputTokens = stepUsage?.outputTokens;
                   lastStepActiveToolCount = activeToolsForRequest.length;

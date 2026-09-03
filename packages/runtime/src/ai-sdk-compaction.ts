@@ -819,7 +819,7 @@ export class AiSdkCompaction {
       this.input.connection,
       this.input.modelId,
     );
-    state.replyReserveTokens = state.modelOutputLimitTokens;
+    if (persisted) state.replyReserveTokens = replyReserveTokens(persisted.outputTokens);
     return state;
   }
 
@@ -873,9 +873,12 @@ export class AiSdkCompaction {
       // and that part is the provider's to judge. A missing or non-positive
       // input count is no baseline at all — unknown, never zero.
       if (options.completedSteps.length > 0) {
-        state.baselineTokens = usageBaselineTokens(options.completedSteps.at(-1)?.usage);
-        if (state.baselineTokens !== undefined)
+        const lastUsage = options.completedSteps.at(-1)?.usage;
+        state.baselineTokens = usageBaselineTokens(lastUsage);
+        if (state.baselineTokens !== undefined) {
           state.lastAcceptedTotalTokens = state.baselineTokens;
+          state.replyReserveTokens = replyReserveTokens(lastUsage?.outputTokens);
+        }
       }
       // The turn's first request folds as a pre_turn boundary, like the
       // reactive step-0 recovery; later steps fold mid_turn.
@@ -901,10 +904,13 @@ export class AiSdkCompaction {
       // window, or the provider cut the previous reply at its output limit.
       const lengthFold = state.pendingLengthFold;
       state.pendingLengthFold = false;
-      // The next request is at least the baseline, and its reply may run to
-      // the model's output limit when that limit is a known provider fact.
-      // Both are real numbers; with no known limit the reserve is zero and the
-      // declared window is a pure target the user chose to stay under.
+      // The next request is at least the baseline, and its reply needs room on
+      // top of it. The room is measured from the last reply the model actually
+      // wrote, not from the largest one it could write: on a model whose
+      // output limit is a large fraction of its window (k3-256k reports
+      // 131,072 against 262,144) reserving the limit would fold at half the
+      // declared window, while a reply twice the size of the last one is the
+      // margin the session's own behaviour supports (#4634).
       const overWindow =
         state.capacity !== undefined &&
         state.baselineTokens !== undefined &&
@@ -1480,6 +1486,22 @@ function declaredModelOutputLimit(connection: RuntimeExecutionConnection, modelI
  * that does not resend reasoning makes this err high, and high is the safe
  * direction for a trigger that can only ask for a compaction (#4559).
  */
+/**
+ * Room to leave for the next reply, from the size of the last real one.
+ *
+ * Two real numbers and one bound: twice the last reply absorbs an answer that
+ * grows, and the cap keeps a single long reply from turning the reserve into
+ * the window. No previous reply means no reserve, never a guessed one.
+ */
+const MAX_REPLY_RESERVE_TOKENS = 8_000;
+
+function replyReserveTokens(lastReplyTokens: number | undefined): number {
+  if (lastReplyTokens === undefined || !Number.isFinite(lastReplyTokens) || lastReplyTokens <= 0) {
+    return 0;
+  }
+  return Math.min(lastReplyTokens * 2, MAX_REPLY_RESERVE_TOKENS);
+}
+
 function usageBaselineTokens(usage: NormalizedUsage | undefined): number | undefined {
   if (!usage) return undefined;
   const input = usage.inputTokens;

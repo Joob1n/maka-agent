@@ -322,6 +322,7 @@ export interface ConversationCopy {
       contextCompactionFailedOpen: string;
       contextProviderDropping: string;
       contextWindowSuggestion: (tokens: number, declared: number | undefined) => string;
+      contextWindowOverrun: (used: number, declared: number) => string;
       stepLimit: string;
     };
   };
@@ -540,6 +541,8 @@ const CONVERSATION_COPY = {
           declared === undefined
             ? `供应商拒绝了这次请求。该模型未声明上下文窗口；上次成功的用量约 ${tokens} tokens，可将窗口设为该值让 Maka 先行压缩。`
             : `供应商拒绝了这次请求，但用量（约 ${tokens} tokens）低于你声明的窗口（${declared}）。声明值可能大于供应商实际窗口，建议下调到 ${tokens}。`,
+        contextWindowOverrun: (used, declared) =>
+          `本次交换用了约 ${used} tokens，超过你声明的窗口（${declared}）：回复需要的空间比剩余的多。Maka 会在下一次请求前压缩；若希望回复保持完整，可调大窗口。`,
         stepLimit: '已达到本轮工具步骤上限，任务可能尚未完成。发送“继续”即可接着处理。',
       },
     },
@@ -703,6 +706,8 @@ const CONVERSATION_COPY = {
           declared === undefined
             ? `The provider rejected this request. No context window is declared for this model; the last accepted usage was about ${tokens} tokens — set the window to that value so Maka compacts first.`
             : `The provider rejected this request at about ${tokens} tokens, below your declared window (${declared}). The declared value is likely larger than the provider's; consider lowering it to ${tokens}.`,
+        contextWindowOverrun: (used, declared) =>
+          `This exchange used about ${used} tokens against your declared window (${declared}): the reply needed more room than was left. Maka compacts before the next request; raise the window if the replies should stay whole.`,
         stepLimit: 'Reached the configured step limit. The task may be incomplete. Send “continue” to resume.',
       },
     },

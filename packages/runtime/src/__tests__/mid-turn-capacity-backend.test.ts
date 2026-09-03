@@ -195,7 +195,11 @@ type ConsumerMode = 'immediate' | 'slow';
 function buildFixture(options: MidTurnFixtureOptions = {}): MidTurnFixture {
   // Most cases model a user-declared target. Keep it between the first and
   // second mock request baselines so the normal three-step journey folds once.
-  const contextWindow = options.contextWindow ?? 150;
+  // Steps report 100/20, then 150/30, then 120/10, so the baselines are 120,
+  // 180 and 130 and the reserve (twice the last reply) is 40, 60 and 20. A
+  // default window of 190 keeps the first request inside it and crosses on the
+  // second, which is the journey these fixtures describe.
+  const contextWindow = options.contextWindow ?? 190;
   const recorded: HistoryCompactCheckpoint[] = [];
   const toolExecutions: string[] = [];
   const events: SessionEvent[] = [];
@@ -1188,8 +1192,11 @@ function defineMidTurnSuite(consumer: ConsumerMode): void {
   });
 
   test("the usage baseline is the last request's input plus output", async () => {
+    // Baseline 120 (100 + 20) with a 40-token reserve (twice the 20-token
+    // reply). A window of 155 is crossed only because the baseline counts the
+    // output: input alone plus the reserve is 140, which fits.
     const compacting = buildFixture({
-      contextWindow: 115,
+      contextWindow: 155,
       finalAtSecondCall: true,
       firstStepUsage: { input: 100, output: 20 },
     });
@@ -1199,13 +1206,45 @@ function defineMidTurnSuite(consumer: ConsumerMode): void {
     assert.match(promptJson(compacting, 1), /maka_history_compact_checkpoint/);
 
     const fitting = buildFixture({
-      contextWindow: 125,
+      contextWindow: 165,
       finalAtSecondCall: true,
       firstStepUsage: { input: 100, output: 20 },
     });
     await runFixtureTurn(fitting, consumer);
 
     assert.equal(fitting.summarizerCalls, 0);
+  });
+
+  test('reports a reply that ran past the declared window', async () => {
+    const fixture = buildFixture({
+      contextWindow: 200,
+      finalAtSecondCall: true,
+      firstStepUsage: { input: 150, output: 60 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    const note = fixture.messages.find(
+      (message): message is { type: 'system_note'; kind: string; data?: unknown } =>
+        (message as { type?: string }).type === 'system_note' &&
+        (message as { kind?: string }).kind === 'context_window_overrun',
+    );
+    assert.deepEqual(note?.data, { usedTokens: 210, declaredContextWindow: 200 });
+  });
+
+  test('does not report an overrun for an exchange that stayed inside the window', async () => {
+    const fixture = buildFixture({
+      contextWindow: 200,
+      finalAtSecondCall: true,
+      firstStepUsage: { input: 150, output: 40 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    assert.equal(
+      fixture.messages.some(
+        (message) => (message as { kind?: string }).kind === 'context_window_overrun',
+      ),
+      false,
+    );
   });
 
   test('records provider context dropping when an append-only step reports the same usage', async () => {
@@ -1528,7 +1567,7 @@ describe('mid-turn capacity default-on safety guards (issue #882 PR 3)', () => {
 
     const declared = buildFixture({
       useRuntimeDefaultPolicy: true,
-      contextWindow: 150,
+      contextWindow: 190,
     });
     await runFixtureTurn(declared);
     assert.equal(declared.summarizerCalls, 1);
@@ -1547,7 +1586,7 @@ describe('the shipped runtime default drives the proactive long-turn journey (is
     // truncate it or surface a raw provider error.
     const fixture = buildFixture({
       useRuntimeDefaultPolicy: true,
-      contextWindow: 150,
+      contextWindow: 190,
       priorChars: 1_400,
     });
     await runFixtureTurn(fixture);
@@ -1654,29 +1693,30 @@ describe('the shipped runtime default drives the proactive long-turn journey (is
     assert.equal(fold?.phase, 'pre_turn');
   });
 
-  test("the model's declared output limit is reserved for the reply", async () => {
+  test('the reserve is twice the last real reply, bounded, not the model output limit', async () => {
     // With the window declared at the provider's real size, an accepted
     // request can never exceed it on its own; the reply the next request must
-    // leave room for is what tips it. The limit is a provider fact from the
-    // catalog entry, never an estimate; with none declared the reserve is 0.
-    // Anchor 520 against a 1,000 window: alone it is under; with a 600-token
-    // reply reserved it is over, and step 0 folds. The later steps' usage
-    // (120 + 600) stays under, so exactly one fold is recorded.
-    for (const [modelMaxOutputTokens, folds] of [
-      [600, true],
-      [undefined, false],
+    // leave room for is what tips it. That room is measured from the reply the
+    // model actually wrote, so a session whose answers are long reserves more
+    // than one whose answers are short, and neither number is a guess. The
+    // model's own output limit is deliberately not the reserve: on k3-256k it
+    // is half the window and would fold at 50% utilization (#4634).
+    for (const [anchorOutput, folds] of [
+      [60, true],
+      [5, false],
     ] as const) {
       const fixture = buildFixture({
         priorChars: 200,
         contextWindow: 1_000,
         finalAtSecondCall: true,
-        ...(modelMaxOutputTokens !== undefined ? { modelMaxOutputTokens } : {}),
-        extraPriorEvents: [priorUsageEvent({ inputTokens: 500, outputTokens: 20 })],
+        modelMaxOutputTokens: 600,
+        extraPriorEvents: [priorUsageEvent({ inputTokens: 900, outputTokens: anchorOutput })],
         priorRunHeaders: [priorRunHeader()],
       });
       await runFixtureTurn(fixture);
-
-      assert.equal(fixture.recorded.length, folds ? 1 : 0, `limit ${modelMaxOutputTokens}`);
+      // 960 + 120 crosses 1,000; 905 + 10 does not. The 600-token output limit
+      // is irrelevant to both.
+      assert.equal(fixture.summarizerCalls, folds ? 1 : 0);
     }
   });
 
