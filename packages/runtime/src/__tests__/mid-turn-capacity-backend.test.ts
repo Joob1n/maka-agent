@@ -1146,6 +1146,25 @@ function defineMidTurnSuite(consumer: ConsumerMode): void {
     assert.equal(fitting.summarizerCalls, 0);
   });
 
+  test('records provider context dropping when an append-only step reports the same usage', async () => {
+    // The Ollama shape: the provider truncates to its own window, so input
+    // stops growing rather than dropping while Maka keeps appending. A
+    // plateau is the signal the copy promises ("usage did not grow").
+    const fixture = buildFixture({
+      contextWindow: 200,
+      finalAtSecondCall: true,
+      firstStepUsage: { input: 100, output: 20 },
+      finalStepUsage: { input: 100, output: 10 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    const note = fixture.messages.find(
+      (message): message is { type: 'system_note'; kind: string } =>
+        (message as { type?: string }).type === 'system_note',
+    );
+    assert.equal(note?.kind, 'context_provider_dropping');
+  });
+
   test('records provider context dropping only for an unshaped usage decrease', async () => {
     const fixture = buildFixture({
       contextWindow: 200,

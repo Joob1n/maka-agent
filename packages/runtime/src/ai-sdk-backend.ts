@@ -2162,10 +2162,15 @@ export class AiSdkBackend implements AgentBackend {
                   if (!stepUsage) sawUnusableStepUsage = true;
                   // Silent eviction / rewrite check (#4559): this step only
                   // appended (no fold, no prune, no image omission) yet the
-                  // provider counted fewer input tokens than for the previous
-                  // request. Input against input: the previous reply's
-                  // reasoning may not be resent, so input + output is not the
-                  // floor of the next input on every wire.
+                  // provider counted no more input tokens than for the previous
+                  // request. Not-greater, not strictly-fewer: a provider that
+                  // truncates to a fixed window (Ollama's `num_ctx`) reports the
+                  // same total on every later request while Maka keeps
+                  // appending, so a plateau is the signal, and an equal count
+                  // after an append is already impossible without provider-side
+                  // eviction or rewriting. Input against input: the previous
+                  // reply's reasoning may not be resent, so input + output is
+                  // not the floor of the next input on every wire.
                   const completedRequestIndex = runtimeSteps - 1;
                   if (
                     !contextProviderDroppingNoteWritten &&
@@ -2178,7 +2183,7 @@ export class AiSdkBackend implements AgentBackend {
                     stepUsage !== undefined &&
                     Number.isFinite(stepUsage.inputTokens) &&
                     stepUsage.inputTokens > 0 &&
-                    stepUsage.inputTokens < lastStepInputTokens
+                    stepUsage.inputTokens <= lastStepInputTokens
                   ) {
                     contextProviderDroppingNoteWritten = true;
                     const note: SystemNoteMessage = {

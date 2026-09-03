@@ -89,7 +89,7 @@ Next model context = Materialize(
   compact checkpoint,
   RuntimeEvents[k+1..n],
   provider capabilities,
-  current context budget
+  用户声明的 capacity 与 provider 结果
 )
 ```
 
@@ -126,7 +126,7 @@ flowchart LR
 - 这些源事件的 digest 是什么？
 - 它由哪一个 high-water decision 产生？
 - 它是否是上一 checkpoint 的合法 successor？
-- 它在当前 token policy 下仍然能否进入 prompt？
+- 它的 source 与 provider-state identity 在 replay 时是否仍然有效？
 
 所以，Maka 持久化的不是一个裸字符串，而是 `HistoryCompactCheckpoint`：
 
