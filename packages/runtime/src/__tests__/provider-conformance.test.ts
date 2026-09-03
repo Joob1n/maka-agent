@@ -25,6 +25,7 @@ import { anthropic } from '@ai-sdk/anthropic';
 import { generateText, isStepCount, streamText, tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { fetchProviderModels } from '../model-fetcher.js';
+import { resetStreamUsageFallbackMemory } from '../stream-usage-fallback-fetch.js';
 import { buildProviderOptions, getAIModel } from '../model-factory.js';
 import { resolveOAuthSubscriptionAccessToken } from '../subscription-credentials.js';
 import { testConnection } from '../test-connection.js';
@@ -1164,26 +1165,39 @@ describe('models.dev provider conformance', () => {
     assert.equal(usage.totalTokens, 9);
   });
 
-  test('a relay that rejects stream_options fails loudly with the provider error, no silent retry', async () => {
-    // The usage request is the contract, not a best effort. A strict relay
-    // that does not know `stream_options` answers 400; the runtime surfaces
-    // that answer as the provider's own error and does not resend without
-    // the field, because a connection that cannot report usage has no context
-    // baseline and the user should learn that from the error, not from a
-    // compaction that never happens (#4559).
-    let requests = 0;
-    let requestBody: Record<string, unknown> | undefined;
+  test('a relay that rejects stream_options is answered once without the field', async () => {
+    // Asking for usage is the default, but a strict relay that rejects unknown
+    // fields would otherwise 400 every streaming request with no user-facing
+    // way to switch the ask off. One retreat, remembered for the endpoint: the
+    // request goes out again without `stream_options`, and the connection then
+    // simply reports no usage (#4559).
+    resetStreamUsageFallbackMemory();
+    const bodies: Record<string, unknown>[] = [];
     const server = await startJsonServer(async (request, response) => {
-      requests += 1;
-      requestBody = JSON.parse(await readBody(request)) as Record<string, unknown>;
-      respondJson(response, 400, {
-        error: {
-          message: 'Unrecognized request argument supplied: stream_options',
-          type: 'invalid_request_error',
-          param: 'stream_options',
-          code: null,
+      const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
+      bodies.push(body);
+      if ('stream_options' in body) {
+        respondJson(response, 400, {
+          error: {
+            message: 'Unrecognized request argument supplied: stream_options',
+            type: 'invalid_request_error',
+            param: 'stream_options',
+            code: null,
+          },
+        });
+        return;
+      }
+      respondOpenAIStream(response, [
+        {
+          id: 'chatcmpl-strict-relay',
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'relay-model',
+          choices: [
+            { index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+          ],
         },
-      });
+      ]);
     });
     const connection: LlmConnection = {
       slug: 'strict-relay',
@@ -1201,17 +1215,20 @@ describe('models.dev provider conformance', () => {
       prompt: 'Reply ok.',
     });
 
-    // The AI SDK reports a failed request as an `error` stream part, which is
-    // what the runtime's send loop reads and surfaces as the provider error.
-    const errors: unknown[] = [];
-    for await (const part of result.fullStream) {
-      if (part.type === 'error') errors.push(part.error);
-    }
-    assert.equal(errors.length, 1);
-    const message = errors[0] instanceof Error ? errors[0].message : String(errors[0]);
-    assert.match(message, /stream_options/);
-    assert.deepEqual(requestBody?.stream_options, { include_usage: true });
-    assert.equal(requests, 1);
+    assert.equal(await result.text, 'ok');
+    assert.equal(bodies.length, 2);
+    assert.deepEqual(bodies[0]?.stream_options, { include_usage: true });
+    assert.equal('stream_options' in (bodies[1] ?? {}), false);
+
+    // The endpoint is remembered: the next request never asks again.
+    const second = streamText({
+      model: getAIModel({ connection, apiKey: 'test-key', modelId: 'relay-model' }),
+      prompt: 'Reply ok again.',
+    });
+    assert.equal(await second.text, 'ok');
+    assert.equal(bodies.length, 3);
+    assert.equal('stream_options' in (bodies[2] ?? {}), false);
+    resetStreamUsageFallbackMemory();
   });
 
   test('Hugging Face discovers tool-capable routed models and preserves its two-stage OpenAI wire', async () => {

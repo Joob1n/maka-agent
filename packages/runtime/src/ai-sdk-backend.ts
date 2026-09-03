@@ -1553,6 +1553,8 @@ export class AiSdkBackend implements AgentBackend {
     // result.usage.inputTokens is cumulative across steps and would produce
     // misleading >100% percentages, so the per-step value is captured here.
     let lastStepInputTokens: number | undefined;
+    /** Tool count of the request that produced `lastStepInputTokens`. */
+    let lastStepActiveToolCount: number | undefined;
     // Output tokens of the same step: with the input they are the baseline the
     // next request is judged from (everything the model produced is re-sent).
     let lastStepOutputTokens: number | undefined;
@@ -2172,8 +2174,16 @@ export class AiSdkBackend implements AgentBackend {
                   // reply's reasoning may not be resent, so input + output is
                   // not the floor of the next input on every wire.
                   const completedRequestIndex = runtimeSteps - 1;
+                  // A finalization step resolves an empty tool set, so its
+                  // request legitimately drops several thousand schema tokens
+                  // with no fold, prune or image omission. Maka shaped that
+                  // request; the provider did not drop anything.
+                  const toolSchemaShrank =
+                    lastStepActiveToolCount !== undefined &&
+                    activeToolsForRequest.length < lastStepActiveToolCount;
                   if (
                     !contextProviderDroppingNoteWritten &&
+                    !toolSchemaShrank &&
                     midTurnState &&
                     completedRequestIndex >= 1 &&
                     lastStepInputTokens !== undefined &&
@@ -2199,11 +2209,24 @@ export class AiSdkBackend implements AgentBackend {
                   // step's usage does not leave a stale value from an earlier step.
                   lastStepInputTokens = stepUsage?.inputTokens;
                   lastStepOutputTokens = stepUsage?.outputTokens;
-                  // The provider cut this reply at its output limit: it ran out
-                  // of room, which no local number predicted. Fold once before
-                  // the next request of this turn (#4559).
+                  lastStepActiveToolCount = activeToolsForRequest.length;
+                  // The provider cut this reply at an output limit. Which one
+                  // decides whether folding helps: a reply that stopped at the
+                  // `maxOutputTokens` Maka itself sends was cut by Maka's own
+                  // budget, and the next request carries the same budget, so
+                  // folding history would shrink the context every step without
+                  // touching the constraint. Only a cut below that budget is
+                  // the provider running out of room, which no local number
+                  // predicted; fold once before the next request (#4559).
                   if (midTurnState && event.finishReason === 'length') {
-                    midTurnState.pendingLengthFold = true;
+                    const outputLimit = midTurnState.modelOutputLimitTokens;
+                    const replyTokens = stepUsage?.outputTokens;
+                    const cutByOwnBudget =
+                      outputLimit > 0 &&
+                      replyTokens !== undefined &&
+                      Number.isFinite(replyTokens) &&
+                      replyTokens >= outputLimit;
+                    if (!cutByOwnBudget) midTurnState.pendingLengthFold = true;
                   }
                   if (stepUsage) {
                     completedStepUsage = mergeNormalizedUsage(completedStepUsage, stepUsage);

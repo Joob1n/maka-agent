@@ -815,7 +815,11 @@ export class AiSdkCompaction {
       state.baselineTokens = persisted.inputTokens + (persisted.outputTokens ?? 0);
       state.lastAcceptedTotalTokens = state.baselineTokens;
     }
-    state.replyReserveTokens = declaredModelOutputLimit(this.input.connection, this.input.modelId);
+    state.modelOutputLimitTokens = declaredModelOutputLimit(
+      this.input.connection,
+      this.input.modelId,
+    );
+    state.replyReserveTokens = state.modelOutputLimitTokens;
     return state;
   }
 
@@ -973,10 +977,10 @@ export class AiSdkCompaction {
     abortSignal?: AbortSignal;
   }): Promise<ActiveRequestCompactionOutcome> {
     const { turnId, state, queue, activeToolsForStep, abortSignal } = input;
-    if (state.malformedSummaryFailure) {
+    if (state.summarizerFailure) {
       return {
         decision: 'fail',
-        diagnosticReason: state.malformedSummaryFailure,
+        diagnosticReason: state.summarizerFailure,
       };
     }
     const summarizer = this.input.summarizeHistoryCompact!;
@@ -1098,9 +1102,13 @@ export class AiSdkCompaction {
 
     if (plan.decision === 'fail_open') {
       const diagnosticReason = plan.diagnosticReason ?? plan.reason;
-      if (isMalformedHistoryCompactSummaryReason(diagnosticReason)) {
-        state.malformedSummaryFailure = diagnosticReason;
-      }
+      // Latch every fail-open reason, not only the malformed ones. The baseline
+      // that fired this trigger survives a fail-open, so without the latch the
+      // next step evaluates the same condition and dispatches the same doomed
+      // summarizer call: a provider that answers slowly and fails (kimi's HTTP
+      // 200 with an error body) produced 15 such calls over 47 minutes before
+      // one main request (#4634). One attempt per send, then fail open (#4559).
+      state.summarizerFailure = diagnosticReason;
       return {
         decision: 'fail',
         diagnosticReason,
@@ -1408,6 +1416,12 @@ export class MidTurnCapacityCompactState {
    */
   replyReserveTokens = 0;
   /**
+   * The model's declared `maxOutputTokens`, as sent on every main request.
+   * A reply that stopped at this number was cut by Maka's own budget, not by
+   * the provider running out of context (#4559).
+   */
+  modelOutputLimitTokens = 0;
+  /**
    * Set when the provider cut the previous reply at its output limit
    * (`finishReason: length`). The reply ran out of room, which no local
    * number predicted; fold once before the next request.
@@ -1433,7 +1447,7 @@ export class MidTurnCapacityCompactState {
   /** Exact historical image results omitted after a provider overflow. */
   omittedImageToolResults = new Map<string, HistoricalImageToolResult>();
   /** Malformed summaries spend one bounded repair budget for this whole Turn. */
-  malformedSummaryFailure: MalformedHistoryCompactSummaryReason | undefined;
+  summarizerFailure: string | undefined;
 
   constructor(
     readonly headAnchor: RuntimeEvent,

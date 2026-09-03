@@ -61,6 +61,7 @@ import { resolveModelRuntime, type ResolvedModelRuntime } from './model-runtime.
 import { runtimeProviderName, type RuntimeProviderAdapter } from './provider-runtime-policy.js';
 import { openAiCodexHeaders } from './subscription-auth.js';
 import { createRequestCustomizationFetch } from './request-customization-fetch.js';
+import { createStreamUsageFallbackFetch } from './stream-usage-fallback-fetch.js';
 
 export interface ModelFactoryInput {
   connection: RuntimeExecutionConnection;
@@ -243,7 +244,7 @@ export function getAIModel(input: ModelFactoryInput): LanguageModelV4 {
         // proactive compaction baseline, the eviction check, and the usage
         // indicator all go dark for exactly the connections that need them.
         includeUsage: adapter.includeUsage ?? true,
-        fetch: reasoningTransport.fetch,
+        fetch: createStreamUsageFallbackFetch(reasoningTransport.fetch, baseURL),
         transformRequestBody,
         ...(adapter.replayAssistantReasoningDetails
           ? { metadataExtractor: reasoningDetailsMetadataExtractor() }

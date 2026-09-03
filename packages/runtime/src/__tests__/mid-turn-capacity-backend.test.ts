@@ -1030,6 +1030,68 @@ function defineMidTurnSuite(consumer: ConsumerMode): void {
     assert.equal(complete?.type === 'complete' ? complete.stopReason : undefined, 'end_turn');
   });
 
+  test('bounds a provider-error summarizer failure across later steps in the same turn', async () => {
+    // The baseline that fired this trigger survives a fail-open, so without a
+    // latch every later step re-evaluates it and dispatches the same doomed
+    // call. Live evidence: 15 consecutive failed summarizer calls over ~47
+    // minutes on a provider that answers slowly and fails (#4634).
+    const fixture = buildFixture({
+      rollingOverflow: true,
+      summarize: () => {
+        throw new HistoryCompactSummarizerError('provider_error');
+      },
+    });
+
+    await runFixtureTurn(fixture, consumer);
+
+    assert.equal(fixture.summarizerCalls, 1);
+    assert.equal(fixture.recorded.length, 0);
+    const failedOpen = compactionDecisions(fixture).filter(
+      (decision) => decision.decision === 'failedOpen',
+    );
+    assert.ok(failedOpen.length >= 1);
+    assert.equal(failedOpen[0]?.failOpenReason, 'provider_error');
+  });
+
+  test('does not fold when the reply was cut by the output budget Maka itself sends', async () => {
+    // `finishReason: length` at exactly the configured `maxOutputTokens` is
+    // Maka's own cap, not the provider running out of context; the next
+    // request carries the same cap, so folding would shrink history every
+    // step without touching the constraint (#4559).
+    const fixture = buildFixture({
+      withoutContextWindow: true,
+      finalAtSecondCall: true,
+      firstStepFinishReason: 'length',
+      modelMaxOutputTokens: 20,
+      firstStepUsage: { input: 100, output: 20 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    assert.equal(fixture.summarizerCalls, 0);
+  });
+
+  test('does not report provider dropping when the step dropped its tool schemas', async () => {
+    // A finalization step resolves an empty tool set, so its request loses
+    // several thousand schema tokens with no fold, prune or image omission.
+    // Maka shaped that request; the provider dropped nothing.
+    const fixture = buildFixture({
+      contextWindow: 200,
+      finalAtSecondCall: true,
+      childFinalization: true,
+      finalStepUsage: { input: 50, output: 10 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    assert.equal(
+      fixture.messages.some(
+        (message) =>
+          (message as { type?: string; kind?: string }).type === 'system_note' &&
+          (message as { kind?: string }).kind === 'context_provider_dropping',
+      ),
+      false,
+    );
+  });
+
   test('fails closed before provider dispatch when the durable ledger read fails', async () => {
     const fixture = buildFixture();
     // Break the seam after construction: every trigger read now rejects.
