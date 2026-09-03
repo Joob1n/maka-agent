@@ -1215,6 +1215,44 @@ function defineMidTurnSuite(consumer: ConsumerMode): void {
     assert.equal(fitting.summarizerCalls, 0);
   });
 
+  test('reports an accepted request past the window the model reports when nothing is declared', async () => {
+    // The kimi k3-256k shape: the provider accepts past its own reported
+    // window without rejecting or truncating, so no other signal fires.
+    const fixture = buildFixture({
+      contextWindow: 100,
+      declareContextWindow: false,
+      finalAtSecondCall: true,
+      firstStepUsage: { input: 150, output: 40 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    const note = fixture.messages.find(
+      (message): message is { type: 'system_note'; kind: string; data?: unknown } =>
+        (message as { kind?: string }).kind === 'context_reported_window_exceeded',
+    );
+    assert.deepEqual(note?.data, { usedTokens: 190, reportedContextWindow: 100 });
+    // A hint is still not a declaration: nothing folded on its own.
+    assert.equal(fixture.summarizerCalls, 0);
+  });
+
+  test('does not report the reported window when the user declared one', async () => {
+    // With a declaration the overrun note owns this case; two notes for one
+    // fact would be noise.
+    const fixture = buildFixture({
+      contextWindow: 100,
+      finalAtSecondCall: true,
+      firstStepUsage: { input: 150, output: 40 },
+    });
+    await runFixtureTurn(fixture, consumer);
+
+    assert.equal(
+      fixture.messages.some(
+        (message) => (message as { kind?: string }).kind === 'context_reported_window_exceeded',
+      ),
+      false,
+    );
+  });
+
   test('reports a reply that ran past the declared window', async () => {
     const fixture = buildFixture({
       contextWindow: 200,

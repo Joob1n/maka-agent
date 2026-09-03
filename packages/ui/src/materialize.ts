@@ -145,6 +145,15 @@ function systemNoteLabel(kind: string, data: unknown, locale: UiLocale): string 
   if (kind === "context_compacted") return copy.contextCompacted;
   if (kind === "context_compaction_failed_open") return copy.contextCompactionFailedOpen;
   if (kind === "context_provider_dropping") return copy.contextProviderDropping;
+  if (kind === "context_reported_window_exceeded") {
+    const exceeded = data as
+      | { usedTokens?: unknown; reportedContextWindow?: unknown }
+      | undefined;
+    const used = typeof exceeded?.usedTokens === "number" ? exceeded.usedTokens : 0;
+    const reported =
+      typeof exceeded?.reportedContextWindow === "number" ? exceeded.reportedContextWindow : 0;
+    return copy.contextReportedWindowExceeded(used, reported);
+  }
   if (kind === "context_window_overrun") {
     const overrun = data as
       | { usedTokens?: unknown; declaredContextWindow?: unknown }

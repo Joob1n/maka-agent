@@ -1567,6 +1567,7 @@ export class AiSdkBackend implements AgentBackend {
     let contextCompactionFailedOpenNoteWritten = false;
     let contextProviderDroppingNoteWritten = false;
     let contextWindowOverrunNoteWritten = false;
+    let contextReportedWindowNoteWritten = false;
     let contextWindowSuggestionNoteWritten = false;
     // Request index (0-based) at which the active prune last rewrote the
     // request. A step Maka pruned is not append-only, so usage may legitimately
@@ -2237,6 +2238,42 @@ export class AiSdkBackend implements AgentBackend {
                       },
                     };
                     await this.input.appendMessage(note).catch(() => {});
+                  }
+                  // Nothing declared, and the provider accepted a request past
+                  // the window this model reports. Every other signal in this
+                  // design stays dark there: no rejection to recover from, no
+                  // plateau to read, and no declaration to arm the proactive
+                  // threshold, so the session degrades quietly and
+                  // indefinitely (#4634). Report the two real numbers once per
+                  // send and leave the decision with the user: a reported
+                  // window is a hint, and Maka still declares nothing on their
+                  // behalf.
+                  if (
+                    !contextReportedWindowNoteWritten &&
+                    midTurnState !== undefined &&
+                    midTurnState.capacity === undefined &&
+                    stepUsage !== undefined &&
+                    Number.isFinite(stepUsage.inputTokens) &&
+                    stepUsage.inputTokens > 0 &&
+                    Number.isFinite(stepUsage.outputTokens)
+                  ) {
+                    const reported = resolveSelectedModelContextWindow(
+                      this.input.connection,
+                      this.input.modelId,
+                    );
+                    const used = stepUsage.inputTokens + Math.max(0, stepUsage.outputTokens);
+                    if (reported !== undefined && used > reported) {
+                      contextReportedWindowNoteWritten = true;
+                      const note: SystemNoteMessage = {
+                        type: 'system_note',
+                        id: this.newId(),
+                        turnId,
+                        ts: this.now(),
+                        kind: 'context_reported_window_exceeded',
+                        data: { usedTokens: used, reportedContextWindow: reported },
+                      };
+                      await this.input.appendMessage(note).catch(() => {});
+                    }
                   }
                   lastStepInputTokens = stepUsage?.inputTokens;
                   lastStepOutputTokens = stepUsage?.outputTokens;
