@@ -366,6 +366,13 @@ export class AiSdkCompaction {
         sessionId: this.sessionId,
         phase: 'standalone',
         orderedEvents: runtimeContext,
+        ...(input.runtimeContextRunHeaders ? { runHeaders: input.runtimeContextRunHeaders } : {}),
+        acceptedRoute: {
+          modelId: this.input.modelId,
+          ...(this.targetConnectionId !== undefined
+            ? { connectionId: this.targetConnectionId }
+            : {}),
+        },
         reserveTailEvents: 0,
         charsPerToken,
         now: this.now(),

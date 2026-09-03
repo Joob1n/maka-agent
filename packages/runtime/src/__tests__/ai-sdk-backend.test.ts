@@ -4378,6 +4378,82 @@ describe('AiSdkBackend model history', () => {
     assert.equal(prompt.includes(oldResult.body), false);
   });
 
+  test('manual compactHistory retreats to a span this route has accepted', async () => {
+    // The retreat needs the run headers and the route to find the newest reply
+    // this model produced. The planner tests hand those in directly, so they
+    // would stay green if the call site stopped passing them; this drives the
+    // entry `/compact` actually uses.
+    const attemptedCoverage: string[][] = [];
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: { ...header(), llmConnectionId: 'test-connection-id', model: 'mock-model-id' },
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => completionModel(),
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+      contextBudget: { name: 'standalone-retreat-test', charsPerToken: 1 },
+      summarizeHistoryCompact: async ({ source }) => {
+        attemptedCoverage.push(source.foldedRuntimeEvents.map((event) => event.id));
+        if (attemptedCoverage.length === 1) {
+          throw new HistoryCompactSummarizerError('input_too_large');
+        }
+        return structuredSummary('STANDALONE_RETREAT_SENTINEL');
+      },
+      recordHistoryCompactCheckpoint: () => {},
+    });
+
+    const result = await backend.compactHistory({
+      turnId: 'turn-compact',
+      runId: 'run-1',
+      runtimeContextRunHeaders: [
+        priorModelRunHeader({ connectionId: 'test-connection-id', modelId: 'mock-model-id' }),
+      ],
+      runtimeContext: [
+        runtimeTextEvent({
+          id: 'old-user',
+          turnId: 'turn-old',
+          role: 'user',
+          author: 'user',
+          text: 'old alpha '.repeat(100),
+        }),
+        runtimeTextEvent({
+          id: 'old-model',
+          turnId: 'turn-old',
+          role: 'model',
+          author: 'agent',
+          text: 'old beta '.repeat(100),
+        }),
+        runtimeTextEvent({
+          id: 'recent-user',
+          turnId: 'turn-recent',
+          role: 'user',
+          author: 'user',
+          text: 'recent alpha '.repeat(100),
+        }),
+        runtimeTextEvent({
+          id: 'recent-model',
+          turnId: 'turn-recent',
+          role: 'model',
+          author: 'agent',
+          text: 'recent beta '.repeat(100),
+        }),
+      ],
+    });
+
+    assert.equal(result.outcome.kind, 'compacted');
+    // The first attempt covers everything; the retreat stops where the newest
+    // reply this route produced begins. Without the route reaching the planner
+    // there is no second attempt at all.
+    assert.deepEqual(attemptedCoverage, [
+      ['old-user', 'old-model', 'recent-user', 'recent-model'],
+      ['old-user', 'old-model', 'recent-user'],
+    ]);
+  });
+
   test('manual compactHistory writes a V2 checkpoint without the legacy artifact writer', async () => {
     const recorded: HistoryCompactCheckpoint[] = [];
     let memoryDispatches = 0;
