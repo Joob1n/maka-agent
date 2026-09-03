@@ -320,7 +320,7 @@ export interface ConversationCopy {
     systemNotes: {
       contextCompacted: string;
       contextCompactionFailedOpen: string;
-      contextProviderDropping: string;
+      contextProviderDropping: (used: number, prior: number) => string;
       contextWindowSuggestion: (tokens: number, declared: number | undefined) => string;
       contextWindowOverrun: (used: number, declared: number) => string;
       contextReportedWindowExceeded: (used: number, reported: number) => string;
@@ -541,7 +541,8 @@ const CONVERSATION_COPY = {
       systemNotes: {
         contextCompacted: '已压缩较早的对话内容，以适应模型上下文窗口。',
         contextCompactionFailedOpen: '上下文摘要失败；本轮已在未生成新摘要的情况下继续。',
-        contextProviderDropping: '供应商在丢弃或改写上下文（追加了内容但用量未增长）。在连接设置里为该模型声明上下文窗口，让 Maka 先行压缩。',
+        contextProviderDropping: (used, prior) =>
+          `供应商在丢弃或改写上下文：追加了内容，它报告的输入却是 ${used.toLocaleString('zh-CN')} tokens，与之前的 ${prior.toLocaleString('zh-CN')} 相比没有增长。在连接设置里为该模型声明上下文窗口，让 Maka 先行压缩。`,
         contextWindowSuggestion: (tokens, declared) =>
           declared === undefined
             ? `供应商拒绝了这次请求。该模型未声明上下文窗口；上次成功的用量约 ${tokens} tokens，可将窗口设为该值让 Maka 先行压缩。`
@@ -714,7 +715,8 @@ const CONVERSATION_COPY = {
       systemNotes: {
         contextCompacted: 'Context compacted to keep this session within the model window.',
         contextCompactionFailedOpen: 'Context summary failed; the session continued without a new summary.',
-        contextProviderDropping: 'The provider is dropping or rewriting context (content was appended but usage did not grow). Declare a context window for this model in the connection settings so Maka compacts first.',
+        contextProviderDropping: (used, prior) =>
+          `The provider is dropping or rewriting context: content was appended, and it counted ${used.toLocaleString('en-US')} input tokens against ${prior.toLocaleString('en-US')} before, which is no growth. Declare a context window for this model in the connection settings so Maka compacts first.`,
         contextWindowSuggestion: (tokens, declared) =>
           declared === undefined
             ? `The provider rejected this request. No context window is declared for this model; the last accepted usage was about ${tokens} tokens — set the window to that value so Maka compacts first.`

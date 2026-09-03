@@ -1072,6 +1072,15 @@ export class AiSdkBackend implements AgentBackend {
    */
   private readonly activeTurns = new Set<TurnScope>();
   private readonly compaction: AiSdkCompaction;
+  /**
+   * The provider has been reported dropping context, for this backend.
+   *
+   * Not per send: the condition persists once a provider starts truncating, so
+   * a note on every later turn would repeat one fact the user has already been
+   * told. The scope is this backend's lifetime rather than the Session's, so a
+   * backend that is disposed and rebuilt may say it once more.
+   */
+  private contextProviderDroppingReported = false;
   /** Session-scoped running total, deliberately accumulated across turns. */
   private cumulativeUsageCheckpoint: NormalizedAiSdkUsage | undefined;
   private readonly memoryReplayMessageEvents = new WeakMap<ModelMessage, readonly string[]>();
@@ -1565,7 +1574,6 @@ export class AiSdkBackend implements AgentBackend {
     let contextBudgetForTelemetry: ContextBudgetDiagnostic | undefined;
     let contextCompactedNoteWritten = false;
     let contextCompactionFailedOpenNoteWritten = false;
-    let contextProviderDroppingNoteWritten = false;
     let contextWindowOverrunNoteWritten = false;
     let contextReportedWindowNoteWritten = false;
     let contextOverflowAfterCompactionNoteWritten = false;
@@ -2188,27 +2196,55 @@ export class AiSdkBackend implements AgentBackend {
                   const toolSchemaShrank =
                     lastStepActiveToolCount !== undefined &&
                     activeToolsForRequest.length < lastStepActiveToolCount;
+                  // Across the send boundary the comparison is the same one,
+                  // against the last request a provider accepted before this
+                  // send. A provider that truncates to a fixed window reports
+                  // the same input on every later request while the user keeps
+                  // adding turns, and a send of one or two steps never sees
+                  // that from the inside: the live evidence plateaus at 3,716
+                  // input tokens across eight turns with nothing reported
+                  // (#4623). The first request of a send therefore compares
+                  // against the persisted anchor, which is route-validated
+                  // where it is read; a fold before that request would explain
+                  // a smaller input by itself, so it disables the comparison.
+                  const acrossSends = completedRequestIndex === 0;
+                  const priorInput = acrossSends
+                    ? midTurnState?.compactionAppliedThisSend === true
+                      ? undefined
+                      : midTurnState?.priorAcceptedInputTokens
+                    : lastStepInputTokens;
                   if (
-                    !contextProviderDroppingNoteWritten &&
+                    !this.contextProviderDroppingReported &&
                     !toolSchemaShrank &&
                     midTurnState &&
-                    completedRequestIndex >= 1 &&
-                    lastStepInputTokens !== undefined &&
+                    priorInput !== undefined &&
                     midTurnState.replacedStepNumber !== completedRequestIndex &&
                     pruneAppliedAtStep !== completedRequestIndex &&
                     midTurnState.omittedImageToolResults.size === 0 &&
                     stepUsage !== undefined &&
                     Number.isFinite(stepUsage.inputTokens) &&
                     stepUsage.inputTokens > 0 &&
-                    stepUsage.inputTokens <= lastStepInputTokens
+                    // Across sends the test is equality, not "did not grow".
+                    // Inside a send Maka knows it only appended, so any
+                    // shortfall is the provider's. Across the boundary it does
+                    // not: a manual compaction leaves the pre-compaction anchor
+                    // behind, a turn can carry a smaller tool set, and a user
+                    // can edit or branch history. All three shrink the input
+                    // legitimately, and none of them lands on exactly the same
+                    // count. A provider truncating to a fixed window does, on
+                    // every later request.
+                    (acrossSends
+                      ? stepUsage.inputTokens === priorInput
+                      : stepUsage.inputTokens <= priorInput)
                   ) {
-                    contextProviderDroppingNoteWritten = true;
+                    this.contextProviderDroppingReported = true;
                     const note: SystemNoteMessage = {
                       type: 'system_note',
                       id: this.newId(),
                       turnId,
                       ts: this.now(),
                       kind: 'context_provider_dropping',
+                      data: { inputTokens: stepUsage.inputTokens, priorInputTokens: priorInput },
                     };
                     await this.input.appendMessage(note).catch(() => {});
                   }

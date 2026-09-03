@@ -814,6 +814,7 @@ export class AiSdkCompaction {
     if (persisted) {
       state.baselineTokens = persisted.inputTokens + (persisted.outputTokens ?? 0);
       state.lastAcceptedTotalTokens = state.baselineTokens;
+      state.priorAcceptedInputTokens = persisted.inputTokens;
     }
     if (persisted) state.replyReserveTokens = replyReserveTokens(persisted.outputTokens);
     return state;
@@ -1464,6 +1465,14 @@ export class MidTurnCapacityCompactState {
    * rejection about what remains in it.
    */
   compactionAppliedThisSend = false;
+  /**
+   * Input tokens of the last request a provider accepted before this send.
+   *
+   * Input against input, across the send boundary: the first request of a send
+   * has no earlier step to compare with, and `baselineTokens` counts the reply
+   * too, which the next request does not always carry.
+   */
+  priorAcceptedInputTokens: number | undefined;
 
   constructor(
     readonly headAnchor: RuntimeEvent,
