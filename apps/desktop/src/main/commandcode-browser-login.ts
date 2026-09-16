@@ -101,7 +101,7 @@ export type CommandCodeBrowserLoginStartResult =
       readonly ok: false;
       readonly reason: Extract<
         CommandCodeBrowserLoginFailureReason,
-        'port_unavailable' | 'browser_unavailable'
+        'port_unavailable' | 'browser_unavailable' | 'superseded'
       >;
     };
 
@@ -170,40 +170,29 @@ export class CommandCodeBrowserLoginController {
     input: CommandCodeBrowserLoginStartInput = {},
   ): Promise<CommandCodeBrowserLoginStartResult> {
     if (this.#disposed) return { ok: false, reason: 'browser_unavailable' };
-    this.#finish(this.#current, { ok: false, reason: 'superseded' });
-
-    const state = this.#deps.randomToken?.(32) ?? randomBytes(32).toString('base64url');
-    let settle!: (result: CommandCodeBrowserLoginResult) => void;
-    const settled = new Promise<CommandCodeBrowserLoginResult>((resolve) => {
-      settle = resolve;
-    });
-    const attempt: Attempt = {
-      id: randomUUID(),
-      state,
-      port: 0,
-      server: undefined,
-      timer: undefined,
-      settled,
-      settle,
-      delivered: false,
-    };
+    // Reserved before the first await. Binding a port is asynchronous, so a
+    // second start() that ran the supersession check first would see no
+    // current attempt, bind a second port beside this one, and leave two live
+    // attempts each able to deliver its own credentials.
+    const attempt = this.#reserve();
 
     const bound = await this.#bind(attempt);
     if (!bound) {
-      attempt.settle?.({ ok: false, reason: 'port_unavailable' });
+      this.#finish(attempt, { ok: false, reason: 'port_unavailable' });
       return { ok: false, reason: 'port_unavailable' };
     }
-    if (this.#disposed) {
-      this.#finish(attempt, { ok: false, reason: 'cancelled' });
-      return { ok: false, reason: 'browser_unavailable' };
+    // A newer start (or a cancel, or dispose) retired this attempt while it
+    // was binding. Its result has already settled; the port it just took is
+    // held by nobody, so release it here.
+    if (attempt.settle === undefined || this.#disposed) {
+      this.#finish(attempt, { ok: false, reason: 'superseded' });
+      return { ok: false, reason: 'superseded' };
     }
 
-    this.#current = attempt;
-    this.#attempts.set(attempt.id, attempt);
     const authUrl = buildCommandCodeAuthUrl({
       studioBase: studioBaseForApiBase(input.baseUrl),
       port: attempt.port,
-      state,
+      state: attempt.state,
     });
     attempt.timer = setTimeout(
       () => this.#finish(attempt, { ok: false, reason: 'timeout' }),
@@ -250,6 +239,28 @@ export class CommandCodeBrowserLoginController {
   // ---------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------
+
+  /** Retires the live attempt and installs a fresh one, without awaiting. */
+  #reserve(): Attempt {
+    let settle!: (result: CommandCodeBrowserLoginResult) => void;
+    const settled = new Promise<CommandCodeBrowserLoginResult>((resolve) => {
+      settle = resolve;
+    });
+    const attempt: Attempt = {
+      id: randomUUID(),
+      state: this.#deps.randomToken?.(32) ?? randomBytes(32).toString('base64url'),
+      port: 0,
+      server: undefined,
+      timer: undefined,
+      settled,
+      settle,
+      delivered: false,
+    };
+    this.#finish(this.#current, { ok: false, reason: 'superseded' });
+    this.#current = attempt;
+    this.#attempts.set(attempt.id, attempt);
+    return attempt;
+  }
 
   async #bind(attempt: Attempt): Promise<boolean> {
     const startPort = this.#deps.startPort ?? COMMANDCODE_LOGIN_START_PORT;

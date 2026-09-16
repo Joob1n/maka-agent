@@ -88,6 +88,19 @@ const APPROVED = {
   keyName: 'maka-desktop',
 };
 
+/** True when the port could be taken, i.e. no attempt is listening on it. */
+async function isPortFree(port: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await occupyPort(port);
+      return true;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  return false;
+}
+
 function occupyPort(port: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const server = createNetServer();
@@ -320,6 +333,30 @@ describe('CommandCodeBrowserLoginController', () => {
     // The old state no longer opens anything.
     const completion = controller.complete(second.attemptId);
     assert.equal((await post(second.callback, APPROVED)).status, 200);
+    assert.equal((await completion).ok, true);
+  });
+
+  test('two simultaneous starts leave one live attempt and free the loser\'s port', async () => {
+    const opened: string[] = [];
+    const controller = makeController({}, opened);
+    // Both calls reach `start` before either has bound a port. Reserving the
+    // attempt only after the bind let both survive, bind two ports, and each
+    // deliver its own credentials.
+    const [loser, winner] = await Promise.all([controller.start(), controller.start()]);
+    assert.deepEqual(loser, { ok: false, reason: 'superseded' });
+    assert.equal(winner.ok, true, JSON.stringify(winner));
+    if (!winner.ok) throw new Error('unreachable');
+    assert.deepEqual(opened, [winner.authUrl], 'only the live attempt opens a browser tab');
+
+    const free: number[] = [];
+    for (const port of [46_959, 46_960]) {
+      if (await isPortFree(port)) free.push(port);
+    }
+    assert.equal(free.length, 1, `exactly one port stays bound, free: ${free.join(',')}`);
+
+    const callback = new URL(new URL(winner.authUrl).searchParams.get('callback') ?? '');
+    const completion = controller.complete(winner.attemptId);
+    assert.equal((await post(callback.toString(), APPROVED)).status, 200);
     assert.equal((await completion).ok, true);
   });
 

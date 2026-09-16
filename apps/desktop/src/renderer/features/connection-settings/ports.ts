@@ -109,7 +109,10 @@ export interface CommandCodeBrowserLoginStartInput {
 
 export type CommandCodeBrowserLoginStartResult =
   | { readonly ok: true; readonly attemptId: string; readonly authUrl: string }
-  | { readonly ok: false; readonly reason: 'port_unavailable' | 'browser_unavailable' };
+  | {
+      readonly ok: false;
+      readonly reason: 'port_unavailable' | 'browser_unavailable' | 'superseded';
+    };
 
 export type CommandCodeBrowserLoginResult =
   | { readonly ok: true; readonly credentials: CommandCodeBrowserLoginCredentials }

@@ -174,7 +174,7 @@ describe('request building', () => {
         role: 'user',
         content: [
           { type: 'text', text: 'read it' },
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AQID' } },
+          { type: 'image', image: 'data:image/png;base64,AQID', mimeType: 'image/png' },
         ],
       },
       {
@@ -481,6 +481,32 @@ describe('runtime wiring', () => {
     assert.ok(model instanceof CommandCodeCliLanguageModel);
   });
 
+  test('an already encoded data URL is not wrapped a second time', () => {
+    const { body } = buildCommandCodeCliRequest(
+      {
+        prompt: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'file',
+                mediaType: 'image/png',
+                data: { type: 'data', data: 'data:image/png;base64,AQID' },
+              },
+            ],
+          },
+        ],
+      },
+      { modelId: 'm' },
+    );
+    const [message] = body.params.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    assert.deepEqual(message?.content[0], {
+      type: 'image',
+      image: 'data:image/png;base64,AQID',
+      mimeType: 'image/png',
+    });
+  });
+
   test('the connection test posts one tiny CLI generate and reads the status', async () => {
     process.env[FLAG] = '1';
     const urls: string[] = [];
@@ -499,5 +525,60 @@ describe('runtime wiring', () => {
     );
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.deepEqual(urls, ['/alpha/generate']);
+  });
+
+  test('the connection test fails on an in-band error behind HTTP 200', async () => {
+    process.env[FLAG] = '1';
+    const server = await startJsonServer((_request, response) => {
+      respondCliStream(response, [
+        {
+          type: 'error',
+          error: { message: 'bad key', statusCode: 401, code: 'invalid_key' },
+        },
+      ]);
+    });
+    const result = await testConnection(
+      { ...connection, baseUrl: server.url },
+      'k',
+      'deepseek/deepseek-v4.1-flash',
+      { fetch },
+    );
+    assert.equal(result.ok, false, 'HTTP 200 is only the handshake on this wire');
+    assert.equal(result.statusCode, 401);
+    assert.equal(result.errorClass, 'auth');
+    assert.match(result.errorMessage ?? '', /bad key/u);
+  });
+
+  test('the connection test fails when the stream never reaches finish', async () => {
+    process.env[FLAG] = '1';
+    const server = await startJsonServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ type: 'text-delta', text: 'cut' })}\n\n`);
+    });
+    const result = await testConnection(
+      { ...connection, baseUrl: server.url },
+      'k',
+      'deepseek/deepseek-v4.1-flash',
+      { fetch },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.errorClass, 'network');
+  });
+
+  test('a rate-limited stream error reports the provider, not the credential', async () => {
+    process.env[FLAG] = '1';
+    const server = await startJsonServer((_request, response) => {
+      respondCliStream(response, [
+        { type: 'error', error: { message: 'slow down', statusCode: 429 } },
+      ]);
+    });
+    const result = await testConnection(
+      { ...connection, baseUrl: server.url },
+      'k',
+      'deepseek/deepseek-v4.1-flash',
+      { fetch },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.errorClass, 'provider_unavailable');
   });
 });

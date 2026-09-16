@@ -24,6 +24,7 @@ import {
   commandCodeCliHeaders,
   CommandCodeCliTransportDisabledError,
   isCommandCodeCliTransportEnabled,
+  summarizeCommandCodeCliStream,
 } from './commandcode-cli-language-model.js';
 import {
   PROVIDER_REGISTRY,
@@ -41,6 +42,7 @@ import { resolveModelRuntime } from './model-runtime.js';
 import { fetchGitHubCopilotModels } from './model-fetcher.js';
 import {
   CONNECTION_EFFECT_ERROR_BODY_MAX_BYTES,
+  CONNECTION_EFFECT_JSON_BODY_MAX_BYTES,
   ConnectionEffectFetchError,
   fetchForConnectionEffect,
   type ConnectionEffectFetch,
@@ -323,8 +325,41 @@ async function probeCommandCodeCli(
     timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
   });
   if (!r.ok) return httpFailure(r, t0);
-  await r.cancel();
-  return { ok: true, latencyMs: Date.now() - t0, modelTested: model };
+  // HTTP 200 is only the handshake on this wire. The generation adapter fails
+  // the send on an in-band `error` event and on a stream that ends without a
+  // `finish`, so a probe that stopped at the status would store a connection
+  // as verified whose very next send is rejected.
+  const outcome = summarizeCommandCodeCliStream(
+    await r.readText(CONNECTION_EFFECT_JSON_BODY_MAX_BYTES),
+  );
+  const latencyMs = Date.now() - t0;
+  if (outcome.error) {
+    const { message, statusCode } = outcome.error;
+    return {
+      ok: false,
+      latencyMs,
+      errorMessage: message.slice(0, 200),
+      ...(statusCode === undefined ? {} : { statusCode }),
+      errorClass: commandCodeCliStreamErrorClass(statusCode),
+    };
+  }
+  if (!outcome.finished) {
+    return {
+      ok: false,
+      latencyMs,
+      errorMessage: 'The Command Code GO stream ended before the turn finished',
+      errorClass: 'network',
+    };
+  }
+  return { ok: true, latencyMs, modelTested: model };
+}
+
+function commandCodeCliStreamErrorClass(statusCode: number | undefined): ConnectionTestErrorClass {
+  if (statusCode === 401 || statusCode === 403) return 'auth';
+  if (statusCode === 429 || (statusCode !== undefined && statusCode >= 500)) {
+    return 'provider_unavailable';
+  }
+  return 'unknown';
 }
 
 async function probeGitHubCopilot(

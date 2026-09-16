@@ -463,11 +463,20 @@ function imagePart(
     });
     return undefined;
   }
-  const data =
+  const encoded =
     typeof part.data.data === 'string'
       ? part.data.data
       : Buffer.from(part.data.data).toString('base64');
-  return { type: 'image', source: { type: 'base64', media_type: part.mediaType, data } };
+  // The pinned CLI serializes an image block in the AI SDK message shape it
+  // builds its request from — a data URL under `image`, beside `mimeType` —
+  // not Anthropic's `source` object. The rest of this wire is AI SDK shaped
+  // too (`toolCallId`, `toolName`, `input`), and for an unpublished endpoint
+  // the pinned CLI is the protocol authority.
+  return {
+    type: 'image',
+    image: encoded.startsWith('data:') ? encoded : `data:${part.mediaType};base64,${encoded}`,
+    mimeType: part.mediaType,
+  };
 }
 
 function toolResultText(
@@ -580,18 +589,54 @@ function resolveLocalRef(
 // ---------------------------------------------------------------------------
 
 /** Splits SSE text into the JSON payload of each `data:` line, dropping comments and `[DONE]`. */
+/** One SSE line's event payload, or undefined when the line carries none. */
+export function parseCommandCodeCliEventLine(line: string): unknown | undefined {
+  let trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith(':') || trimmed.startsWith('event:')) return undefined;
+  if (trimmed.startsWith('data:')) trimmed = trimmed.slice(5).trim();
+  if (!trimmed || trimmed === '[DONE]') return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // A non-JSON line is not an event on this wire.
+    return undefined;
+  }
+}
+
+export interface CommandCodeCliStreamOutcome {
+  /** The wire said the turn ended. An unterminated stream was truncated. */
+  readonly finished: boolean;
+  /** The in-band `error` event that ended the turn, if one arrived. */
+  readonly error?: { readonly message: string; readonly statusCode?: number };
+}
+
+/**
+ * Reads one complete CLI stream body the way {@link CommandCodeCliLanguageModel}
+ * reads it incrementally. HTTP 200 is only the handshake on this wire, so a
+ * caller that stops at the status (the connection probe) would accept a body
+ * whose first event is a rejection.
+ */
+export function summarizeCommandCodeCliStream(body: string): CommandCodeCliStreamOutcome {
+  for (const line of body.split('\n')) {
+    const event = parseCommandCodeCliEventLine(line);
+    if (!isRecord(event)) continue;
+    if (event.type === 'error') {
+      const { message, statusCode } = streamErrorFacts(event);
+      return {
+        finished: false,
+        error: { message, ...(statusCode === undefined ? {} : { statusCode }) },
+      };
+    }
+    if (event.type === 'finish') return { finished: true };
+  }
+  return { finished: false };
+}
+
 function sseDataLines(): TransformStream<string, unknown> {
   let buffer = '';
   const emit = (line: string, controller: TransformStreamDefaultController<unknown>) => {
-    let trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith(':') || trimmed.startsWith('event:')) return;
-    if (trimmed.startsWith('data:')) trimmed = trimmed.slice(5).trim();
-    if (!trimmed || trimmed === '[DONE]') return;
-    try {
-      controller.enqueue(JSON.parse(trimmed));
-    } catch {
-      // A non-JSON line is not an event on this wire.
-    }
+    const event = parseCommandCodeCliEventLine(line);
+    if (event !== undefined) controller.enqueue(event);
   };
   return new TransformStream<string, unknown>({
     transform(chunk, controller) {
@@ -780,10 +825,13 @@ export function mapFinishReason(reason: unknown): LanguageModelV4FinishReason {
  * response produces, so the runtime's provider-error classification reads
  * status and structured code from one place.
  */
-function streamErrorToApiCallError(
-  event: Record<string, unknown>,
-  input: { url: string; body: unknown },
-): APICallError {
+/** What one in-band `error` event states, shared by the stream and the probe. */
+function streamErrorFacts(event: Record<string, unknown>): {
+  message: string;
+  statusCode?: number;
+  detail?: Record<string, unknown>;
+  explicitRetryable?: boolean;
+} {
   const detail = isRecord(event.error) ? event.error : undefined;
   const message =
     stringValue(detail?.message) ??
@@ -791,8 +839,19 @@ function streamErrorToApiCallError(
     (detail ? JSON.stringify(detail) : stringValue(event.error)) ??
     'Stream error';
   const statusCode = numberValue(detail?.statusCode) ?? numberValue(detail?.status);
-  const explicitRetryable =
-    typeof detail?.isRetryable === 'boolean' ? detail.isRetryable : undefined;
+  return {
+    message,
+    ...(statusCode !== undefined ? { statusCode } : {}),
+    ...(detail !== undefined ? { detail } : {}),
+    ...(typeof detail?.isRetryable === 'boolean' ? { explicitRetryable: detail.isRetryable } : {}),
+  };
+}
+
+function streamErrorToApiCallError(
+  event: Record<string, unknown>,
+  input: { url: string; body: unknown },
+): APICallError {
+  const { message, statusCode, detail, explicitRetryable } = streamErrorFacts(event);
   const isRetryable =
     explicitRetryable ??
     (statusCode !== undefined ? statusCode === 429 || statusCode >= 500 : false);

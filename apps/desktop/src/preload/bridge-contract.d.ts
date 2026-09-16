@@ -428,7 +428,10 @@ export interface DesktopCommandCodeLoginStartInput {
 }
 export type DesktopCommandCodeLoginStartResult =
   | { readonly ok: true; readonly attemptId: string; readonly authUrl: string }
-  | { readonly ok: false; readonly reason: 'port_unavailable' | 'browser_unavailable' };
+  | {
+      readonly ok: false;
+      readonly reason: 'port_unavailable' | 'browser_unavailable' | 'superseded';
+    };
 export type DesktopCommandCodeLoginResult =
   | {
       readonly ok: true;
