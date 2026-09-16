@@ -19,6 +19,13 @@
 
 import { randomUUID } from 'node:crypto';
 import {
+  buildCommandCodeCliRequest,
+  commandCodeCliGenerateUrl,
+  commandCodeCliHeaders,
+  CommandCodeCliTransportDisabledError,
+  isCommandCodeCliTransportEnabled,
+} from './commandcode-cli-language-model.js';
+import {
   PROVIDER_REGISTRY,
   effectiveBaseUrl,
   providerDefaultsOf,
@@ -289,7 +296,35 @@ async function testConnectionModel(
       );
     case 'cohere':
       return await probeCohere(baseUrl, secret, testModel, t0, fetchFn);
+    case 'commandcode-cli':
+      return await probeCommandCodeCli(baseUrl, secret, testModel, t0, fetchFn, requestHeaders);
   }
+}
+
+async function probeCommandCodeCli(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  t0: number,
+  fetchFn: ConnectionEffectFetch | undefined,
+  requestHeaders: Readonly<Record<string, string>> | undefined,
+): Promise<ConnectionTestResult> {
+  if (!isCommandCodeCliTransportEnabled()) {
+    return { ok: false, errorMessage: new CommandCodeCliTransportDisabledError().message };
+  }
+  const { body } = buildCommandCodeCliRequest(
+    { prompt: [{ role: 'user', content: [{ type: 'text', text: 'Hi' }] }], maxOutputTokens: 16 },
+    { modelId: model },
+  );
+  const r = await fetchForConnectionEffect(fetchFn, commandCodeCliGenerateUrl(baseUrl), {
+    method: 'POST',
+    headers: { ...commandCodeCliHeaders(apiKey, 'maka'), ...(requestHeaders ?? {}) },
+    body: JSON.stringify(body),
+    timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
+  });
+  if (!r.ok) return httpFailure(r, t0);
+  await r.cancel();
+  return { ok: true, latencyMs: Date.now() - t0, modelTested: model };
 }
 
 async function probeGitHubCopilot(
