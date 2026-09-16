@@ -147,14 +147,14 @@ export function AddProviderForm(props: {
   const supportsApiKey = providerAuthSupportsApiKey(props.providerType);
   const requiresApiKey = providerAuthRequiresSecret(props.providerType) && supportsApiKey;
   const usesApiKeyDialog = usesQuickApiKeyDialog(props.providerType);
-  // Pasting stays the primary path. Command Code alone can also mint a key
-  // through a browser sign-in; the section under the field only fills the
-  // field, so everything after — validation, creation, discovery — is the
-  // paste path.
+  // Pasting stays the primary path. Command Code GO alone can also mint a key
+  // through a browser sign-in (the same login the CLI performs); the section
+  // under the field only fills the field, so everything after — validation,
+  // creation, discovery — is the paste path. The ordinary Command Code card
+  // stays a plain API-key form.
   const commandCodeBrowserLogin = props.bridge.commandCodeBrowserLogin;
   const browserLoginSection =
-    (props.providerType === 'commandcode' || props.providerType === 'commandcode-go') &&
-    commandCodeBrowserLogin ? (
+    props.providerType === 'commandcode-go' && commandCodeBrowserLogin ? (
       <CommandCodeBrowserLoginSection
         bridge={commandCodeBrowserLogin}
         baseUrl={baseUrl}
