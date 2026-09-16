@@ -46,7 +46,6 @@ const STARTED: CommandCodeBrowserLoginStartResult = {
   ok: true,
   attemptId: 'a1',
   authUrl: 'https://commandcode.ai/studio/auth/cli?state=s',
-  expiresAt: 1,
 };
 
 function harness() {

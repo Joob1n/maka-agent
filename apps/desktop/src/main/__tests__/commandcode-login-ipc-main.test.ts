@@ -35,7 +35,7 @@ function harness() {
   const controller: CommandCodeLoginIpcDeps['controller'] = {
     start: async (input) => {
       calls.push(['start', input]);
-      return { ok: true, attemptId: 'a1', authUrl: 'https://commandcode.ai/x', expiresAt: 1 };
+      return { ok: true, attemptId: 'a1', authUrl: 'https://commandcode.ai/x' };
     },
     complete: async (attemptId) => {
       calls.push(['complete', attemptId]);
@@ -105,14 +105,11 @@ describe('registerCommandCodeLoginIpc', () => {
     assert.deepEqual(calls, [['complete', 'a1']]);
   });
 
-  test('cancel without an id cancels the live attempt; a malformed id is ignored', async () => {
+  test('cancel needs a well-formed attempt id; anything else is ignored', async () => {
     const { calls, invoke } = harness();
     await invoke(COMMANDCODE_LOGIN_IPC_CHANNELS.cancel, undefined);
     await invoke(COMMANDCODE_LOGIN_IPC_CHANNELS.cancel, 'a1');
     await invoke(COMMANDCODE_LOGIN_IPC_CHANNELS.cancel, { attemptId: 'a1' });
-    assert.deepEqual(calls, [
-      ['cancel', undefined],
-      ['cancel', 'a1'],
-    ]);
+    assert.deepEqual(calls, [['cancel', 'a1']]);
   });
 });

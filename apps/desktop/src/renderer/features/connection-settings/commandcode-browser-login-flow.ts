@@ -25,8 +25,13 @@ import type {
   CommandCodeBrowserLoginStartInput,
 } from './ports.js';
 
-/** Renderer-side failure vocabulary: the main-process reasons plus a dead bridge. */
-export type CommandCodeBrowserLoginFlowFailure = CommandCodeBrowserLoginFailureReason | 'unavailable';
+/**
+ * Renderer-side failure vocabulary: the main-process reasons minus the user's
+ * own cancel (which returns to idle) plus a dead bridge.
+ */
+export type CommandCodeBrowserLoginFlowFailure =
+  | Exclude<CommandCodeBrowserLoginFailureReason, 'cancelled'>
+  | 'unavailable';
 
 export type CommandCodeBrowserLoginFlowState =
   | { readonly phase: 'idle' }

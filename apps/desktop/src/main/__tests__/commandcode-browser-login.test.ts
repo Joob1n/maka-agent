@@ -136,7 +136,6 @@ describe('CommandCodeBrowserLoginController', () => {
     assert.equal(started.port, 46_959);
     assert.deepEqual(opened, [started.authUrl]);
     assert.equal(new URL(started.authUrl).searchParams.get('state'), STATE);
-    assert.ok(started.expiresAt > Date.now());
   });
 
   test('an approved callback settles complete() with the delivered credentials and closes the port', async () => {

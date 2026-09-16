@@ -3303,7 +3303,7 @@ const makaBridge = {
     complete(attemptId: string): Promise<DesktopCommandCodeLoginResult> {
       return ipcRenderer.invoke('commandcode-login:complete', attemptId);
     },
-    cancel(attemptId?: string): Promise<void> {
+    cancel(attemptId: string): Promise<void> {
       return ipcRenderer.invoke('commandcode-login:cancel', attemptId);
     },
   },

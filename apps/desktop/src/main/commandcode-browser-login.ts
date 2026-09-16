@@ -96,7 +96,6 @@ export type CommandCodeBrowserLoginStartResult =
       readonly attemptId: string;
       /** The approval page, for a "browser did not open?" fallback link. */
       readonly authUrl: string;
-      readonly expiresAt: number;
     }
   | {
       readonly ok: false;
@@ -116,7 +115,6 @@ export interface CommandCodeBrowserLoginDeps {
   startPort?: number;
   maxPortAttempts?: number;
   randomToken?: (byteLength: number) => string;
-  now?: () => number;
 }
 
 /** Studio host that mints keys for a given Provider API base. */
@@ -207,11 +205,10 @@ export class CommandCodeBrowserLoginController {
       port: attempt.port,
       state,
     });
-    const timeoutMs = this.#deps.timeoutMs ?? COMMANDCODE_LOGIN_TIMEOUT_MS;
-    const expiresAt = (this.#deps.now?.() ?? Date.now()) + timeoutMs;
-    attempt.timer = setTimeout(() => {
-      this.#finish(attempt, { ok: false, reason: 'timeout' });
-    }, timeoutMs);
+    attempt.timer = setTimeout(
+      () => this.#finish(attempt, { ok: false, reason: 'timeout' }),
+      this.#deps.timeoutMs ?? COMMANDCODE_LOGIN_TIMEOUT_MS,
+    );
     attempt.timer.unref?.();
 
     try {
@@ -222,7 +219,7 @@ export class CommandCodeBrowserLoginController {
     }
     // The browser may already have posted back while openExternal was
     // pending; `complete()` reads the settled result either way.
-    return { ok: true, attemptId: attempt.id, authUrl, expiresAt };
+    return { ok: true, attemptId: attempt.id, authUrl };
   }
 
   /**

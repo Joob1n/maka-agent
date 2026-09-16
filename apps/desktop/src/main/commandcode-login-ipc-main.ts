@@ -60,11 +60,6 @@ export function registerCommandCodeLoginIpc(deps: CommandCodeLoginIpcDeps): void
     },
   );
   deps.ipcMain.handle(COMMANDCODE_LOGIN_IPC_CHANNELS.cancel, (_event, raw: unknown): void => {
-    // `undefined` cancels whatever attempt is live; anything else must name one.
-    if (raw === undefined) {
-      deps.controller.cancel();
-      return;
-    }
     const attemptId = decodeAttemptId(raw);
     if (attemptId !== undefined) deps.controller.cancel(attemptId);
   });

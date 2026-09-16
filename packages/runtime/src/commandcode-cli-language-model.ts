@@ -63,7 +63,7 @@ import {
 export const COMMANDCODE_CLI_VERSION = '1.54.0';
 export const COMMANDCODE_CLI_TRANSPORT_ENVIRONMENT_VARIABLE =
   'MAKA_COMMANDCODE_CLI_TRANSPORT_EXPERIMENTAL';
-export const COMMANDCODE_CLI_DEFAULT_MAX_TOKENS = 64_000;
+const DEFAULT_MAX_TOKENS = 64_000;
 const DEFAULT_TEMPERATURE = 0.3;
 /** The gateway rejects `call_id` values longer than this. */
 const MAX_WIRE_TOOL_CALL_ID_LENGTH = 64;
@@ -120,8 +120,6 @@ export interface CommandCodeCliLanguageModelConfig {
   /** Provider API root, e.g. `https://api.commandcode.ai`. */
   readonly apiBase: string;
   readonly fetch?: typeof globalThis.fetch;
-  /** Extra request headers (request customization); they win over the CLI set. */
-  readonly headers?: Readonly<Record<string, string>>;
   /** What the CLI would call the working directory; only its slug crosses the wire. */
   readonly workingDir?: string;
   readonly now?: () => Date;
@@ -214,7 +212,6 @@ export class CommandCodeCliLanguageModel implements LanguageModelV4 {
     const fetchFn = this.#config.fetch ?? globalThis.fetch;
     const headers: Record<string, string> = {
       ...commandCodeCliHeaders(this.#config.apiKey, this.#config.workingDir ?? DEFAULT_WORKING_DIR),
-      ...(this.#config.headers ?? {}),
       ...definedHeaders(options.headers),
     };
     let response: Response;
@@ -336,7 +333,7 @@ export function buildCommandCodeCliRequest(
       messages,
       tools,
       system,
-      max_tokens: options.maxOutputTokens ?? COMMANDCODE_CLI_DEFAULT_MAX_TOKENS,
+      max_tokens: options.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
       temperature: options.temperature ?? DEFAULT_TEMPERATURE,
       stream: true,
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),

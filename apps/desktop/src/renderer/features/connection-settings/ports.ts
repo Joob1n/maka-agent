@@ -108,12 +108,7 @@ export interface CommandCodeBrowserLoginStartInput {
 }
 
 export type CommandCodeBrowserLoginStartResult =
-  | {
-      readonly ok: true;
-      readonly attemptId: string;
-      readonly authUrl: string;
-      readonly expiresAt: number;
-    }
+  | { readonly ok: true; readonly attemptId: string; readonly authUrl: string }
   | { readonly ok: false; readonly reason: 'port_unavailable' | 'browser_unavailable' };
 
 export type CommandCodeBrowserLoginResult =
@@ -123,7 +118,7 @@ export type CommandCodeBrowserLoginResult =
 export interface CommandCodeBrowserLoginBridge {
   start(input: CommandCodeBrowserLoginStartInput): Promise<CommandCodeBrowserLoginStartResult>;
   complete(attemptId: string): Promise<CommandCodeBrowserLoginResult>;
-  cancel(attemptId?: string): Promise<void>;
+  cancel(attemptId: string): Promise<void>;
 }
 
 export interface ConnectionsBridge {

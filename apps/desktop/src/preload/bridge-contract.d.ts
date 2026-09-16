@@ -427,7 +427,7 @@ export interface DesktopCommandCodeLoginStartInput {
   readonly baseUrl?: string;
 }
 export type DesktopCommandCodeLoginStartResult =
-  | { readonly ok: true; readonly attemptId: string; readonly authUrl: string; readonly expiresAt: number }
+  | { readonly ok: true; readonly attemptId: string; readonly authUrl: string }
   | { readonly ok: false; readonly reason: 'port_unavailable' | 'browser_unavailable' };
 export type DesktopCommandCodeLoginResult =
   | {
@@ -1683,7 +1683,7 @@ export interface MakaBridge {
   commandCodeLogin: {
     start(input: DesktopCommandCodeLoginStartInput): Promise<DesktopCommandCodeLoginStartResult>;
     complete(attemptId: string): Promise<DesktopCommandCodeLoginResult>;
-    cancel(attemptId?: string): Promise<void>;
+    cancel(attemptId: string): Promise<void>;
   };
   githubCopilotSubscription: {
     connectExistingLogin(host?: DesktopRuntimeHostRef): Promise<SubscriptionActionResult>;

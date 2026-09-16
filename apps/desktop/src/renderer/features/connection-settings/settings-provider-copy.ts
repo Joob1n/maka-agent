@@ -262,7 +262,6 @@ const zhCopy = {
       failed: {
         denied: '授权已被拒绝。可以改为手动粘贴 API Key。',
         timeout: '等待授权超时。可以重试，或手动粘贴 API Key。',
-        cancelled: '已取消。',
         superseded: '这次登录已被新的尝试替代。',
         port_unavailable: '本机 5959–5968 端口都被占用，请手动粘贴 API Key。',
         browser_unavailable: '无法打开浏览器，请手动粘贴 API Key。',
@@ -461,7 +460,6 @@ const zhTwCopy = {
       failed: {
         denied: '授權已被拒絕。可以改為手動貼上 API Key。',
         timeout: '等待授權逾時。可以重試，或手動貼上 API Key。',
-        cancelled: '已取消。',
         superseded: '這次登入已被新的嘗試取代。',
         port_unavailable: '本機 5959–5968 連接埠都被佔用，請手動貼上 API Key。',
         browser_unavailable: '無法開啟瀏覽器，請手動貼上 API Key。',
@@ -661,7 +659,6 @@ const enCopy: ProviderSettingsCopy = {
       failed: {
         denied: 'Authorization was denied. You can paste an API key instead.',
         timeout: 'Timed out waiting for approval. Retry, or paste an API key.',
-        cancelled: 'Cancelled.',
         superseded: 'This sign-in was replaced by a newer attempt.',
         port_unavailable: 'Ports 5959–5968 are all in use on this machine. Paste an API key instead.',
         browser_unavailable: 'The browser could not be opened. Paste an API key instead.',
