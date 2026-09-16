@@ -28,7 +28,6 @@ import type {
   SandboxBoundarySettlement,
   SettleSandboxBoundaryRequest,
 } from '@maka/core/sandbox-boundary';
-import type { RecallCandidate, RecallCandidateRequest } from '@maka/core/recall';
 import type { CreateSessionInput, SessionListFilter } from '@maka/core/runtime-inputs';
 
 import type {
@@ -335,14 +334,6 @@ export interface SessionTurnLandmarkSnapshot {
   readonly landmarks: readonly SessionTurnLandmark[];
 }
 
-/**
- * Storage-side narrowing for recall. The shapes are recall's own, aliased
- * under storage names: one declaration, so the store and the predicate it
- * over-approximates cannot drift apart.
- */
-export type SessionSearchCandidateRequest = RecallCandidateRequest;
-export type SessionSearchCandidate = RecallCandidate;
-
 export interface SessionStore {
   create(input: CreateSessionInput, initialBoundary?: ExecutionBoundary): Promise<SessionHeader>;
   list(filter?: SessionListFilter): Promise<SessionSummary[]>;
@@ -357,18 +348,19 @@ export interface SessionStore {
   readHeader(sessionId: string): Promise<SessionHeader>;
   readMessages(sessionId: string): Promise<StoredMessage[]>;
   /**
-   * Narrow recall to messages whose folded stored record contains a folded
-   * term. The result is a superset of the true matches, never an answer:
-   * callers re-run the real predicate on projected, redacted text. Resolves to
-   * `undefined` when the store declines the fast path, which sends the caller
-   * back to reading transcripts. A store that implements this must also
-   * implement `countSearchableMessages`; recall ignores one without the other.
+   * Narrow recall to the pre-ledger Sessions whose transcript rows contain a
+   * folded term. Sessions the RuntimeEvent ledger owns are not scanned here;
+   * the ledger store answers for them. The result is a superset of the true
+   * matches, never an answer: callers project each candidate Session and
+   * re-run the real predicate. Resolves to `undefined` when the store declines
+   * the fast path, which sends the caller back to reading every transcript.
    */
-  listSearchCandidates?(
-    request: SessionSearchCandidateRequest,
-  ): Promise<SessionSearchCandidate[] | undefined>;
-  /** Corpus size for recall's idf term, counted over searchable message types. */
-  countSearchableMessages?(sessionIds: readonly string[]): Promise<number>;
+  listLegacyTranscriptCandidateSessions?(
+    sessionIds: readonly string[],
+    terms: readonly string[],
+  ): Promise<string[] | undefined>;
+  /** Pre-ledger transcript rows of searchable types, for recall's idf term. */
+  countLegacyTranscriptMessages?(sessionIds: readonly string[]): Promise<number>;
   readMessagesAfter(
     sessionId: string,
     request: SessionMessageScanRequest,

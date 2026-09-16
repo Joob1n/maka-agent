@@ -20,8 +20,6 @@
 import {
   SessionMetadataConflictError,
   SessionMetadataVersionConflictError,
-  type SessionSearchCandidate,
-  type SessionSearchCandidateRequest,
   type VersionedSessionIdentity,
   type SessionConfigurationMetadataUpdate,
 } from './session-store-contract.js';
@@ -182,6 +180,11 @@ import {
 } from './sqlite-session-metadata-schema.js';
 import type { OperationalStateDatabaseLease } from './operational-state-store.js';
 import {
+  assertFoldedSearchTerm,
+  recallFoldedMatchClause,
+  registerRecallFoldFunction,
+} from './recall-fold.js';
+import {
   buildSqliteSessionCatalogPageQuery,
   type SqliteSessionCatalogCursor,
 } from './sqlite-session-catalog-query.js';
@@ -208,45 +211,6 @@ function decodeStoredMessage(value: unknown): StoredMessage {
  */
 const SEARCHABLE_MESSAGE_TYPES = ['user', 'assistant', 'tool_call', 'tool_result'] as const;
 const SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS = SEARCHABLE_MESSAGE_TYPES.map(() => '?').join(', ');
-
-/**
- * Recall folds text as NFC + Unicode lowercase; SQLite's `lower()` folds ASCII
- * only. The candidate scan therefore matches `lower(record)` and, for every
- * record where the two folds disagree, offers the record unconditionally. This
- * function is that disagreement test, registered on the connection so the scan
- * stays one SQL statement.
- *
- * A record is stable when Unicode folding changes nothing ASCII folding would
- * not: no cased letters outside ASCII, no compatibility or decomposed forms
- * that NFC rewrites. On stable records `instr(lower(record), term)` is exactly
- * recall's predicate, and on unstable ones the record is a candidate anyway,
- * so the scan never under-selects whatever script the transcript is in.
- */
-const RECALL_FOLD_UNSTABLE_FUNCTION = 'maka_recall_fold_unstable';
-const ASCII_ONLY_PATTERN = /^[\u0000-\u007f]*$/u;
-const ASCII_UPPERCASE_PATTERN = /[A-Z]/gu;
-
-function isRecallFoldUnstable(value: string): boolean {
-  if (ASCII_ONLY_PATTERN.test(value)) return false;
-  return (
-    value.normalize('NFC').toLowerCase() !==
-    value.replace(ASCII_UPPERCASE_PATTERN, (character) => character.toLowerCase())
-  );
-}
-
-function registerRecallFoldFunction(db: DatabaseSync): void {
-  db.function(RECALL_FOLD_UNSTABLE_FUNCTION, { deterministic: true, directOnly: true }, (value) =>
-    typeof value === 'string' && isRecallFoldUnstable(value) ? 1 : 0,
-  );
-}
-
-function assertFoldedSearchTerm(term: string): void {
-  // A raw term against a folded record would under-select silently, which is
-  // the one failure this scan exists to rule out. Fail loudly instead.
-  if (term !== term.normalize('NFC').toLowerCase()) {
-    throw new Error('Session search candidate terms must be folded');
-  }
-}
 
 const require = createRequire(import.meta.url);
 const AGENT_GRAPH_CONTROL_DELETE_TABLES = SQLITE_AGENT_GRAPH_CONTROL_TABLES.filter(
@@ -2708,15 +2672,20 @@ export class SqliteSessionMetadataStore {
   }
 
   /**
-   * Narrows recall to the messages whose folded stored record contains one of
-   * the folded terms. The result is a superset of the true matches, never an
-   * answer: the caller re-runs the real predicate on projected, redacted text,
-   * so over-selection here costs a little work and under-selection would lose
-   * results silently.
+   * Narrows recall to the pre-ledger Sessions whose transcript rows contain
+   * one of the folded terms. The answer is a superset of the true matches,
+   * never an answer: the caller projects each candidate Session and re-runs the
+   * real predicate on the projected, redacted text.
+   *
+   * Only Sessions the ledger does not yet own are scanned here. A Session with
+   * `transcriptLedgerVersion` 1 is projected from `runtime_events`, and its
+   * rows in these tables are a frozen copy of what the conversion read, so the
+   * ledger scan already covers it. Sessions still awaiting conversion, and
+   * imports still being prepared, keep their transcript here.
    *
    * Folding is ASCII `lower()` in SQL plus an unconditional match on every
-   * record that fold cannot reproduce — see `isRecallFoldUnstable`. Terms must
-   * arrive folded; a raw term is rejected rather than quietly mismatched.
+   * record that fold cannot reproduce — see `recall-fold.ts`. Terms must arrive
+   * folded; a raw term is rejected rather than quietly mismatched.
    *
    * Two scans rather than one condition, because the two storage forms need
    * different reads. An inline record is matched directly; a record above the
@@ -2724,157 +2693,106 @@ export class SqliteSessionMetadataStore {
    * reassembled from its chunks first. SQLite concatenates chunk blobs
    * byte-wise, which restores characters a chunk boundary split in half.
    *
-   * Returns `undefined` when the candidate set exceeds `limit`, which declines
-   * the fast path rather than truncating it — a truncated candidate set is no
-   * longer a superset.
+   * Returns `undefined` when a chunked record cannot be reassembled, which
+   * declines the fast path rather than answering with fewer candidates.
    */
-  async listSearchCandidates(
-    request: SessionSearchCandidateRequest,
-  ): Promise<SessionSearchCandidate[] | undefined> {
+  async listLegacyTranscriptCandidateSessions(
+    sessionIds: readonly string[],
+    terms: readonly string[],
+  ): Promise<string[] | undefined> {
     this.assertOpen();
-    if (request.sessionIds.length === 0 || request.terms.length === 0) return [];
-    for (const sessionId of request.sessionIds) assertSafeSessionId(sessionId);
-    for (const term of request.terms) assertFoldedSearchTerm(term);
-    if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
-      throw new Error('Invalid Session search candidate limit');
-    }
+    if (sessionIds.length === 0 || terms.length === 0) return [];
+    for (const sessionId of sessionIds) assertSafeSessionId(sessionId);
+    for (const term of terms) assertFoldedSearchTerm(term);
 
-    const sessions = request.sessionIds.map(() => '?').join(', ');
-    const inlineMatch = [
-      ...request.terms.map(() => 'instr(lower(message.record_json), ?) > 0'),
-      `${RECALL_FOLD_UNSTABLE_FUNCTION}(message.record_json)`,
-    ].join(' OR ');
-    const chunkedMatch = [
-      ...request.terms.map(() => 'instr(lower(chunked.body), ?) > 0'),
-      `${RECALL_FOLD_UNSTABLE_FUNCTION}(chunked.body)`,
-    ].join(' OR ');
+    const sessions = sessionIds.map(() => '?').join(', ');
+    const inlineMatch = recallFoldedMatchClause('message.record_json', terms.length);
+    const chunkedMatch = recallFoldedMatchClause('chunked.body', terms.length);
 
-    const located = this.readTransaction(() => {
-      // A payload row whose chunks do not reassemble would be dropped by the
-      // match below, which is the one way this scan could return less than a
-      // superset. Storage should never produce it, so decline the fast path
-      // rather than quietly answering with fewer candidates.
+    return this.readTransaction(() => {
+      // A payload row whose chunks do not reassemble to the bytes it recorded
+      // would be matched on a body shorter than the record, which is the one
+      // way this scan could return less than a superset: the term could sit in
+      // the part that is missing. A short body is as unusable as no body at
+      // all, so both decline the fast path rather than quietly answering with
+      // fewer candidates.
       const unreadable = this.db
         .prepare(
           `
           SELECT count(*) AS total
           FROM session_message_payloads AS payload
           WHERE payload.session_id IN (${sessions})
-            AND (SELECT group_concat(CAST(chunk.data AS TEXT), '' ORDER BY chunk.chunk_index)
-                   FROM session_message_chunks AS chunk
-                  WHERE chunk.session_id = payload.session_id
-                    AND chunk.sequence = payload.sequence) IS NULL
+            AND COALESCE(
+                  octet_length((SELECT group_concat(CAST(chunk.data AS TEXT), '' ORDER BY chunk.chunk_index)
+                                  FROM session_message_chunks AS chunk
+                                 WHERE chunk.session_id = payload.session_id
+                                   AND chunk.sequence = payload.sequence)),
+                  -1
+                ) <> payload.record_bytes
         `,
         )
-        .get(...request.sessionIds) as { total?: unknown } | undefined;
+        .get(...sessionIds) as { total?: unknown } | undefined;
       if (typeof unreadable?.total === 'number' && unreadable.total > 0) return undefined;
 
-      const inline = this.db
+      const rows = this.db
         .prepare(
           `
-          SELECT message.session_id, message.sequence
-          FROM session_messages AS message
-          LEFT JOIN session_message_payloads AS payload
-            ON payload.session_id = message.session_id AND payload.sequence = message.sequence
-          WHERE message.session_id IN (${sessions})
-            AND message.message_type IN (${SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS})
-            AND payload.sequence IS NULL
-            AND (${inlineMatch})
-          ORDER BY message.session_id, message.sequence
-          LIMIT ?
-        `,
-        )
-        .all(
-          ...request.sessionIds,
-          ...SEARCHABLE_MESSAGE_TYPES,
-          ...request.terms,
-          request.limit + 1,
-        ) as Array<{ session_id?: unknown; sequence?: unknown }>;
-
-      const chunked = this.db
-        .prepare(
-          `
-          WITH chunked AS (
+          WITH legacy AS (
+            SELECT metadata.session_id
+            FROM session_metadata AS metadata
+            WHERE metadata.session_id IN (${sessions})
+              AND COALESCE(json_extract(metadata.payload_json, '$.transcriptLedgerVersion'), -1) <> 1
+          ),
+          chunked AS (
             SELECT payload.session_id, payload.sequence,
                    (SELECT group_concat(CAST(chunk.data AS TEXT), '' ORDER BY chunk.chunk_index)
                       FROM session_message_chunks AS chunk
                      WHERE chunk.session_id = payload.session_id
                        AND chunk.sequence = payload.sequence) AS body
               FROM session_message_payloads AS payload
-             WHERE payload.session_id IN (${sessions})
+             WHERE payload.session_id IN (SELECT session_id FROM legacy)
           )
-          SELECT message.session_id, message.sequence
+          SELECT DISTINCT message.session_id
+          FROM session_messages AS message
+          LEFT JOIN session_message_payloads AS payload
+            ON payload.session_id = message.session_id AND payload.sequence = message.sequence
+          WHERE message.session_id IN (SELECT session_id FROM legacy)
+            AND message.message_type IN (${SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS})
+            AND payload.sequence IS NULL
+            AND (${inlineMatch})
+          UNION
+          SELECT DISTINCT message.session_id
           FROM session_messages AS message
           JOIN chunked
             ON chunked.session_id = message.session_id AND chunked.sequence = message.sequence
           WHERE message.message_type IN (${SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS})
             AND chunked.body IS NOT NULL
             AND (${chunkedMatch})
-          ORDER BY message.session_id, message.sequence
-          LIMIT ?
         `,
         )
         .all(
-          ...request.sessionIds,
+          ...sessionIds,
           ...SEARCHABLE_MESSAGE_TYPES,
-          ...request.terms,
-          request.limit + 1,
-        ) as Array<{ session_id?: unknown; sequence?: unknown }>;
-
-      return [...inline, ...chunked];
-    });
-
-    if (!located || located.length > request.limit) return undefined;
-
-    const bySession = new Map<string, number[]>();
-    for (const row of located) {
-      const sessionId = row.session_id;
-      if (typeof sessionId !== 'string') {
-        throw new Error('Session search candidate is missing its Session');
-      }
-      const sequence = requireStoredMessageSequence(row.sequence, sessionId);
-      const sequences = bySession.get(sessionId);
-      if (sequences) sequences.push(sequence);
-      else bySession.set(sessionId, [sequence]);
-    }
-
-    const candidates: SessionSearchCandidate[] = [];
-    for (const [sessionId, sequences] of bySession) {
-      sequences.sort((left, right) => left - right);
-      for (
-        let offset = 0;
-        offset < sequences.length;
-        offset += SQLITE_TRANSCRIPT_MESSAGE_LOOKUP_BATCH_SIZE
-      ) {
-        const batch = sequences.slice(offset, offset + SQLITE_TRANSCRIPT_MESSAGE_LOOKUP_BATCH_SIZE);
-        const rows = this.readTransaction(() => readStoredMessageRows(this.db, sessionId, batch));
-        for (const row of rows) {
-          let message: StoredMessage;
-          try {
-            message = decodeStoredMessage(JSON.parse(row.recordJson) as unknown);
-          } catch (error) {
-            throw new StoredSessionMessageIncompatibleError(sessionId, row.sequence, {
-              cause: error,
-            });
-          }
-          candidates.push({ sessionId, message });
+          ...terms,
+          ...SEARCHABLE_MESSAGE_TYPES,
+          ...terms,
+        ) as Array<{ session_id?: unknown }>;
+      return rows.map((row) => {
+        if (typeof row.session_id !== 'string') {
+          throw new Error('Session search candidate is missing its Session');
         }
-      }
-    }
-    return candidates;
+        return row.session_id;
+      });
+    });
   }
 
   /**
-   * Corpus size for recall's idf term. Counting only the candidates would make
-   * every candidate contain the term, collapsing idf to zero for a single-term
-   * query, so the denominator has to come from the whole searchable corpus.
-   *
-   * This counts by message type, which slightly over-counts: whether a record
-   * projects to visible text is a JS decision this layer cannot make. The
-   * error is uniform across terms, so it shifts every idf by the same amount
-   * and leaves the ranking it feeds intact.
+   * How many pre-ledger transcript rows could project to a searchable message,
+   * for recall's idf term. Counted by message type rather than by projecting,
+   * so it is cheap and identical whichever path recall takes to find its hits;
+   * Sessions the ledger owns are counted from `runtime_events` instead.
    */
-  async countSearchableMessages(sessionIds: readonly string[]): Promise<number> {
+  async countLegacyTranscriptMessages(sessionIds: readonly string[]): Promise<number> {
     this.assertOpen();
     if (sessionIds.length === 0) return 0;
     for (const sessionId of sessionIds) assertSafeSessionId(sessionId);
@@ -2884,9 +2802,11 @@ export class SqliteSessionMetadataStore {
         .prepare(
           `
           SELECT count(*) AS total
-          FROM session_messages
-          WHERE session_id IN (${sessions})
-            AND message_type IN (${SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS})
+          FROM session_messages AS message
+          JOIN session_metadata AS metadata ON metadata.session_id = message.session_id
+          WHERE message.session_id IN (${sessions})
+            AND COALESCE(json_extract(metadata.payload_json, '$.transcriptLedgerVersion'), -1) <> 1
+            AND message.message_type IN (${SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS})
         `,
         )
         .get(...sessionIds, ...SEARCHABLE_MESSAGE_TYPES) as { total?: unknown } | undefined;

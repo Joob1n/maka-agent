@@ -30,7 +30,11 @@
  */
 
 import type { WorkHubActionReceipt } from '@maka/core/workhub-action-result';
-import type { RecallCandidate, RecallCandidateRequest } from '@maka/core/recall';
+import {
+  countRecallSearchableMessages,
+  listRecallCandidateSessions,
+  type RecallCandidateStores,
+} from './recall-candidates.js';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -597,22 +601,19 @@ export interface RegenerateTurnSource {
   readonly content: MessageContent;
 }
 
-/** Storage-side narrowing for recall, under the names the store contract uses. */
-export type SessionSearchCandidateRequest = RecallCandidateRequest;
-export type SessionSearchCandidate = RecallCandidate;
-
 export interface SessionStore {
   create(input: CreateSessionInput, initialBoundary?: ExecutionBoundary): Promise<SessionHeader>;
   /**
-   * Narrow recall to messages whose folded stored record contains a folded
-   * term. A superset of the true matches, never an answer. `undefined`
-   * declines the fast path, which sends the caller back to reading transcripts.
+   * Recall's narrowing over pre-ledger transcripts: the Sessions among the
+   * given ones whose transcript rows contain a folded term. A superset, never
+   * an answer; `undefined` declines the fast path. See `recall-candidates.ts`.
    */
-  listSearchCandidates?(
-    request: SessionSearchCandidateRequest,
-  ): Promise<SessionSearchCandidate[] | undefined>;
-  /** Corpus size for recall's idf term, counted over searchable message types. */
-  countSearchableMessages?(sessionIds: readonly string[]): Promise<number>;
+  listLegacyTranscriptCandidateSessions?(
+    sessionIds: readonly string[],
+    terms: readonly string[],
+  ): Promise<string[] | undefined>;
+  /** Pre-ledger transcript rows of searchable types, for recall's idf term. */
+  countLegacyTranscriptMessages?(sessionIds: readonly string[]): Promise<number>;
   createSubagent(
     input: CreateSessionInput,
     initialBoundary?: ExecutionBoundary,
@@ -1349,20 +1350,28 @@ export class SessionManager {
   }
 
   /**
-   * Narrow recall to messages whose folded stored record contains a folded
-   * term. The result is a superset of the true matches, so callers must re-run
-   * the real predicate; `undefined` means the store declined the fast path and
-   * the caller should fall back to reading transcripts.
+   * Recall's narrowing: which of the given Sessions could hold a message
+   * containing a folded term, from the ledger and the pre-ledger transcript
+   * tables together. A superset of the Sessions that match, never an answer;
+   * `undefined` means the fast path declined and recall reads every transcript.
    */
-  async listSearchCandidates(
-    request: SessionSearchCandidateRequest,
-  ): Promise<SessionSearchCandidate[] | undefined> {
-    return this.deps.store.listSearchCandidates?.(request);
+  async listRecallCandidateSessions(
+    sessionIds: readonly string[],
+    terms: readonly string[],
+  ): Promise<string[] | undefined> {
+    return listRecallCandidateSessions(this.recallCandidateStores(), sessionIds, terms);
   }
 
-  /** Corpus size for recall's idf term. */
-  async countSearchableMessages(sessionIds: readonly string[]): Promise<number | undefined> {
-    return this.deps.store.countSearchableMessages?.(sessionIds);
+  /** Corpus size for recall's idf term, across both transcript stores. */
+  async countRecallSearchableMessages(sessionIds: readonly string[]): Promise<number | undefined> {
+    return countRecallSearchableMessages(this.recallCandidateStores(), sessionIds);
+  }
+
+  private recallCandidateStores(): RecallCandidateStores {
+    return {
+      transcripts: this.deps.store,
+      ...(this.deps.runtimeEventStore ? { ledger: this.deps.runtimeEventStore } : {}),
+    };
   }
 
   async getContextDiagnostics(sessionId: string): Promise<ContextDiagnostics> {

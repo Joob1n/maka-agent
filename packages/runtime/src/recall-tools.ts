@@ -20,6 +20,7 @@
 import {
   expandRecallPassage,
   RECALL_EXPAND_MAX_NEIGHBOURS,
+  RECALL_ID_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_MAX_LIMIT,
   RECALL_MAX_TERMS,
@@ -83,7 +84,7 @@ export function buildRecallTool(deps: RecallToolDeps): MakaTool {
           .string()
           .trim()
           .min(1)
-          .max(256)
+          .max(RECALL_ID_MAX_CHARS)
           .optional()
           .describe('Restrict recall to one Session.'),
         since: z
@@ -130,6 +131,10 @@ export function buildRecallTool(deps: RecallToolDeps): MakaTool {
         })),
         passages: result.passages.map((passage) => projectPassage(passage, context.sessionId)),
         gaps: result.gaps,
+        // Whether every Session was read or a narrowing chose them: an empty
+        // envelope means different things under the two, and only the caller
+        // can decide whether to widen its terms.
+        searched_every_session: result.scannedFully,
       };
     },
   };
@@ -147,12 +152,17 @@ export function buildRecallMoreTool(deps: RecallToolDeps): MakaTool {
       'Hidden reasoning, permission records, and raw tool arguments are never returned.',
     parameters: z
       .object({
-        session_id: z.string().trim().min(1).max(256).describe('From a Recall passage.'),
+        session_id: z
+          .string()
+          .trim()
+          .min(1)
+          .max(RECALL_ID_MAX_CHARS)
+          .describe('From a Recall passage.'),
         anchor_message_id: z
           .string()
           .trim()
           .min(1)
-          .max(256)
+          .max(RECALL_ID_MAX_CHARS)
           .describe('The passage anchor id from Recall.'),
         before: z
           .number()

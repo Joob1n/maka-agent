@@ -29,21 +29,24 @@
  *   1. Admission. Credential-shaped terms are rejected before any corpus is
  *      touched, and workspace privacy is validated fail-closed.
  *   2. Distilled layer. `searchFacts` reads already-extracted statements.
- *   3. Transcript layer. A cheap candidate source narrows the scan, the real
- *      predicate decides, BM25 ranks, a per-Session quota diversifies, and
- *      passages are assembled from the winners.
+ *   3. Transcript layer. A cheap candidate source names the Sessions worth
+ *      reading, the real predicate decides message by message, BM25 ranks, a
+ *      per-Session quota diversifies, and passages are assembled from the
+ *      winners.
  *
  * Two invariants hold the design together:
  *
- *   - **The candidate source filters; this module decides.** `listCandidates`
- *     may over-select freely but must never under-select: its result has to be
- *     a superset of the true matches. Verification re-runs the exact predicate
- *     `indexOf(fold(redact(extract(m))), fold(term))` that a full scan would,
- *     so swapping candidate sources cannot change which messages match.
+ *   - **The candidate source narrows; this module decides.**
+ *     `listCandidateSessions` may over-name freely but must never under-name:
+ *     every Session with a matching message has to be in its answer.
+ *     Verification then reads each named Session and runs the exact predicate
+ *     a full scan would on every message, so swapping candidate sources cannot
+ *     change which messages match.
  *   - **Redaction precedes matching.** Substring matching plus a hit/no-hit
- *     signal is a prefix-extension oracle, so terms are matched against
- *     redacted text only. A candidate source may read raw records, but its
- *     output never reaches a caller without passing verification first.
+ *     signal is a prefix-extension oracle, so a term must be found in the
+ *     redacted text. It must also be found in the stored text, which is what
+ *     lets a scan of stored records stand in for the predicate; a term found
+ *     only in a redaction artifact names nothing that was said.
  *
  * Scoring is Okapi BM25 with Lucene's parameters and Lucene's smoothed idf,
  * which never goes negative for a term that appears in most of the corpus,
@@ -56,12 +59,7 @@ import { redactSecrets } from './redaction.js';
 import { SEARCH_QUERY_MAX_CHARS } from './search.js';
 import { collapseSessionRevisions } from './session-revisions.js';
 import type { SessionSummary, StoredMessage } from './session.js';
-import {
-  collectSearchableText,
-  foldForMatch,
-  MAX_SESSIONS_SCANNED,
-  threadSearchMatchKind,
-} from './thread-search.js';
+import { foldForMatch, MAX_SESSIONS_SCANNED, threadSearchMatchKind } from './thread-search.js';
 
 /** Okapi BM25 term-frequency saturation, Lucene's default. */
 export const RECALL_BM25_K1 = 1.2;
@@ -100,11 +98,10 @@ export const RECALL_TOTAL_PAYLOAD_CAP_BYTES = 96 * 1024;
 export const RECALL_PASSAGE_MAX_BYTES = 12 * 1024;
 
 /**
- * Candidate ceiling. A source that would exceed it must decline rather than
- * truncate: a truncated candidate set is no longer a superset, and the
- * matches it dropped would vanish without any error.
+ * Cap on the text recall extracts from one tool result. Machine output can run
+ * to megabytes; past this much of it a match says nothing about relevance.
  */
-export const RECALL_CANDIDATE_LIMIT = 5000;
+export const RECALL_TOOL_RESULT_TEXT_CAP_BYTES = 10 * 1024;
 
 /**
  * Weight on a tool result's score.
@@ -144,6 +141,71 @@ function hasJsonEscapedCharacter(term: string): boolean {
     if ((character.codePointAt(0) ?? 0) < FIRST_UNESCAPED_CODE_POINT) return true;
   }
   return false;
+}
+
+/**
+ * The text recall matches and returns for one message: what a reader of the
+ * transcript would see, never the envelope around it.
+ *
+ * For a user turn that is the human-facing text; for an assistant turn its
+ * answer, not its reasoning; for a tool call the intent the runtime wrote for
+ * the user. A tool result is machine output shaped by whichever tool produced
+ * it, so its text is every string value in the result — the file contents, the
+ * command output, the search snippets — joined on separate lines, and not the
+ * JSON keys and kind tags that structure them. Those keys are an artifact of
+ * how the result is stored: matching them would find every result of a shape
+ * rather than anything that was said, and a store that keeps results in a
+ * different shape could not offer them. An archived result carries only ids
+ * and hashes, so it has no text.
+ */
+export function recallSearchableText(message: StoredMessage): string | undefined {
+  switch (message.type) {
+    case 'user':
+      return message.displayText ?? message.text;
+    case 'assistant':
+      return message.text;
+    case 'tool_call':
+      return message.intent && message.intent.length > 0 ? message.intent : undefined;
+    case 'tool_result': {
+      if (message.content.kind === 'archived_tool_result') return undefined;
+      // The top-level `kind` is the result's shape tag, not its output.
+      const { kind: _kind, ...output } = message.content;
+      const leaves: string[] = [];
+      let bytes = 0;
+      collectStringLeaves(output, (leaf) => {
+        if (bytes >= RECALL_TOOL_RESULT_TEXT_CAP_BYTES) return false;
+        const remaining = RECALL_TOOL_RESULT_TEXT_CAP_BYTES - bytes;
+        const text = truncateUtf8(leaf, remaining);
+        leaves.push(text);
+        bytes += Buffer.byteLength(text, 'utf8') + 1;
+        return true;
+      });
+      return leaves.length > 0 ? leaves.join('\n') : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Removes projection-written text before matching; see `RecallDeps.syntheticTextPatterns`. */
+function stripSyntheticText(text: string, patterns: readonly RegExp[] | undefined): string {
+  if (!patterns || patterns.length === 0) return text;
+  let stripped = text;
+  for (const pattern of patterns) stripped = stripped.replace(pattern, '');
+  return stripped;
+}
+
+/** Visits every string value in a JSON-like value, in document order, until the visitor declines. */
+function collectStringLeaves(value: unknown, visit: (leaf: string) => boolean): boolean {
+  if (typeof value === 'string') return visit(value);
+  if (Array.isArray(value)) {
+    for (const item of value) if (!collectStringLeaves(item, visit)) return false;
+    return true;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value)) if (!collectStringLeaves(item, visit)) return false;
+  }
+  return true;
 }
 
 /**
@@ -230,32 +292,17 @@ export interface RecallFailure {
 export type RecallResult = RecallSuccess | RecallFailure;
 
 /**
- * One row offered by a candidate source. `message` is already decoded, which
- * keeps this module free of any storage encoding, including the chunked
- * payload form used for records above the inline size limit.
+ * What a candidate source is asked. `terms` arrive already folded —
+ * NFC-normalized and lowercased — because the predicate they must
+ * over-approximate runs on folded text. A source that matched raw bytes
+ * against a raw term would miss every record whose case differs from the
+ * query, which is the common path for prose.
  */
-export interface RecallCandidate {
-  readonly sessionId: string;
-  readonly message: StoredMessage;
-}
-
-/**
- * What a storage-side candidate source is asked. This is the one shape the
- * storage contract and the runtime both implement, so it lives here rather
- * than being redeclared at each boundary: a drift between copies would break
- * the superset contract without any compiler help.
- *
- * `terms` arrive already folded — NFC-normalized and lowercased — because the
- * predicate they must over-approximate runs on folded text. A source that
- * matched the raw bytes against a raw term would miss every record whose case
- * differs from the query, which is the common path for prose.
- */
-export interface RecallCandidateRequest {
+export interface RecallCandidateSessionRequest {
   readonly sessionIds: readonly string[];
-  /** Folded terms. A record whose folded stored form contains any of them is a candidate. */
+  /** Folded terms. A Session whose stored text contains any of them is a candidate. */
   readonly terms: readonly string[];
-  /** Above this many candidates a source declines rather than truncating. */
-  readonly limit: number;
+  readonly abortSignal?: AbortSignal;
 }
 
 export interface RecallDeps {
@@ -267,27 +314,41 @@ export interface RecallDeps {
    */
   getPrivacyContext(): Promise<unknown>;
   /**
-   * Optional narrow-then-verify source. It MUST return every record whose
-   * folded stored form contains one of the folded `terms` — a superset of the
-   * true matches — or results are silently lost. Returning `null` declines the
-   * fast path for this query and falls back to a full scan.
+   * Optional narrowing: which of the given Sessions could hold a message
+   * containing one of the folded `terms`. It MUST name every Session whose
+   * projected transcript matches — a superset — or results are silently lost;
+   * over-naming only costs a transcript read. Recall then reads each named
+   * Session through `readMessages` and runs the real predicate on every
+   * message, so the source never decides what matches, only where to look.
+   * Returning `null` declines the fast path for this query.
+   *
+   * Narrowing stops at the Session because that is the unit storage can vouch
+   * for: a transcript is projected from its ledger as a whole, and the text
+   * of one message is a value inside the events that projected it.
    *
    * Only used together with `countSearchableMessages`: idf needs the corpus
    * size, and a source that cannot report it would rank differently from the
    * full scan, which is the one thing a candidate source must never change.
    */
-  listCandidates?(input: {
-    readonly terms: readonly string[];
-    readonly sessionIds: readonly string[];
-    readonly abortSignal?: AbortSignal;
-  }): Promise<readonly RecallCandidate[] | null>;
+  listCandidateSessions?(input: RecallCandidateSessionRequest): Promise<readonly string[] | null>;
   /**
-   * Corpus-wide count of searchable messages, used for idf. `null` declines
-   * the fast path for this query along with `listCandidates`.
+   * Corpus-wide count of searchable messages, used for idf. When present it
+   * is the count on both paths, so which path ran cannot change a score;
+   * without it the full scan counts what it read. `null` declines the fast
+   * path for this query along with `listCandidateSessions`.
    */
   countSearchableMessages?(input: {
     readonly sessionIds: readonly string[];
   }): Promise<number | null>;
+  /**
+   * Text the transcript projection writes that was never stored: a truncation
+   * marker, a fallback caption for a result that lost its body. Matching runs
+   * with these removed, so a term that occurs only in such text is not a hit
+   * on either path — a candidate source scanning stored payloads could never
+   * have offered it. Each pattern must be global (and multiline if it anchors
+   * a line); the host that projects transcripts owns the list.
+   */
+  readonly syntheticTextPatterns?: readonly RegExp[];
   /**
    * Optional distilled-fact source. `sessionId` lets the adapter resolve the
    * workspace scope those facts were recorded under; without it only globally
@@ -318,11 +379,24 @@ interface VerifiedHit {
   score: number;
 }
 
+/**
+ * The scan's result, including the transcripts it read: a passage is built
+ * from the same snapshot the predicate ran on, so a Session is read once and
+ * an anchor cannot go missing between the two reads.
+ */
+interface CollectedHits {
+  readonly hits: VerifiedHit[];
+  readonly corpusSize: number;
+  readonly scannedFully: boolean;
+  readonly transcripts: ReadonlyMap<string, readonly StoredMessage[]>;
+}
+
 interface CollectHitsInput {
   readonly terms: readonly string[];
   readonly folded: readonly string[];
   readonly sessionIds: readonly string[];
   readonly forceFullScan: boolean;
+  readonly syntheticTextPatterns?: readonly RegExp[];
   readonly since?: number;
   readonly until?: number;
   readonly excludeTurnIds?: ReadonlySet<string>;
@@ -376,6 +450,7 @@ export async function runRecall(
     folded,
     sessionIds: sessions.map((session) => session.id),
     forceFullScan: terms.some(hasJsonEscapedCharacter),
+    ...(deps.syntheticTextPatterns ? { syntheticTextPatterns: deps.syntheticTextPatterns } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
     ...(options.excludeTurnIds ? { excludeTurnIds: options.excludeTurnIds } : {}),
@@ -389,8 +464,7 @@ export async function runRecall(
 
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const anchors = applySessionQuota(collected.hits, limit);
-  const passages = await assemblePassages(deps, anchors, sessionById, options);
-  if (!passages) return aborted();
+  const passages = assemblePassages(collected.transcripts, anchors, sessionById);
 
   return {
     ok: true,
@@ -484,7 +558,7 @@ export async function expandRecallPassage(
 
   const message = transcript.find(
     (candidate) =>
-      candidate.id === anchorMessageId && collectSearchableText(candidate) !== undefined,
+      candidate.id === anchorMessageId && recallSearchableText(candidate) !== undefined,
   );
   if (!message) {
     return { ok: false, reason: 'not_found', message: 'That passage anchor was not found.' };
@@ -640,11 +714,14 @@ function normalizeLimit(value: unknown): number | undefined {
   return value;
 }
 
+/** Identifiers recall accepts back from a caller: Session and message ids. */
+export const RECALL_ID_MAX_CHARS = 256;
+
 function optionalString(value: unknown): string | undefined | null {
   if (value === undefined) return undefined;
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > 4096) return null;
+  if (trimmed.length === 0 || trimmed.length > RECALL_ID_MAX_CHARS) return null;
   return trimmed;
 }
 
@@ -698,62 +775,69 @@ async function readFacts(
 async function collectHits(
   deps: RecallDeps,
   input: CollectHitsInput,
-): Promise<{ hits: VerifiedHit[]; corpusSize: number; scannedFully: boolean } | null> {
+): Promise<CollectedHits | null> {
   if (input.sessionIds.length === 0) {
-    return { hits: [], corpusSize: 0, scannedFully: true };
+    return { hits: [], corpusSize: 0, scannedFully: true, transcripts: new Map() };
   }
 
-  if (!input.forceFullScan && deps.listCandidates && deps.countSearchableMessages) {
+  const transcripts = new Map<string, readonly StoredMessage[]>();
+  let sessionIds: readonly string[] = input.sessionIds;
+  let scannedFully = true;
+  if (!input.forceFullScan && deps.listCandidateSessions && deps.countSearchableMessages) {
     // The source matches folded stored text, so it gets the folded terms the
     // verifier will use, never the terms as the caller typed them.
-    const candidates = await deps.listCandidates({
+    const candidates = await deps.listCandidateSessions({
       terms: input.folded,
       sessionIds: input.sessionIds,
       ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     });
     if (input.abortSignal?.aborted) return null;
-    const corpusSize = candidates
-      ? await deps.countSearchableMessages({ sessionIds: input.sessionIds })
-      : null;
-    if (input.abortSignal?.aborted) return null;
-    if (candidates && corpusSize !== null) {
-      const hits: VerifiedHit[] = [];
-      for (let index = 0; index < candidates.length; index += 1) {
-        // Verification redacts before it matches, which is the expensive part
-        // of this module. A large candidate set would hold the event loop for
-        // as long as it takes, so yield on the same cadence the full scan uses.
-        if (index > 0 && index % 256 === 0) {
-          await new Promise<void>((resolve) => setImmediate(resolve));
-          if (input.abortSignal?.aborted) return null;
-        }
-        const candidate = candidates[index]!;
-        const hit = verify(candidate.sessionId, candidate.message, input);
-        if (hit) hits.push(hit);
-      }
-      return { hits, corpusSize, scannedFully: false };
+    if (candidates) {
+      // A source may name a Session recall did not ask about; it is not
+      // eligible, so it is not read.
+      const eligible = new Set(input.sessionIds);
+      sessionIds = [...new Set(candidates)].filter((sessionId) => eligible.has(sessionId));
+      scannedFully = false;
     }
   }
 
   const hits: VerifiedHit[] = [];
-  let corpusSize = 0;
-  for (const sessionId of input.sessionIds) {
+  let counted = 0;
+  for (const sessionId of sessionIds) {
     if (input.abortSignal?.aborted) return null;
     const messages = await deps.readMessages(sessionId, input.abortSignal);
     if (input.abortSignal?.aborted) return null;
     if (!messages) continue;
+    transcripts.set(sessionId, messages);
     for (let index = 0; index < messages.length; index += 1) {
+      // Verification redacts before it matches, which is the expensive part
+      // of this module. A long transcript would hold the event loop for as
+      // long as it takes, so yield periodically.
       if (index > 0 && index % 256 === 0) {
         await new Promise<void>((resolve) => setImmediate(resolve));
         if (input.abortSignal?.aborted) return null;
       }
       const message = messages[index]!;
       if (!SEARCHABLE_MESSAGE_TYPES.has(message.type)) continue;
-      corpusSize += 1;
+      counted += 1;
       const hit = verify(sessionId, message, input);
       if (hit) hits.push(hit);
     }
   }
-  return { hits, corpusSize, scannedFully: true };
+
+  // The narrowed path never sees the Sessions it skipped, so its corpus size
+  // has to come from the store. The full scan takes the same number when the
+  // store offers one, which is what keeps a score independent of the path.
+  let corpusSize: number | null = counted;
+  if (deps.countSearchableMessages) {
+    corpusSize = await deps.countSearchableMessages({ sessionIds: input.sessionIds });
+    if (input.abortSignal?.aborted) return null;
+    if (corpusSize === null) {
+      if (!scannedFully) return collectHits(deps, { ...input, forceFullScan: true });
+      corpusSize = counted;
+    }
+  }
+  return { hits, corpusSize, scannedFully, transcripts };
 }
 
 /**
@@ -765,7 +849,13 @@ function verify(
   message: StoredMessage,
   input: Pick<
     CollectHitsInput,
-    'terms' | 'folded' | 'since' | 'until' | 'excludeTurnIds' | 'activeSessionId'
+    | 'terms'
+    | 'folded'
+    | 'since'
+    | 'until'
+    | 'excludeTurnIds'
+    | 'activeSessionId'
+    | 'syntheticTextPatterns'
   >,
 ): VerifiedHit | undefined {
   if (input.since !== undefined && message.ts < input.since) return undefined;
@@ -776,7 +866,7 @@ function verify(
     return undefined;
   }
 
-  const raw = collectSearchableText(message);
+  const raw = recallSearchableText(message);
   if (raw === undefined) return undefined;
   // A hit is a term that occurs in the text as it was stored *and* still
   // occurs once secrets are redacted. Redaction alone is the security
@@ -787,8 +877,9 @@ function verify(
   // while no scan of stored records could offer it. Such a term names a
   // redaction artifact rather than anything that was said, so nothing of
   // value is lost by refusing it.
-  const foldedStored = foldForMatch(raw);
-  const foldedText = foldForMatch(redactSecrets(raw));
+  const stored = stripSyntheticText(raw, input.syntheticTextPatterns);
+  const foldedStored = foldForMatch(stored);
+  const foldedText = foldForMatch(redactSecrets(stored));
 
   const tf = new Map<string, number>();
   const matchedTerms: string[] = [];
@@ -911,22 +1002,12 @@ function applySessionQuota(hits: readonly VerifiedHit[], limit: number): Verifie
   return selected.sort((left, right) => right.score - left.score);
 }
 
-async function assemblePassages(
-  deps: RecallDeps,
+function assemblePassages(
+  transcripts: ReadonlyMap<string, readonly StoredMessage[]>,
   anchors: readonly VerifiedHit[],
   sessionById: ReadonlyMap<string, SessionSummary>,
-  options: RecallOptions,
-): Promise<RecallPassage[] | null> {
+): RecallPassage[] {
   if (anchors.length === 0) return [];
-
-  const transcripts = new Map<string, readonly StoredMessage[]>();
-  for (const sessionId of new Set(anchors.map((anchor) => anchor.sessionId))) {
-    if (options.abortSignal?.aborted) return null;
-    const messages = await deps.readMessages(sessionId, options.abortSignal);
-    if (options.abortSignal?.aborted) return null;
-    if (messages) transcripts.set(sessionId, messages);
-  }
-
   const passages: RecallPassage[] = [];
   let remaining = RECALL_TOTAL_PAYLOAD_CAP_BYTES;
   for (const anchor of anchors) {
@@ -986,13 +1067,34 @@ function buildPassage(
     rendered.set(message.id, { ...projected, text });
   };
 
+  // Spend the budget outward from the anchor. A passage's value falls off with
+  // distance, so when the budget binds it is the farthest neighbours that
+  // should go — consuming in chronological order would instead drop the
+  // message immediately before the anchor, which is usually the question the
+  // anchor answers.
   render(anchor.message, true);
   if (!rendered.has(anchor.message.id)) return undefined;
-  for (const entry of ordered) render(entry.message, entry.isAnchor);
+  for (let step = 1; step <= Math.max(neighbours.before.length, neighbours.after.length); step++) {
+    const before = neighbours.before[neighbours.before.length - step];
+    const after = neighbours.after[step - 1];
+    if (before) render(before.message, false);
+    if (after) render(after.message, false);
+  }
 
   const messages = ordered
     .map((entry) => rendered.get(entry.message.id))
     .filter((message): message is RecallPassageMessage => message !== undefined);
+
+  // A neighbour the span selected but the budget could not fit is more context
+  // the caller can still reach, so it counts toward the continuation flags the
+  // same way one beyond the span does. Reporting otherwise would tell a caller
+  // there is nothing more in a direction recall just cut short.
+  const omitted = (entries: readonly { message: StoredMessage }[]): boolean =>
+    entries.some(
+      (entry) =>
+        !rendered.has(entry.message.id) &&
+        projectPassageMessage(entry.message, false) !== undefined,
+    );
 
   const passage: RecallPassage = {
     sessionId: anchor.sessionId,
@@ -1003,8 +1105,8 @@ function buildPassage(
     matchedTerms: anchor.matchedTerms,
     score: Number(anchor.score.toFixed(4)),
     ...(session?.lastMessageAt !== undefined ? { lastMessageAt: session.lastMessageAt } : {}),
-    hasMoreBefore: neighbours.hasMoreBefore,
-    hasMoreAfter: neighbours.hasMoreAfter,
+    hasMoreBefore: neighbours.hasMoreBefore || omitted(neighbours.before),
+    hasMoreAfter: neighbours.hasMoreAfter || omitted(neighbours.after),
     ...(truncated ? { truncated: true } : {}),
   };
   // Report what the rendering actually spent rather than re-deriving it, so
@@ -1069,7 +1171,7 @@ function projectPassageMessage(
   message: StoredMessage,
   isAnchor: boolean,
 ): RecallPassageMessage | undefined {
-  const raw = collectSearchableText(message);
+  const raw = recallSearchableText(message);
   if (raw === undefined) return undefined;
   const text = redactSecrets(raw).trim();
   if (text.length === 0) return undefined;

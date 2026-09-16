@@ -54,7 +54,7 @@ import {
 } from '@maka/runtime/session-manager';
 import { buildToolsForAgentDefinition } from '@maka/runtime/agent-catalog';
 import { buildRecallTools } from '@maka/runtime/recall-tools';
-import { RECALL_CANDIDATE_LIMIT } from '@maka/core/recall';
+import { RECALL_SYNTHETIC_TEXT_PATTERNS } from '@maka/runtime/recall-candidates';
 import { buildBuiltinTools } from '@maka/runtime/builtin-tools';
 import { createLocalContinuationSafetyInspector } from '@maka/runtime/continuation-safety';
 import { createConfiguredSubagentCatalog } from '@maka/runtime/configured-subagent-catalog';
@@ -691,22 +691,23 @@ export async function createExecutionRuntimeHostComposition(
           .catch(() => null);
         return abortSignal?.aborted ? null : messages;
       },
-      listCandidates: async ({ terms, sessionIds, abortSignal }) => {
+      listCandidateSessions: async ({ terms, sessionIds, abortSignal }) => {
         if (abortSignal?.aborted) return null;
         // A storage failure only costs speed here: declining the fast path
         // sends recall back to reading transcripts, which yields the same
         // answer. Returning a partial candidate set instead would break the
         // superset contract and silently drop matches.
         const candidates = await requireSessionManager(manager)
-          .listSearchCandidates({ terms, sessionIds, limit: RECALL_CANDIDATE_LIMIT })
+          .listRecallCandidateSessions(sessionIds, terms)
           .catch(() => undefined);
         if (abortSignal?.aborted || !candidates) return null;
         return candidates;
       },
       countSearchableMessages: async ({ sessionIds }) =>
         (await requireSessionManager(manager)
-          .countSearchableMessages(sessionIds)
+          .countRecallSearchableMessages(sessionIds)
           .catch(() => undefined)) ?? null,
+      syntheticTextPatterns: RECALL_SYNTHETIC_TEXT_PATTERNS,
       searchFacts: async ({ sessionId, terms, limit }) => {
         const workspaceKey = sessionId
           ? await stores.sessionStore

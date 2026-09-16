@@ -20,12 +20,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SessionSummary, StoredMessage } from '../session.js';
-import { collectSearchableText, foldForMatch } from '../thread-search.js';
+import { foldForMatch } from '../thread-search.js';
 import {
   expandRecallPassage,
-  RECALL_CANDIDATE_LIMIT,
+  recallSearchableText,
   runRecall,
-  type RecallCandidate,
   type RecallDeps,
   type RecallPassage,
 } from '../recall.js';
@@ -121,28 +120,28 @@ function scanDeps(data: Corpus, overrides: Partial<RecallDeps> = {}): RecallDeps
 }
 
 /**
- * Candidate deps that implement the storage contract literally: a record is a
- * candidate when its *folded serialized form* contains a folded term. Matching
- * the serialized record over-selects on field names and structure exactly as
- * the SQLite scan does; folding only the stored side (never the term) is what
- * the real store is held to, so a term that arrives unfolded is an error here
- * rather than something the double quietly repairs.
+ * Candidate deps that implement the storage contract literally: a Session is a
+ * candidate when the *folded serialized form* of any stored record contains a
+ * folded term. Matching serialized records over-names on field names and
+ * structure exactly as a scan of stored payloads does; folding only the stored
+ * side (never the term) is what the real store is held to, so a term that
+ * arrives unfolded is an error here rather than something the double quietly
+ * repairs.
  */
 function candidateDeps(data: Corpus, overrides: Partial<RecallDeps> = {}): RecallDeps {
   return {
     ...scanDeps(data),
-    listCandidates: async ({ terms, sessionIds }) => {
+    listCandidateSessions: async ({ terms, sessionIds }) => {
       for (const term of terms) {
         assert.equal(term, foldForMatch(term), `candidate source received an unfolded term`);
       }
-      const candidates: RecallCandidate[] = [];
+      const candidates: string[] = [];
       for (const sessionId of sessionIds) {
-        for (const message of data.messages.get(sessionId) ?? []) {
-          if (collectSearchableText(message) === undefined) continue;
-          const serialized = foldForMatch(JSON.stringify(message));
-          if (terms.some((term) => serialized.includes(term))) {
-            candidates.push({ sessionId, message });
-          }
+        const serialized = (data.messages.get(sessionId) ?? []).map((message) =>
+          foldForMatch(JSON.stringify(message)),
+        );
+        if (serialized.some((record) => terms.some((term) => record.includes(term)))) {
+          candidates.push(sessionId);
         }
       }
       return candidates;
@@ -223,7 +222,7 @@ function scanMatchIds(data: Corpus, terms: readonly string[]): string[] {
   const ids: string[] = [];
   for (const messages of data.messages.values()) {
     for (const message of messages) {
-      const raw = collectSearchableText(message);
+      const raw = recallSearchableText(message);
       if (raw === undefined) continue;
       const text = foldForMatch(raw);
       if (folded.some((term) => text.includes(term))) ids.push(message.id);
@@ -307,7 +306,7 @@ test('a candidate source that declines falls back to a full scan', async () => {
   const data = mixedCorpus();
   let declined = 0;
   const deps = candidateDeps(data, {
-    listCandidates: async () => {
+    listCandidateSessions: async () => {
       declined += 1;
       return null;
     },
@@ -328,9 +327,9 @@ test('a candidate source without a corpus count is not used', async () => {
   // rather than score against a guessed size.
   const withoutCount: RecallDeps = {
     ...counting,
-    listCandidates: async (input) => {
+    listCandidateSessions: async (input) => {
       asked += 1;
-      return counting.listCandidates!(input);
+      return counting.listCandidateSessions!(input);
     },
   };
   delete (withoutCount as { countSearchableMessages?: unknown }).countSearchableMessages;
@@ -357,7 +356,7 @@ test('a term the stored form escapes bypasses the candidate source', async () =>
   const data = mixedCorpus();
   let asked = 0;
   const deps = candidateDeps(data, {
-    listCandidates: async (input) => {
+    listCandidateSessions: async (input) => {
       asked += 1;
       return input.sessionIds.length === 0 ? [] : [];
     },
@@ -798,6 +797,119 @@ test('an aborted signal settles promptly', async () => {
   assert.ok(!result.ok && result.reason === 'aborted');
 });
 
-test('the candidate ceiling is high enough to be a decline, not a default', () => {
-  assert.ok(RECALL_CANDIDATE_LIMIT >= 1000);
+/**
+ * The passage budget binds long before the span does, so which neighbours it
+ * buys decides what the model reads. Spending it chronologically would keep
+ * three far messages and drop the one immediately before the anchor — usually
+ * the question the anchor answers — while reporting no more context available.
+ */
+test('the passage budget keeps the nearest context and says when it cut the rest', async () => {
+  const filler = (label: string) => `${label} ${'x'.repeat(4000)}`;
+  const data = corpus([
+    {
+      session: session('s-budget', 'budget'),
+      messages: [
+        userMessage('far-1', 'tb', filler('FAR ONE')),
+        assistantMessage('far-2', 'tb', filler('FAR TWO')),
+        userMessage('far-3', 'tb', filler('FAR THREE')),
+        assistantMessage('near-before', 'tb', 'IMMEDIATE CONTEXT before'),
+        userMessage('anchor', 'tb', '浮窗 的问题'),
+        assistantMessage('near-after', 'tb', 'IMMEDIATE CONTEXT after'),
+        userMessage('far-after', 'tb', filler('FAR AFTER')),
+      ],
+    },
+  ]);
+
+  const recalled = await runRecall({ terms: ['浮窗'] }, scanDeps(data));
+  assert.ok(recalled.ok);
+  const passage = recalled.passages[0];
+  assert.ok(passage);
+  const ids = passage.messages.map((message) => message.messageId);
+  assert.deepEqual(ids.includes('anchor'), true);
+  assert.ok(ids.includes('near-before'), `nearest preceding message was dropped: ${ids.join()}`);
+  assert.ok(ids.includes('near-after'), `nearest following message was dropped: ${ids.join()}`);
+  // Chronological order is what the caller reads, whatever order the budget
+  // was spent in.
+  assert.deepEqual(
+    ids,
+    [...ids].sort(
+      (left, right) =>
+        passage.messages.findIndex((message) => message.messageId === left) -
+        passage.messages.findIndex((message) => message.messageId === right),
+    ),
+  );
+  // Every neighbour the span selected but the budget could not fit must be
+  // reported as more context, in the direction it was dropped from.
+  const dropped = (selected: readonly string[]) => selected.some((id) => !ids.includes(id));
+  assert.equal(passage.hasMoreBefore, dropped(['far-1', 'far-2', 'far-3', 'near-before']));
+  assert.equal(passage.hasMoreAfter, dropped(['near-after', 'far-after']));
+  assert.equal(passage.hasMoreBefore, true, 'the budget must bind on this fixture');
+  assert.equal(passage.truncated, true);
+
+  // The default expansion answers the flags: it must not repeat the ordering
+  // error, and a caller that narrows the span gets the nearest context whole.
+  const expanded = await expandRecallPassage(
+    { sessionId: passage.sessionId, anchorMessageId: passage.anchorMessageId },
+    scanDeps(data),
+  );
+  assert.ok(expanded.ok);
+  const expandedIds = expanded.passage.messages.map((message) => message.messageId);
+  assert.ok(expandedIds.includes('near-before'), expandedIds.join());
+  assert.ok(expandedIds.includes('near-after'), expandedIds.join());
+
+  const narrow = await expandRecallPassage(
+    { sessionId: passage.sessionId, anchorMessageId: passage.anchorMessageId, before: 1, after: 1 },
+    scanDeps(data),
+  );
+  assert.ok(narrow.ok);
+  assert.deepEqual(
+    narrow.passage.messages.map((message) => message.messageId),
+    ['near-before', 'anchor', 'near-after'],
+  );
+});
+
+test('a Session the source names but recall did not ask about is not read', async () => {
+  const data = mixedCorpus();
+  const read: string[] = [];
+  const deps = candidateDeps(data, {
+    listCandidateSessions: async () => ['s-pet', 'not-eligible'],
+    readMessages: async (sessionId) => {
+      read.push(sessionId);
+      return data.messages.get(sessionId) ?? null;
+    },
+  });
+  const result = await runRecall({ terms: ['宠物'] }, deps);
+  assert.ok(result.ok);
+  assert.deepEqual(
+    read.filter((id) => id === 'not-eligible'),
+    [],
+  );
+  assert.ok(result.passages.length > 0);
+});
+
+test('a tool result is matched on its output, not on the shape around it', () => {
+  const json = toolResultMessage('r1', 't', 'unused');
+  (json as { content: unknown }).content = {
+    kind: 'json',
+    value: { exitCode: 0, cwd: '/work', output: 'ninja: build stopped' },
+  };
+  // String values are text; keys, numbers and the kind tag are not.
+  assert.equal(recallSearchableText(json), '/work\nninja: build stopped');
+
+  const archived = toolResultMessage('r2', 't', 'unused');
+  (archived as { content: unknown }).content = {
+    kind: 'archived_tool_result',
+    status: 'not_loaded',
+    runtimeEventId: 'evt',
+    toolCallId: 'call',
+    toolName: 'Bash',
+    originalEstimatedTokens: 1,
+    originalBytes: 1,
+    rewriteVersion: 2,
+    reason: 'tool_result_pruned',
+  };
+  assert.equal(recallSearchableText(archived), undefined);
+
+  const text = toolResultMessage('r3', 't', 'plain output');
+  assert.equal(recallSearchableText(text), 'plain output');
 });
