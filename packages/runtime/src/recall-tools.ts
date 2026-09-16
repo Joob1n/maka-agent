@@ -58,6 +58,8 @@ export function buildRecallTool(deps: RecallToolDeps): MakaTool {
       'Supply a few distinct literal terms rather than a sentence: matching is case-insensitive substring, OR-combined, ' +
       'and results rank higher when they contain more of the terms. Returns distilled facts, ranked transcript passages ' +
       'that already carry the surrounding exchange, and a note on what the search did not reach. ' +
+      'A message that carried files lists them under materials, matched by file name; a material carrying a resource ' +
+      'address can be opened with Read, and one without it lives in another Session and cannot be opened from here. ' +
       'One Recall call usually suffices; use RecallMore only when a passage is cut short.',
     parameters: z
       .object({
@@ -232,6 +234,21 @@ function projectPassage(passage: RecallPassage, activeSessionId: string) {
       timestamp: message.timestamp,
       ...(message.isAnchor ? { is_anchor: true } : {}),
       text: message.text,
+      // Metadata only. `resource` is present exactly when the file is
+      // readable from the Session asking; elsewhere the material is named
+      // but has no address, because an attachment read resolves against the
+      // calling Session and would refuse one stored in another.
+      ...(message.materials
+        ? {
+            materials: message.materials.map((material) => ({
+              name: material.name,
+              kind: material.kind,
+              mime_type: material.mimeType,
+              bytes: material.bytes,
+              ...(material.resource ? { resource: material.resource } : {}),
+            })),
+          }
+        : {}),
     })),
   };
 }

@@ -54,6 +54,8 @@
  * density reflects machine output rather than relevance.
  */
 
+import { formatAttachmentResourceRef, MAX_ATTACHMENT_COUNT } from './attachments.js';
+import type { AttachmentRef } from './events.js';
 import { validateWorkspacePrivacyContext } from './incognito.js';
 import { redactSecrets } from './redaction.js';
 import { SEARCH_QUERY_MAX_CHARS } from './search.js';
@@ -195,6 +197,76 @@ function stripSyntheticText(text: string, patterns: readonly RegExp[] | undefine
   return stripped;
 }
 
+/**
+ * One file a message carried. Metadata only: recall never returns bytes, and a
+ * material is worth returning precisely because its bytes are expensive.
+ */
+export interface RecallMaterial {
+  readonly name: string;
+  readonly kind: AttachmentRef['kind'];
+  readonly mimeType: string;
+  readonly bytes: number;
+  /**
+   * Address `Read` accepts, present only when the material is reachable from
+   * the Session asking. Attachment reads resolve against the calling Session
+   * and refuse anything stored elsewhere, so offering the address across a
+   * Session boundary would invite a call that can only fail.
+   */
+  readonly resource?: string;
+}
+
+/**
+ * The files a message carried. A screenshot pasted under "have a look" leaves
+ * no trace in the text, so without this the message is unreachable by any
+ * term the user would think to search.
+ */
+export function recallMaterials(message: StoredMessage): readonly RecallMaterial[] {
+  const attachments = (message as { attachments?: unknown }).attachments;
+  if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  const materials: RecallMaterial[] = [];
+  // A record older or stranger than the current shape still has to project
+  // something usable or nothing at all, never a material named `undefined`.
+  for (const candidate of attachments.slice(0, MAX_ATTACHMENT_COUNT)) {
+    if (!isAttachmentRef(candidate)) continue;
+    const resource = formatAttachmentResourceRef(candidate.ref);
+    materials.push({
+      name: candidate.name,
+      kind: candidate.kind,
+      mimeType: candidate.mimeType,
+      bytes: candidate.bytes,
+      ...(resource ? { resource } : {}),
+    });
+  }
+  return materials;
+}
+
+function isAttachmentRef(value: unknown): value is AttachmentRef {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<AttachmentRef>;
+  return (
+    typeof candidate.name === 'string' &&
+    candidate.name.length > 0 &&
+    typeof candidate.kind === 'string' &&
+    typeof candidate.mimeType === 'string' &&
+    typeof candidate.bytes === 'number' &&
+    candidate.ref !== null &&
+    typeof candidate.ref === 'object'
+  );
+}
+
+/**
+ * What the predicate runs on: a message's prose plus the names of the files it
+ * carried, so a material is reachable by the name a person would remember.
+ * Names are matched but not returned as text — they come back as materials.
+ */
+function recallMatchableText(message: StoredMessage): string | undefined {
+  const prose = recallSearchableText(message);
+  const materials = recallMaterials(message);
+  if (materials.length === 0) return prose;
+  const names = materials.map((material) => material.name).join('\n');
+  return prose === undefined || prose.length === 0 ? names : `${prose}\n${names}`;
+}
+
 /** Visits every string value in a JSON-like value, in document order, until the visitor declines. */
 function collectStringLeaves(value: unknown, visit: (leaf: string) => boolean): boolean {
   if (typeof value === 'string') return visit(value);
@@ -250,6 +322,8 @@ export interface RecallPassageMessage {
   readonly text: string;
   readonly timestamp: number;
   readonly isAnchor: boolean;
+  /** Files this message carried; omitted when it carried none. */
+  readonly materials?: readonly RecallMaterial[];
 }
 
 export interface RecallPassage {
@@ -464,7 +538,12 @@ export async function runRecall(
 
   const sessionById = new Map(sessions.map((session) => [session.id, session]));
   const anchors = applySessionQuota(collected.hits, limit);
-  const passages = assemblePassages(collected.transcripts, anchors, sessionById);
+  const passages = assemblePassages(
+    collected.transcripts,
+    anchors,
+    sessionById,
+    options.activeSessionId,
+  );
 
   return {
     ok: true,
@@ -557,8 +636,7 @@ export async function expandRecallPassage(
   }
 
   const message = transcript.find(
-    (candidate) =>
-      candidate.id === anchorMessageId && recallSearchableText(candidate) !== undefined,
+    (candidate) => candidate.id === anchorMessageId && isPassageMessage(candidate),
   );
   if (!message) {
     return { ok: false, reason: 'not_found', message: 'That passage anchor was not found.' };
@@ -587,6 +665,7 @@ export async function expandRecallPassage(
     transcript,
     session,
     RECALL_PASSAGE_MAX_BYTES,
+    options.activeSessionId,
     { before, after },
   );
   if (!built) {
@@ -866,7 +945,7 @@ function verify(
     return undefined;
   }
 
-  const raw = recallSearchableText(message);
+  const raw = recallMatchableText(message);
   if (raw === undefined) return undefined;
   // A hit is a term that occurs in the text as it was stored *and* still
   // occurs once secrets are redacted. Redaction alone is the security
@@ -1006,6 +1085,7 @@ function assemblePassages(
   transcripts: ReadonlyMap<string, readonly StoredMessage[]>,
   anchors: readonly VerifiedHit[],
   sessionById: ReadonlyMap<string, SessionSummary>,
+  activeSessionId: string | undefined,
 ): RecallPassage[] {
   if (anchors.length === 0) return [];
   const passages: RecallPassage[] = [];
@@ -1014,7 +1094,13 @@ function assemblePassages(
     if (remaining <= 0) break;
     const transcript = transcripts.get(anchor.sessionId);
     if (!transcript) continue;
-    const built = buildPassage(anchor, transcript, sessionById.get(anchor.sessionId), remaining);
+    const built = buildPassage(
+      anchor,
+      transcript,
+      sessionById.get(anchor.sessionId),
+      remaining,
+      activeSessionId,
+    );
     if (!built) continue;
     remaining -= built.bytes;
     passages.push(built.passage);
@@ -1027,6 +1113,7 @@ function buildPassage(
   transcript: readonly StoredMessage[],
   session: SessionSummary | undefined,
   budget: number,
+  activeSessionId: string | undefined,
   span: { readonly before: number; readonly after: number } = {
     before: RECALL_PASSAGE_NEIGHBOURS,
     after: RECALL_PASSAGE_NEIGHBOURS,
@@ -1051,7 +1138,7 @@ function buildPassage(
 
   const render = (message: StoredMessage, isAnchor: boolean): void => {
     if (rendered.has(message.id)) return;
-    const projected = projectPassageMessage(message, isAnchor);
+    const projected = projectPassageMessage(message, isAnchor, activeSessionId, anchor.sessionId);
     if (!projected) return;
     const overhead = Buffer.byteLength(JSON.stringify({ ...projected, text: '' }), 'utf8');
     if (remaining <= overhead) {
@@ -1090,11 +1177,7 @@ function buildPassage(
   // same way one beyond the span does. Reporting otherwise would tell a caller
   // there is nothing more in a direction recall just cut short.
   const omitted = (entries: readonly { message: StoredMessage }[]): boolean =>
-    entries.some(
-      (entry) =>
-        !rendered.has(entry.message.id) &&
-        projectPassageMessage(entry.message, false) !== undefined,
-    );
+    entries.some((entry) => !rendered.has(entry.message.id) && isPassageMessage(entry.message));
 
   const passage: RecallPassage = {
     sessionId: anchor.sessionId,
@@ -1167,14 +1250,37 @@ function isPassageNeighbour(message: StoredMessage): boolean {
   return message.type === 'user' || message.type === 'assistant' || message.type === 'tool_call';
 }
 
+/**
+ * Whether a message can appear in a passage at all. Redaction rewrites text
+ * but never empties it, so this decides the same set `projectPassageMessage`
+ * does without paying for redaction on every message a lookup walks past.
+ */
+function isPassageMessage(message: StoredMessage): boolean {
+  const raw = recallSearchableText(message);
+  if (raw !== undefined && raw.trim().length > 0) return true;
+  return recallMaterials(message).length > 0;
+}
+
 function projectPassageMessage(
   message: StoredMessage,
   isAnchor: boolean,
+  activeSessionId?: string,
+  sessionId?: string,
 ): RecallPassageMessage | undefined {
   const raw = recallSearchableText(message);
-  if (raw === undefined) return undefined;
-  const text = redactSecrets(raw).trim();
-  if (text.length === 0) return undefined;
+  const text = raw === undefined ? '' : redactSecrets(raw).trim();
+  // A message whose whole content was a pasted file has no text of its own.
+  // Dropping it would make the file unreachable in exactly the case this
+  // layer exists for.
+  // A file name is user-authored text like any other, so it leaves through the
+  // same redaction the passage body does; the address beside it is a runtime
+  // identifier and carries nothing to redact.
+  const materials = recallMaterials(message).map((material) => ({
+    ...material,
+    name: redactSecrets(material.name),
+  }));
+  if (text.length === 0 && materials.length === 0) return undefined;
+  const reachable = sessionId !== undefined && sessionId === activeSessionId;
   return {
     messageId: message.id,
     role: passageRole(message),
@@ -1182,6 +1288,13 @@ function projectPassageMessage(
     text,
     timestamp: message.ts,
     isAnchor,
+    ...(materials.length > 0
+      ? {
+          materials: reachable
+            ? materials
+            : materials.map(({ resource: _resource, ...rest }) => rest),
+        }
+      : {}),
   };
 }
 
