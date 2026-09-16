@@ -209,6 +209,45 @@ function decodeStoredMessage(value: unknown): StoredMessage {
 const SEARCHABLE_MESSAGE_TYPES = ['user', 'assistant', 'tool_call', 'tool_result'] as const;
 const SEARCHABLE_MESSAGE_TYPE_PLACEHOLDERS = SEARCHABLE_MESSAGE_TYPES.map(() => '?').join(', ');
 
+/**
+ * Recall folds text as NFC + Unicode lowercase; SQLite's `lower()` folds ASCII
+ * only. The candidate scan therefore matches `lower(record)` and, for every
+ * record where the two folds disagree, offers the record unconditionally. This
+ * function is that disagreement test, registered on the connection so the scan
+ * stays one SQL statement.
+ *
+ * A record is stable when Unicode folding changes nothing ASCII folding would
+ * not: no cased letters outside ASCII, no compatibility or decomposed forms
+ * that NFC rewrites. On stable records `instr(lower(record), term)` is exactly
+ * recall's predicate, and on unstable ones the record is a candidate anyway,
+ * so the scan never under-selects whatever script the transcript is in.
+ */
+const RECALL_FOLD_UNSTABLE_FUNCTION = 'maka_recall_fold_unstable';
+const ASCII_ONLY_PATTERN = /^[\u0000-\u007f]*$/u;
+const ASCII_UPPERCASE_PATTERN = /[A-Z]/gu;
+
+function isRecallFoldUnstable(value: string): boolean {
+  if (ASCII_ONLY_PATTERN.test(value)) return false;
+  return (
+    value.normalize('NFC').toLowerCase() !==
+    value.replace(ASCII_UPPERCASE_PATTERN, (character) => character.toLowerCase())
+  );
+}
+
+function registerRecallFoldFunction(db: DatabaseSync): void {
+  db.function(RECALL_FOLD_UNSTABLE_FUNCTION, { deterministic: true, directOnly: true }, (value) =>
+    typeof value === 'string' && isRecallFoldUnstable(value) ? 1 : 0,
+  );
+}
+
+function assertFoldedSearchTerm(term: string): void {
+  // A raw term against a folded record would under-select silently, which is
+  // the one failure this scan exists to rule out. Fail loudly instead.
+  if (term !== term.normalize('NFC').toLowerCase()) {
+    throw new Error('Session search candidate terms must be folded');
+  }
+}
+
 const require = createRequire(import.meta.url);
 const AGENT_GRAPH_CONTROL_DELETE_TABLES = SQLITE_AGENT_GRAPH_CONTROL_TABLES.filter(
   (table) => table !== 'agent_graph_epochs',
@@ -464,6 +503,7 @@ export class SqliteSessionMetadataStore {
     if (options.databaseLease) {
       this.databaseLease = options.databaseLease;
       this.db = options.databaseLease.database;
+      registerRecallFoldFunction(this.db);
       this.now = options.now ?? Date.now;
       return;
     }
@@ -472,6 +512,7 @@ export class SqliteSessionMetadataStore {
     try {
       configureSqliteSessionMetadataDatabase(database);
       migrateSqliteSessionMetadataDatabase(database);
+      registerRecallFoldFunction(database);
     } catch (error) {
       database.close();
       throw error;
@@ -2667,11 +2708,15 @@ export class SqliteSessionMetadataStore {
   }
 
   /**
-   * Narrows recall to the messages whose stored record contains one of the
-   * terms literally. The result is a superset of the true matches, never an
+   * Narrows recall to the messages whose folded stored record contains one of
+   * the folded terms. The result is a superset of the true matches, never an
    * answer: the caller re-runs the real predicate on projected, redacted text,
    * so over-selection here costs a little work and under-selection would lose
    * results silently.
+   *
+   * Folding is ASCII `lower()` in SQL plus an unconditional match on every
+   * record that fold cannot reproduce — see `isRecallFoldUnstable`. Terms must
+   * arrive folded; a raw term is rejected rather than quietly mismatched.
    *
    * Two scans rather than one condition, because the two storage forms need
    * different reads. An inline record is matched directly; a record above the
@@ -2689,13 +2734,20 @@ export class SqliteSessionMetadataStore {
     this.assertOpen();
     if (request.sessionIds.length === 0 || request.terms.length === 0) return [];
     for (const sessionId of request.sessionIds) assertSafeSessionId(sessionId);
+    for (const term of request.terms) assertFoldedSearchTerm(term);
     if (!Number.isSafeInteger(request.limit) || request.limit < 1) {
       throw new Error('Invalid Session search candidate limit');
     }
 
     const sessions = request.sessionIds.map(() => '?').join(', ');
-    const inlineMatch = request.terms.map(() => 'instr(message.record_json, ?) > 0').join(' OR ');
-    const chunkedMatch = request.terms.map(() => 'instr(chunked.body, ?) > 0').join(' OR ');
+    const inlineMatch = [
+      ...request.terms.map(() => 'instr(lower(message.record_json), ?) > 0'),
+      `${RECALL_FOLD_UNSTABLE_FUNCTION}(message.record_json)`,
+    ].join(' OR ');
+    const chunkedMatch = [
+      ...request.terms.map(() => 'instr(lower(chunked.body), ?) > 0'),
+      `${RECALL_FOLD_UNSTABLE_FUNCTION}(chunked.body)`,
+    ].join(' OR ');
 
     const located = this.readTransaction(() => {
       // A payload row whose chunks do not reassemble would be dropped by the

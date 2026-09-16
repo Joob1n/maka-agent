@@ -28,6 +28,7 @@ import type {
   SandboxBoundarySettlement,
   SettleSandboxBoundaryRequest,
 } from '@maka/core/sandbox-boundary';
+import type { RecallCandidate, RecallCandidateRequest } from '@maka/core/recall';
 import type { CreateSessionInput, SessionListFilter } from '@maka/core/runtime-inputs';
 
 import type {
@@ -335,23 +336,12 @@ export interface SessionTurnLandmarkSnapshot {
 }
 
 /**
- * Storage-side narrowing for recall. A candidate source matches the stored
- * record literally and may over-select freely, but it must never under-select:
- * the caller re-runs the real predicate on projected, redacted text and would
- * otherwise lose matches with no error.
+ * Storage-side narrowing for recall. The shapes are recall's own, aliased
+ * under storage names: one declaration, so the store and the predicate it
+ * over-approximates cannot drift apart.
  */
-export interface SessionSearchCandidateRequest {
-  readonly sessionIds: readonly string[];
-  /** Literal terms. A record containing any of them becomes a candidate. */
-  readonly terms: readonly string[];
-  /** Above this many candidates a store declines rather than truncating. */
-  readonly limit: number;
-}
-
-export interface SessionSearchCandidate {
-  readonly sessionId: string;
-  readonly message: StoredMessage;
-}
+export type SessionSearchCandidateRequest = RecallCandidateRequest;
+export type SessionSearchCandidate = RecallCandidate;
 
 export interface SessionStore {
   create(input: CreateSessionInput, initialBoundary?: ExecutionBoundary): Promise<SessionHeader>;
@@ -367,11 +357,12 @@ export interface SessionStore {
   readHeader(sessionId: string): Promise<SessionHeader>;
   readMessages(sessionId: string): Promise<StoredMessage[]>;
   /**
-   * Narrow recall to messages whose stored record literally contains a term.
-   * The result is a superset of the true matches, never an answer: callers
-   * re-run the real predicate on projected, redacted text. Resolves to
+   * Narrow recall to messages whose folded stored record contains a folded
+   * term. The result is a superset of the true matches, never an answer:
+   * callers re-run the real predicate on projected, redacted text. Resolves to
    * `undefined` when the store declines the fast path, which sends the caller
-   * back to reading transcripts.
+   * back to reading transcripts. A store that implements this must also
+   * implement `countSearchableMessages`; recall ignores one without the other.
    */
   listSearchCandidates?(
     request: SessionSearchCandidateRequest,

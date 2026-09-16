@@ -121,20 +121,26 @@ function scanDeps(data: Corpus, overrides: Partial<RecallDeps> = {}): RecallDeps
 }
 
 /**
- * Candidate deps that mimic the storage scan: they match the *serialized*
- * record, so they over-select on field names and structure exactly as
- * `instr(record_json, ?)` does in SQLite.
+ * Candidate deps that implement the storage contract literally: a record is a
+ * candidate when its *folded serialized form* contains a folded term. Matching
+ * the serialized record over-selects on field names and structure exactly as
+ * the SQLite scan does; folding only the stored side (never the term) is what
+ * the real store is held to, so a term that arrives unfolded is an error here
+ * rather than something the double quietly repairs.
  */
 function candidateDeps(data: Corpus, overrides: Partial<RecallDeps> = {}): RecallDeps {
   return {
     ...scanDeps(data),
     listCandidates: async ({ terms, sessionIds }) => {
+      for (const term of terms) {
+        assert.equal(term, foldForMatch(term), `candidate source received an unfolded term`);
+      }
       const candidates: RecallCandidate[] = [];
       for (const sessionId of sessionIds) {
         for (const message of data.messages.get(sessionId) ?? []) {
           if (collectSearchableText(message) === undefined) continue;
-          const serialized = JSON.stringify(message).toLowerCase();
-          if (terms.some((term) => serialized.includes(term.toLowerCase()))) {
+          const serialized = foldForMatch(JSON.stringify(message));
+          if (terms.some((term) => serialized.includes(term))) {
             candidates.push({ sessionId, message });
           }
         }
@@ -248,8 +254,18 @@ test('recall finds the same messages a full scan would', async () => {
 
 test('a candidate source changes speed, never the verified set', async () => {
   const data = mixedCorpus();
-  for (const terms of [['宠物'], ['上下文', '窗口'], ['显示'], ['token', '预算']]) {
+  // Mixed case is the common path for prose and the one a stored-form scan
+  // gets wrong first: the record says `token`, the caller types `TOKEN`.
+  for (const terms of [
+    ['宠物'],
+    ['上下文', '窗口'],
+    ['显示'],
+    ['token', '预算'],
+    ['TOKEN', 'Context'],
+    ['PROVIDER'],
+  ]) {
     const scanned = await verifiedAnchorIds(scanDeps(data), terms);
+    assert.ok(scanned.length > 0, `${terms.join('/')} must match something to test anything`);
     const narrowed = await verifiedAnchorIds(candidateDeps(data), terms);
     assert.deepEqual(narrowed, scanned, `candidate path diverged for ${terms.join('/')}`);
   }
@@ -257,7 +273,12 @@ test('a candidate source changes speed, never the verified set', async () => {
 
 test('a candidate source changes speed, never the ranking', async () => {
   const data = mixedCorpus();
-  for (const terms of [['宠物', '浮窗', '显示'], ['上下文', '窗口', 'token'], ['显示']]) {
+  for (const terms of [
+    ['宠物', '浮窗', '显示'],
+    ['上下文', '窗口', 'token'],
+    ['显示'],
+    ['Token', 'CONTEXT', '上下文'],
+  ]) {
     const scanned = await runRecall({ terms, limit: 6 }, scanDeps(data));
     const narrowed = await runRecall({ terms, limit: 6 }, candidateDeps(data));
     assert.ok(scanned.ok && narrowed.ok);
@@ -296,6 +317,40 @@ test('a candidate source that declines falls back to a full scan', async () => {
   assert.equal(declined, 1);
   assert.equal(result.scannedFully, true);
   assert.ok(result.passages.length > 0);
+});
+
+test('a candidate source without a corpus count is not used', async () => {
+  const data = mixedCorpus();
+  let asked = 0;
+  const counting = candidateDeps(data);
+  // idf needs the corpus size. A source that cannot report it would rank
+  // differently from the full scan, so recall must read transcripts instead
+  // rather than score against a guessed size.
+  const withoutCount: RecallDeps = {
+    ...counting,
+    listCandidates: async (input) => {
+      asked += 1;
+      return counting.listCandidates!(input);
+    },
+  };
+  delete (withoutCount as { countSearchableMessages?: unknown }).countSearchableMessages;
+  const missing = await runRecall({ terms: ['上下文'] }, withoutCount);
+  assert.ok(missing.ok);
+  assert.equal(missing.scannedFully, true);
+  assert.equal(asked, 0, 'the candidate source must not even be asked');
+
+  const declining = await runRecall(
+    { terms: ['上下文'] },
+    candidateDeps(data, { countSearchableMessages: async () => null }),
+  );
+  assert.ok(declining.ok);
+  assert.equal(declining.scannedFully, true);
+  const scanned = await runRecall({ terms: ['上下文'] }, scanDeps(data));
+  assert.ok(scanned.ok);
+  assert.deepEqual(
+    declining.passages.map((passage) => [passage.anchorMessageId, passage.score]),
+    scanned.passages.map((passage) => [passage.anchorMessageId, passage.score]),
+  );
 });
 
 test('a term the stored form escapes bypasses the candidate source', async () => {
@@ -437,6 +492,22 @@ test('matched terms come back as the caller wrote them', async () => {
   assert.deepEqual(result.passages[0]?.matchedTerms, ['Context', 'WINDOW']);
 });
 
+test('gaps never report a term that matched, whatever its case', async () => {
+  const data = corpus([
+    {
+      session: session('s-case', 'casing'),
+      messages: [assistantMessage('f1', 'tcase', 'the Context Window budget')],
+    },
+  ]);
+  for (const deps of [scanDeps(data), candidateDeps(data)]) {
+    const result = await runRecall({ terms: ['Context', 'zzz'] }, deps);
+    assert.ok(result.ok);
+    assert.deepEqual(result.passages[0]?.matchedTerms, ['Context']);
+    assert.match(result.gaps, /No transcript match for: zzz\./u);
+    assert.doesNotMatch(result.gaps, /Context/u);
+  }
+});
+
 test('a question is accepted, never matched, and never echoed', async () => {
   const data = mixedCorpus();
   const withQuestion = await runRecall(
@@ -502,6 +573,32 @@ test('matching runs on redacted text, so a secret is unreachable', async () => {
   const result = await runRecall({ terms: ['0123456789abcdefghij'] }, scanDeps(data));
   assert.ok(result.ok);
   assert.equal(result.passages.length, 0);
+});
+
+test('a term found only in a redaction marker is not a hit', async () => {
+  const data = corpus([
+    {
+      session: session('s-secret', 'leaky'),
+      messages: [
+        assistantMessage('c1', 'ts', 'set the token to ghp_0123456789abcdefghij and rerun'),
+      ],
+    },
+  ]);
+  // Redaction rewrites the text to `token to [redacted] and`. A term that
+  // occurs only in that rewritten form was never said, and no scan of stored
+  // records could offer it — so both paths must agree it is not a match.
+  for (const terms of [['redacted'], ['[redacted] and'], ['to [red']]) {
+    const scanned = await runRecall({ terms }, scanDeps(data));
+    const narrowed = await runRecall({ terms }, candidateDeps(data));
+    assert.ok(scanned.ok && narrowed.ok);
+    assert.equal(scanned.passages.length, 0, `${terms[0]} matched a redaction artifact`);
+    assert.equal(narrowed.passages.length, 0);
+  }
+  // Text on either side of the marker stays reachable, and comes back redacted.
+  const around = await runRecall({ terms: ['rerun'] }, candidateDeps(data));
+  assert.ok(around.ok);
+  assert.equal(around.passages.length, 1);
+  assert.match(around.passages[0]?.messages[0]?.text ?? '', /token to \[redacted\] and rerun/u);
 });
 
 test('simulator transcripts stay out of recall', async () => {
@@ -625,6 +722,43 @@ test('expansion widens a passage around an anchor recall reported', async () => 
   assert.ok(expanded.ok);
   assert.ok(expanded.passage.messages.length >= passage.messages.length);
   assert.equal(expanded.passage.anchorMessageId, passage.anchorMessageId);
+});
+
+test('expansion refuses an anchor inside the active turn', async () => {
+  const data = corpus([
+    {
+      session: session('s-live', 'live'),
+      messages: [
+        userMessage('e1', 'live-turn', '上下文 刚说的'),
+        assistantMessage('e2', 'earlier', '上下文 之前说的'),
+      ],
+    },
+  ]);
+  const options = { activeSessionId: 's-live', excludeTurnIds: new Set(['live-turn']) };
+  // The anchor is caller-supplied, so this is the one way the turn in flight
+  // could be widened into view after recall itself refused to surface it.
+  const live = await expandRecallPassage(
+    { sessionId: 's-live', anchorMessageId: 'e1' },
+    scanDeps(data),
+    options,
+  );
+  assert.ok(!live.ok && live.reason === 'not_found');
+
+  const earlier = await expandRecallPassage(
+    { sessionId: 's-live', anchorMessageId: 'e2' },
+    scanDeps(data),
+    options,
+  );
+  assert.ok(earlier.ok);
+  assert.equal(earlier.passage.anchorMessageId, 'e2');
+  // The exclusion is scoped to the active Session: the same turn id elsewhere
+  // is a different turn.
+  const other = await expandRecallPassage(
+    { sessionId: 's-live', anchorMessageId: 'e1' },
+    scanDeps(data),
+    { activeSessionId: 's-other', excludeTurnIds: new Set(['live-turn']) },
+  );
+  assert.ok(other.ok);
 });
 
 test('expansion refuses an anchor that is not visible transcript', async () => {

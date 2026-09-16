@@ -116,6 +116,11 @@ export const RECALL_CANDIDATE_LIMIT = 5000;
  * is an artifact of machine output rather than evidence of relevance to a
  * question, which is a fact about the message's kind and cannot be expressed
  * as a length. Tool results stay reachable, they just stop outranking prose.
+ *
+ * Measured on one workspace only: without the weight (1.0) the top result
+ * changed in 1 of 5 queries and the top five in 2 of 5, each time by promoting
+ * a tool result whose body enumerated the query term. No other value has been
+ * measured; treat 0.5 as a prior to re-measure, not a constant to reason from.
  */
 const RECALL_TOOL_RESULT_WEIGHT = 0.5;
 
@@ -234,6 +239,25 @@ export interface RecallCandidate {
   readonly message: StoredMessage;
 }
 
+/**
+ * What a storage-side candidate source is asked. This is the one shape the
+ * storage contract and the runtime both implement, so it lives here rather
+ * than being redeclared at each boundary: a drift between copies would break
+ * the superset contract without any compiler help.
+ *
+ * `terms` arrive already folded — NFC-normalized and lowercased — because the
+ * predicate they must over-approximate runs on folded text. A source that
+ * matched the raw bytes against a raw term would miss every record whose case
+ * differs from the query, which is the common path for prose.
+ */
+export interface RecallCandidateRequest {
+  readonly sessionIds: readonly string[];
+  /** Folded terms. A record whose folded stored form contains any of them is a candidate. */
+  readonly terms: readonly string[];
+  /** Above this many candidates a source declines rather than truncating. */
+  readonly limit: number;
+}
+
 export interface RecallDeps {
   listSessions(): Promise<SessionSummary[]>;
   readMessages(sessionId: string, abortSignal?: AbortSignal): Promise<StoredMessage[] | null>;
@@ -243,16 +267,24 @@ export interface RecallDeps {
    */
   getPrivacyContext(): Promise<unknown>;
   /**
-   * Optional narrow-then-verify source. It MUST return a superset of the true
-   * matches, or results are silently lost; returning `null` declines the fast
-   * path for this query and falls back to a full scan.
+   * Optional narrow-then-verify source. It MUST return every record whose
+   * folded stored form contains one of the folded `terms` — a superset of the
+   * true matches — or results are silently lost. Returning `null` declines the
+   * fast path for this query and falls back to a full scan.
+   *
+   * Only used together with `countSearchableMessages`: idf needs the corpus
+   * size, and a source that cannot report it would rank differently from the
+   * full scan, which is the one thing a candidate source must never change.
    */
   listCandidates?(input: {
     readonly terms: readonly string[];
     readonly sessionIds: readonly string[];
     readonly abortSignal?: AbortSignal;
   }): Promise<readonly RecallCandidate[] | null>;
-  /** Corpus-wide count of searchable messages, used for idf. */
+  /**
+   * Corpus-wide count of searchable messages, used for idf. `null` declines
+   * the fast path for this query along with `listCandidates`.
+   */
   countSearchableMessages?(input: {
     readonly sessionIds: readonly string[];
   }): Promise<number | null>;
@@ -458,7 +490,16 @@ export async function expandRecallPassage(
     return { ok: false, reason: 'not_found', message: 'That passage anchor was not found.' };
   }
 
+  // The anchor is caller-supplied, so the active-turn exclusion recall applies
+  // when it chooses anchors has to be re-applied here: otherwise an id from
+  // the turn in flight would widen into exactly the text recall refused to
+  // surface. Answering `not_found` keeps the refusal indistinguishable from an
+  // unknown id.
   const turnId = (message as { turnId?: string }).turnId;
+  if (sessionId === options.activeSessionId && turnId && options.excludeTurnIds?.has(turnId)) {
+    return { ok: false, reason: 'not_found', message: 'That passage anchor was not found.' };
+  }
+
   const built = buildPassage(
     {
       sessionId,
@@ -662,17 +703,20 @@ async function collectHits(
     return { hits: [], corpusSize: 0, scannedFully: true };
   }
 
-  if (!input.forceFullScan && deps.listCandidates) {
+  if (!input.forceFullScan && deps.listCandidates && deps.countSearchableMessages) {
+    // The source matches folded stored text, so it gets the folded terms the
+    // verifier will use, never the terms as the caller typed them.
     const candidates = await deps.listCandidates({
-      terms: input.terms,
+      terms: input.folded,
       sessionIds: input.sessionIds,
       ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     });
     if (input.abortSignal?.aborted) return null;
-    if (candidates) {
-      const corpusSize =
-        (await deps.countSearchableMessages?.({ sessionIds: input.sessionIds })) ?? null;
-      if (input.abortSignal?.aborted) return null;
+    const corpusSize = candidates
+      ? await deps.countSearchableMessages({ sessionIds: input.sessionIds })
+      : null;
+    if (input.abortSignal?.aborted) return null;
+    if (candidates && corpusSize !== null) {
       const hits: VerifiedHit[] = [];
       for (let index = 0; index < candidates.length; index += 1) {
         // Verification redacts before it matches, which is the expensive part
@@ -686,14 +730,7 @@ async function collectHits(
         const hit = verify(candidate.sessionId, candidate.message, input);
         if (hit) hits.push(hit);
       }
-      return {
-        hits,
-        // A candidate source that cannot report corpus size leaves idf with
-        // only the candidates, which collapses to zero for a single term. Fall
-        // back to a size that keeps idf positive and ordering meaningful.
-        corpusSize: corpusSize ?? Math.max(hits.length * 2, 1),
-        scannedFully: false,
-      };
+      return { hits, corpusSize, scannedFully: false };
     }
   }
 
@@ -741,12 +778,23 @@ function verify(
 
   const raw = collectSearchableText(message);
   if (raw === undefined) return undefined;
+  // A hit is a term that occurs in the text as it was stored *and* still
+  // occurs once secrets are redacted. Redaction alone is the security
+  // boundary: it keeps a credential-shaped term from ever matching. Requiring
+  // the stored text as well is what makes a candidate source sound — redaction
+  // rewrites text (it inserts markers, and re-serializes a JSON body it
+  // changed), and a term found only in that rewritten form would match here
+  // while no scan of stored records could offer it. Such a term names a
+  // redaction artifact rather than anything that was said, so nothing of
+  // value is lost by refusing it.
+  const foldedStored = foldForMatch(raw);
   const foldedText = foldForMatch(redactSecrets(raw));
 
   const tf = new Map<string, number>();
   const matchedTerms: string[] = [];
   for (let index = 0; index < input.folded.length; index += 1) {
     const folded = input.folded[index]!;
+    if (!foldedStored.includes(folded)) continue;
     const count = countOccurrences(foldedText, folded);
     if (count === 0) continue;
     tf.set(folded, count);
@@ -788,7 +836,9 @@ function countOccurrences(haystack: string, needle: string): number {
  * `avgdl` is the mean length of the verified hits rather than of the corpus.
  * Extracted length is only computable in this module, so a corpus-wide mean is
  * not available to a storage-side candidate source; the approximation is
- * sufficient because hits are only ever ranked against each other.
+ * sufficient because hits are only ever ranked against each other. It does
+ * mean a message's score depends on which other messages matched the same
+ * query, so scores compare within one envelope and never across calls.
  */
 function scoreHits(hits: VerifiedHit[], folded: readonly string[], corpusSize: number): void {
   if (hits.length === 0) return;
@@ -1051,8 +1101,13 @@ function describeGaps(input: {
   readonly sessions: readonly SessionSummary[];
 }): string {
   const parts: string[] = [];
+  // `matchedTerms` carries each term as the caller wrote it; compare folded
+  // forms on both sides so a mixed-case term that matched is not reported as
+  // missing in the same envelope that returns its passage.
   const matched = new Set<string>();
-  for (const hit of input.hits) for (const term of hit.matchedTerms) matched.add(term);
+  for (const hit of input.hits) {
+    for (const term of hit.matchedTerms) matched.add(foldForMatch(term));
+  }
   const missing = input.terms.filter((term) => !matched.has(foldForMatch(term)));
   if (missing.length > 0) parts.push(`No transcript match for: ${missing.join(', ')}.`);
   if (input.facts.length === 0) parts.push('No distilled facts matched.');

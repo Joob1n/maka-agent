@@ -92,6 +92,101 @@ describe('Session search candidates', () => {
     });
   });
 
+  /**
+   * Recall's predicate is case-insensitive and its terms arrive folded, so a
+   * record that spells the term with capitals has to be offered. A scan of the
+   * raw bytes would return nothing here, the fast path would be taken, and the
+   * matches would disappear without an error.
+   */
+  test('a folded term reaches a record that spells it with capitals', async () => {
+    await withStore('maka-recall-candidates-case-', async (store) => {
+      const session = await store.create(makeInput());
+      await store.appendMessage(
+        session.id,
+        userMessage('m1', 'The React component uses the Context API for state.', 10),
+      );
+      await store.appendMessage(session.id, userMessage('m2', 'lowercase context here', 20));
+
+      for (const term of ['react', 'api', 'context']) {
+        const candidates = await store.listSearchCandidates?.({
+          sessionIds: [session.id],
+          terms: [term],
+          limit: 100,
+        });
+        assert.ok(
+          ids(candidates ?? []).includes('m1'),
+          `${term} must reach the capitalized record`,
+        );
+      }
+      const both = await store.listSearchCandidates?.({
+        sessionIds: [session.id],
+        terms: ['context'],
+        limit: 100,
+      });
+      assert.deepEqual(ids(both ?? []), ['m1', 'm2']);
+    });
+  });
+
+  test('an unfolded term is refused rather than quietly mismatched', async () => {
+    await withStore('maka-recall-candidates-unfolded-', async (store) => {
+      const session = await store.create(makeInput());
+      await store.appendMessage(session.id, userMessage('m1', 'anything', 10));
+      for (const term of ['Context', 'ÄPFEL', 'é']) {
+        await assert.rejects(
+          async () =>
+            store.listSearchCandidates?.({ sessionIds: [session.id], terms: [term], limit: 10 }),
+          /must be folded/u,
+        );
+      }
+    });
+  });
+
+  /**
+   * SQLite folds ASCII only. A record whose Unicode fold differs — cased
+   * letters outside ASCII, a compatibility character, a decomposed sequence —
+   * cannot be matched by `lower()`, so the scan offers it unconditionally and
+   * leaves the predicate to decide. Stable records next to it are still
+   * filtered, which is what keeps this a narrowing rather than a full read.
+   */
+  test('a record SQLite cannot fold is offered whatever the term', async () => {
+    await withStore('maka-recall-candidates-unicode-', async (store) => {
+      const session = await store.create(makeInput());
+      await store.appendMessage(session.id, userMessage('latin', 'ĐÀ NẴNG trip notes', 10));
+      await store.appendMessage(session.id, userMessage('kelvin', 'Kelvin scale', 20));
+      await store.appendMessage(
+        session.id,
+        userMessage('hangul', '한국어 노트'.normalize('NFD'), 30),
+      );
+      await store.appendMessage(session.id, userMessage('stable', 'plain 中文 record', 40));
+
+      const search = (term: string) =>
+        store.listSearchCandidates?.({ sessionIds: [session.id], terms: [term], limit: 100 });
+
+      // Each unstable record is reached by the folded term recall would use.
+      assert.ok(ids((await search('đà nẵng')) ?? []).includes('latin'));
+      assert.ok(ids((await search('kelvin')) ?? []).includes('kelvin'));
+      assert.ok(ids((await search('한국어')) ?? []).includes('hangul'));
+
+      // Unstable records ride along on any term; the stable one is filtered.
+      assert.deepEqual(ids((await search('nothing-here')) ?? []), ['hangul', 'kelvin', 'latin']);
+      assert.deepEqual(ids((await search('中文')) ?? []), ['hangul', 'kelvin', 'latin', 'stable']);
+    });
+  });
+
+  test('a chunked record SQLite cannot fold is offered too', async () => {
+    await withStore('maka-recall-candidates-unicode-chunked-', async (store) => {
+      const session = await store.create(makeInput());
+      const filler = 'x'.repeat(80 * 1024);
+      await store.appendMessage(session.id, userMessage('big', `${filler} ĐÀ NẴNG ${filler}`, 10));
+      const candidates = await store.listSearchCandidates?.({
+        sessionIds: [session.id],
+        terms: ['đà nẵng'],
+        limit: 100,
+      });
+      assert.deepEqual(ids(candidates ?? []), ['big']);
+    });
+  });
+
   test('terms are OR-combined across the whole request', async () => {
     await withStore('maka-recall-candidates-or-', async (store) => {
       const session = await store.create(makeInput());

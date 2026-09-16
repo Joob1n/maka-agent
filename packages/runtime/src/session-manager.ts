@@ -30,6 +30,7 @@
  */
 
 import type { WorkHubActionReceipt } from '@maka/core/workhub-action-result';
+import type { RecallCandidate, RecallCandidateRequest } from '@maka/core/recall';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -596,26 +597,16 @@ export interface RegenerateTurnSource {
   readonly content: MessageContent;
 }
 
-/** Storage-side narrowing for recall. Declared structurally, like SessionStore. */
-export interface SessionSearchCandidateRequest {
-  readonly sessionIds: readonly string[];
-  /** Literal terms. A record containing any of them becomes a candidate. */
-  readonly terms: readonly string[];
-  /** Above this many candidates the store declines rather than truncating. */
-  readonly limit: number;
-}
-
-export interface SessionSearchCandidate {
-  readonly sessionId: string;
-  readonly message: StoredMessage;
-}
+/** Storage-side narrowing for recall, under the names the store contract uses. */
+export type SessionSearchCandidateRequest = RecallCandidateRequest;
+export type SessionSearchCandidate = RecallCandidate;
 
 export interface SessionStore {
   create(input: CreateSessionInput, initialBoundary?: ExecutionBoundary): Promise<SessionHeader>;
   /**
-   * Narrow recall to messages whose stored record literally contains a term.
-   * A superset of the true matches, never an answer. `undefined` declines the
-   * fast path, which sends the caller back to reading transcripts.
+   * Narrow recall to messages whose folded stored record contains a folded
+   * term. A superset of the true matches, never an answer. `undefined`
+   * declines the fast path, which sends the caller back to reading transcripts.
    */
   listSearchCandidates?(
     request: SessionSearchCandidateRequest,
@@ -1358,10 +1349,10 @@ export class SessionManager {
   }
 
   /**
-   * Narrow recall to messages whose stored record literally contains a term.
-   * The result is a superset of the true matches, so callers must re-run the
-   * real predicate; `undefined` means the store declined the fast path and the
-   * caller should fall back to reading transcripts.
+   * Narrow recall to messages whose folded stored record contains a folded
+   * term. The result is a superset of the true matches, so callers must re-run
+   * the real predicate; `undefined` means the store declined the fast path and
+   * the caller should fall back to reading transcripts.
    */
   async listSearchCandidates(
     request: SessionSearchCandidateRequest,
