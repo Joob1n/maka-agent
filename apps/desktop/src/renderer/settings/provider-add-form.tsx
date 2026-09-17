@@ -70,6 +70,7 @@ import {
   initialOnboardingModelIds,
   shouldShowManagedOnboardingOutcomeUnknown,
   stableOnboardingModels,
+  providerRequiresAcknowledgement,
   validateAddProviderDraft,
   type AddProviderIssue,
 } from './provider-add-submission';
@@ -128,14 +129,19 @@ export function AddProviderForm(props: {
   const [requestHeaders, setRequestHeaders] = useState<RequestHeaderDraft[]>([]);
   const [requestBodyText, setRequestBodyText] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  // The acknowledgement rides the existing form state rather than a state of
+  // its own: this file sits in the frozen renderer zone, where a new hook call
+  // is debt the architecture gate refuses.
   const [formState, setFormState] = useState<{
     readonly managedPhase: ManagedOnboardingPhase;
     readonly error: ProviderFormError | null;
+    readonly acknowledged: boolean;
   }>(() => ({
     managedPhase: { kind: 'input' },
     error: null,
+    acknowledged: false,
   }));
-  const { managedPhase, error } = formState;
+  const { managedPhase, error, acknowledged } = formState;
   const [busy, setBusy] = useState(false);
   const submitGuard = useActionGuard<'submit'>();
   const addProviderMountedRef = useMountedRef();
@@ -144,6 +150,7 @@ export function AddProviderForm(props: {
   const requiresBaseUrl = !defaults.baseUrl && !isCloudflareWorkersAi;
   const showsDefaultModel = recommendedDefaultModel.trim() === '';
   const isExperimental = defaults.status === 'phase3-experimental';
+  const needsAcknowledgement = providerRequiresAcknowledgement(props.providerType);
   const supportsApiKey = providerAuthSupportsApiKey(props.providerType);
   const requiresApiKey = providerAuthRequiresSecret(props.providerType) && supportsApiKey;
   const usesApiKeyDialog = usesQuickApiKeyDialog(props.providerType);
@@ -204,6 +211,7 @@ export function AddProviderForm(props: {
     if (issue.field === 'apiKey') return copy.keyRequired(display.name);
     if (issue.field === 'accountId') return copy.cloudflareAccount;
     if (issue.field === 'baseUrl') return copy.endpointRequired;
+    if (issue.reason === 'acknowledgement') return copy.transportAcknowledgeRequired;
     return copy.accountLogin;
   }
 
@@ -376,6 +384,7 @@ export function AddProviderForm(props: {
       apiKey,
       cloudflareAccountId,
       baseUrl,
+      acknowledged,
     });
     if (issue) return setError({ field: issue.field, message: issueMessage(issue) });
     submitGuard.begin('submit');
@@ -705,6 +714,33 @@ export function AddProviderForm(props: {
           status="info"
           title={copy.accountTitle}
           description={copy.accountDetail} />
+      )}
+      {/* What the request looks like on the other end, stated where the user
+          is deciding rather than after the connection exists. */}
+      {needsAcknowledgement && (
+        <VStack gap={2}>
+          <Banner
+            status="warning"
+            title={copy.transportNoticeTitle}
+            description={copy.transportNoticeDetail} />
+          <CheckboxList
+            label={copy.transportAcknowledgeLabel}
+            isLabelHidden
+            value={acknowledged ? ['acknowledged'] : []}
+            onChange={(next) => {
+              const ticked = next.includes('acknowledged');
+              setFormState((current) => ({
+                ...current,
+                acknowledged: ticked,
+                error: current.error?.field === 'form' ? null : current.error,
+              }));
+            }}
+            isDisabled={busy}
+            density="compact"
+          >
+            <CheckboxListItem value="acknowledged" label={copy.transportAcknowledgeLabel} />
+          </CheckboxList>
+        </VStack>
       )}
       <FormLayout>
         {supportsApiKey && (
