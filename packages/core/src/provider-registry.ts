@@ -88,11 +88,7 @@ type ProviderRuntimeAdapterDefinition =
   | { kind: 'openai-codex' }
   | { kind: 'google'; normalizeBaseUrl?: boolean }
   | { kind: 'cohere' }
-  /**
-   * The official Command Code CLI's private `/alpha/generate` wire. Not a
-   * published API: see `docs/commandcode-cli-transport.md` for provenance and
-   * why it ships behind a per-install flag.
-   */
+  /** The Command Code CLI's `/alpha/generate` wire, used by the GO plan. */
   | { kind: 'commandcode-cli' }
   | OpenAiCompatibleRuntimeAdapter;
 
