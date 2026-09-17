@@ -349,6 +349,13 @@ export function AddProviderForm(props: {
   async function submit() {
     if (submitGuard.current !== null) return;
     setError(null);
+    // Ahead of every route this form takes. The managed-onboarding branch
+    // below returns before `validateAddProviderDraft` runs, and the quick
+    // API-key dialog reaches this same function, so a check placed only in
+    // the draft rule would never fire for the provider that has one.
+    if (needsAcknowledgement && !acknowledged) {
+      return setError({ field: 'form', message: copy.transportAcknowledgeRequired });
+    }
     const normalizedApiKey = apiKey.trim();
     const normalizedCloudflareAccountId = cloudflareAccountId.trim();
     const normalizedDefaultModel = defaultModel.trim();
@@ -428,6 +435,35 @@ export function AddProviderForm(props: {
     event.preventDefault();
     void submit();
   }
+
+  // Rendered by every route this form can take. The quick API-key dialog
+  // returns its own subtree, so a notice placed only in the full form would
+  // never reach the provider that states one.
+  const transportAcknowledgement = needsAcknowledgement ? (
+    <VStack gap={2}>
+      <Banner
+        status="warning"
+        title={copy.transportNoticeTitle}
+        description={copy.transportNoticeDetail} />
+      <CheckboxList
+        label={copy.transportNoticeTitle}
+        isLabelHidden
+        value={acknowledged ? ['acknowledged'] : []}
+        onChange={(next) => {
+          const ticked = next.includes('acknowledged');
+          setFormState((current) => ({
+            ...current,
+            acknowledged: ticked,
+            error: current.error?.field === 'form' ? null : current.error,
+          }));
+        }}
+        isDisabled={busy}
+        density="compact"
+      >
+        <CheckboxListItem value="acknowledged" label={copy.transportAcknowledgeLabel} />
+      </CheckboxList>
+    </VStack>
+  ) : null;
 
   const advancedRequestEditor = (
     <Collapsible
@@ -655,6 +691,7 @@ export function AddProviderForm(props: {
     return (
       <VStack as="form" gap={4} onSubmit={submitApiKey}>
         {managedStepper}
+        {transportAcknowledgement}
         <FormLayout>
           <PasswordInput
             value={apiKey}
@@ -715,33 +752,7 @@ export function AddProviderForm(props: {
           title={copy.accountTitle}
           description={copy.accountDetail} />
       )}
-      {/* What the request looks like on the other end, stated where the user
-          is deciding rather than after the connection exists. */}
-      {needsAcknowledgement && (
-        <VStack gap={2}>
-          <Banner
-            status="warning"
-            title={copy.transportNoticeTitle}
-            description={copy.transportNoticeDetail} />
-          <CheckboxList
-            label={copy.transportAcknowledgeLabel}
-            isLabelHidden
-            value={acknowledged ? ['acknowledged'] : []}
-            onChange={(next) => {
-              const ticked = next.includes('acknowledged');
-              setFormState((current) => ({
-                ...current,
-                acknowledged: ticked,
-                error: current.error?.field === 'form' ? null : current.error,
-              }));
-            }}
-            isDisabled={busy}
-            density="compact"
-          >
-            <CheckboxListItem value="acknowledged" label={copy.transportAcknowledgeLabel} />
-          </CheckboxList>
-        </VStack>
-      )}
+      {transportAcknowledgement}
       <FormLayout>
         {supportsApiKey && (
           <PasswordInput
