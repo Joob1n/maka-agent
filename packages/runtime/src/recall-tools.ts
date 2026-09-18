@@ -58,8 +58,10 @@ export function buildRecallTool(deps: RecallToolDeps): MakaTool {
       'Supply a few distinct literal terms rather than a sentence: matching is case-insensitive substring, OR-combined, ' +
       'and results rank higher when they contain more of the terms. Returns distilled facts, ranked transcript passages ' +
       'that already carry the surrounding exchange, and a note on what the search did not reach. ' +
-      'A message that carried files lists them under materials, matched by file name; a material carrying a resource ' +
-      'address can be opened with Read, and one without it lives in another Session and cannot be opened from here. ' +
+      'A message that carried files lists them under materials, matched by file name. A material carrying a resource ' +
+      'address can be opened with Read, which answers an image with the image and any other file with its text; a ' +
+      'material without one cannot be read from here, either because it lives in another Session or because Read ' +
+      'cannot decode it. ' +
       'One Recall call usually suffices; use RecallMore only when a passage is cut short.',
     parameters: z
       .object({

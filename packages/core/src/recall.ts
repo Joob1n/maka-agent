@@ -55,7 +55,7 @@
  */
 
 import { formatAttachmentResourceRef, MAX_ATTACHMENT_COUNT } from './attachments.js';
-import type { AttachmentRef } from './events.js';
+import { isAttachmentRef, type AttachmentRef } from './events.js';
 import { validateWorkspacePrivacyContext } from './incognito.js';
 import { redactSecrets } from './redaction.js';
 import { SEARCH_QUERY_MAX_CHARS } from './search.js';
@@ -207,10 +207,11 @@ export interface RecallMaterial {
   readonly mimeType: string;
   readonly bytes: number;
   /**
-   * Address `Read` accepts, present only when the material is reachable from
-   * the Session asking. Attachment reads resolve against the calling Session
-   * and refuse anything stored elsewhere, so offering the address across a
-   * Session boundary would invite a call that can only fail.
+   * Address `Read` accepts, present only when `Read` would answer it from the
+   * Session asking. Attachment reads resolve against the calling Session and
+   * refuse anything stored elsewhere, and refuse a PDF wherever it is stored,
+   * so offering the address in either case would invite a call that can only
+   * fail.
    */
   readonly resource?: string;
 }
@@ -221,37 +222,37 @@ export interface RecallMaterial {
  * term the user would think to search.
  */
 export function recallMaterials(message: StoredMessage): readonly RecallMaterial[] {
-  const attachments = (message as { attachments?: unknown }).attachments;
+  if (message.type !== 'user') return [];
+  const attachments = message.attachments;
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
-  const materials: RecallMaterial[] = [];
-  // A record older or stranger than the current shape still has to project
-  // something usable or nothing at all, never a material named `undefined`.
-  for (const candidate of attachments.slice(0, MAX_ATTACHMENT_COUNT)) {
-    if (!isAttachmentRef(candidate)) continue;
-    const resource = formatAttachmentResourceRef(candidate.ref);
-    materials.push({
-      name: candidate.name,
-      kind: candidate.kind,
-      mimeType: candidate.mimeType,
-      bytes: candidate.bytes,
-      ...(resource ? { resource } : {}),
+  // Shape first, then the cap: a record older or stranger than the current
+  // shape projects nothing, and a run of those ahead of a valid attachment
+  // must not spend the cap that valid one needed.
+  return attachments
+    .filter(isAttachmentRef)
+    .slice(0, MAX_ATTACHMENT_COUNT)
+    .map((attachment) => {
+      const resource = readableAttachmentResource(attachment);
+      return {
+        name: attachment.name,
+        kind: attachment.kind,
+        mimeType: attachment.mimeType,
+        bytes: attachment.bytes,
+        ...(resource ? { resource } : {}),
+      };
     });
-  }
-  return materials;
 }
 
-function isAttachmentRef(value: unknown): value is AttachmentRef {
-  if (value === null || typeof value !== 'object') return false;
-  const candidate = value as Partial<AttachmentRef>;
-  return (
-    typeof candidate.name === 'string' &&
-    candidate.name.length > 0 &&
-    typeof candidate.kind === 'string' &&
-    typeof candidate.mimeType === 'string' &&
-    typeof candidate.bytes === 'number' &&
-    candidate.ref !== null &&
-    typeof candidate.ref === 'object'
-  );
+/**
+ * The address `Read` accepts, present only for a material `Read` can actually
+ * return. `Read` answers an image with the image and anything else with the
+ * file's text, and refuses a PDF outright — so a PDF's address is one the
+ * caller can only fail on, which is the same reason a material in another
+ * Session carries no address.
+ */
+function readableAttachmentResource(attachment: AttachmentRef): string | null {
+  if (attachment.kind === 'pdf') return null;
+  return formatAttachmentResourceRef(attachment.ref);
 }
 
 /**

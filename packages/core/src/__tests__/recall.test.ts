@@ -939,12 +939,131 @@ test('a message whose whole content was a file is still a passage', async () => 
       ],
     },
   ]);
-  const result = await runRecall({ terms: ['bundle-size'] }, scanDeps(data), {
+  for (const deps of [scanDeps(data), candidateDeps(data)]) {
+    const result = await runRecall({ terms: ['bundle-size'] }, deps, {
+      activeSessionId: 's-shot',
+    });
+    assert.ok(result.ok);
+    assert.deepEqual(anchorIds(result.passages), ['u1']);
+    assert.equal(result.passages[0]?.messages[0]?.text, '');
+  }
+});
+
+/**
+ * `Read` refuses a PDF wherever it is stored, so its address is one the caller
+ * can only fail on — the same reason a material in another Session carries
+ * none. The file stays named and matchable either way.
+ */
+test('a material Read cannot decode is named without an address', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        userMessageWithFiles('u1', 'ts', '看这份', [
+          attachment('contract.pdf', { kind: 'pdf', mimeType: 'application/pdf' }),
+          attachment('diagram.png'),
+        ]),
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['contract'] }, scanDeps(data), {
     activeSessionId: 's-shot',
   });
   assert.ok(result.ok);
-  assert.deepEqual(anchorIds(result.passages), ['u1']);
-  assert.equal(result.passages[0]?.messages[0]?.text, '');
+  const materials = result.passages[0]?.messages[0]?.materials ?? [];
+  assert.deepEqual(
+    materials.map((material) => [material.name, material.resource !== undefined]),
+    [
+      ['contract.pdf', false],
+      ['diagram.png', true],
+    ],
+  );
+});
+
+/**
+ * A passage is built around the message that matched, and the file may be on
+ * one of its neighbours — the screenshot arrives under "have a look" while the
+ * answer beside it is what carries the searchable words.
+ */
+test('a neighbour carries its own materials', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        userMessageWithFiles('u1', 'ts', '你看看', [attachment('ci-failure.png')]),
+        assistantMessage('a1', 'ts', '流水线在打包那一步挂了'),
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['流水线'] }, scanDeps(data), {
+    activeSessionId: 's-shot',
+  });
+  assert.ok(result.ok);
+  assert.deepEqual(anchorIds(result.passages), ['a1']);
+  const neighbour = result.passages[0]?.messages.find((message) => message.messageId === 'u1');
+  assert.deepEqual(
+    neighbour?.materials?.map((material) => material.name),
+    ['ci-failure.png'],
+  );
+});
+
+/**
+ * The shape check runs before the cap, so a run of records the current shape
+ * does not describe cannot spend the budget a valid attachment needed.
+ */
+test('malformed attachments do not consume the per-message cap', async () => {
+  const malformed = Array.from({ length: 8 }, () => ({ kind: 'image' }));
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        {
+          type: 'user',
+          id: 'u1',
+          turnId: 'ts',
+          ts: 1,
+          text: '看这个',
+          attachments: [...malformed, attachment('survivor.png')],
+        } as unknown as StoredMessage,
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['看这个'] }, scanDeps(data), {
+    activeSessionId: 's-shot',
+  });
+  assert.ok(result.ok);
+  assert.deepEqual(
+    result.passages[0]?.messages[0]?.materials?.map((material) => material.name),
+    ['survivor.png'],
+  );
+});
+
+/**
+ * The shared predicate rejects what a hand-written one let through: a kind
+ * outside the union, and a byte count that is not a whole number.
+ */
+test('an attachment outside the declared shape is not projected', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        userMessageWithFiles('u1', 'ts', '看这些', [
+          attachment('clip.mov', { kind: 'video' }),
+          attachment('half.png', { bytes: 1.5 }),
+          attachment('nan.png', { bytes: Number.NaN }),
+          attachment('real.png'),
+        ]),
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['看这些'] }, scanDeps(data), {
+    activeSessionId: 's-shot',
+  });
+  assert.ok(result.ok);
+  assert.deepEqual(
+    result.passages[0]?.messages[0]?.materials?.map((material) => material.name),
+    ['real.png'],
+  );
 });
 
 /**
