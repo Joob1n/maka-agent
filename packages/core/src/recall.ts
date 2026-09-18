@@ -54,6 +54,7 @@
  * density reflects machine output rather than relevance.
  */
 
+import { isCanonicalArtifactEntityId } from './artifacts.js';
 import { formatAttachmentResourceRef, MAX_ATTACHMENT_COUNT } from './attachments.js';
 import { isAttachmentRef, type AttachmentRef } from './events.js';
 import { validateWorkspacePrivacyContext } from './incognito.js';
@@ -214,6 +215,15 @@ export interface RecallMaterial {
    * fail.
    */
   readonly resource?: string;
+  /**
+   * Where the material is stored, present exactly when `resource` is not: a
+   * file `Read` cannot answer from here is still worth naming, and naming it
+   * is only useful if it can also be asked for. A retrieval tool takes this
+   * pair, checks the Session is one recall itself can see, and brings the
+   * file into the asking Session.
+   */
+  readonly sourceSessionId?: string;
+  readonly materialId?: string;
 }
 
 /**
@@ -233,12 +243,14 @@ export function recallMaterials(message: StoredMessage): readonly RecallMaterial
     .slice(0, MAX_ATTACHMENT_COUNT)
     .map((attachment) => {
       const resource = readableAttachmentResource(attachment);
+      const location = retrievableMaterialLocation(attachment);
       return {
         name: attachment.name,
         kind: attachment.kind,
         mimeType: attachment.mimeType,
         bytes: attachment.bytes,
         ...(resource ? { resource } : {}),
+        ...(location ?? {}),
       };
     });
 }
@@ -253,6 +265,22 @@ export function recallMaterials(message: StoredMessage): readonly RecallMaterial
 function readableAttachmentResource(attachment: AttachmentRef): string | null {
   if (attachment.kind === 'pdf') return null;
   return formatAttachmentResourceRef(attachment.ref);
+}
+
+/**
+ * The pair that names a material a retrieval tool can fetch: the Session that
+ * holds it and the artifact inside it. Only a durable Session artifact can be
+ * fetched, so a ref of any other kind names nothing.
+ */
+function retrievableMaterialLocation(
+  attachment: AttachmentRef,
+): { sourceSessionId: string; materialId: string } | null {
+  if (attachment.ref.kind !== 'session_file') return null;
+  if (!isCanonicalArtifactEntityId(attachment.ref.relativePath)) return null;
+  return {
+    sourceSessionId: attachment.ref.sessionId,
+    materialId: attachment.ref.relativePath,
+  };
 }
 
 /**
@@ -415,6 +443,11 @@ export interface RecallDeps {
   countSearchableMessages?(input: {
     readonly sessionIds: readonly string[];
   }): Promise<number | null>;
+  /**
+   * Brings a material into the asking Session and answers it. Absent when the
+   * host has no artifact store, which makes materials name-only.
+   */
+  fetchMaterial?: RecallMaterialFetch;
   /**
    * Text the transcript projection writes that was never stored: a truncation
    * marker, a fallback caption for a result that lost its body. Matching runs
@@ -673,6 +706,106 @@ export async function expandRecallPassage(
     return { ok: false, reason: 'not_found', message: 'That passage could not be rebuilt.' };
   }
   return { ok: true, passage: built.passage };
+}
+
+/**
+ * What a host must do to bring a material into the asking Session: copy the
+ * artifact and answer it the way `Read` answers one stored here.
+ *
+ * Copying rather than referencing is what makes the answer durable. A tool
+ * result holds its file as a ref and every later turn re-materializes it, so a
+ * ref into another Session would break the moment that Session was cleaned up
+ * — the conversation would stop reproducing. A copy belongs to the asking
+ * Session and survives whatever happens to the original.
+ */
+export interface RecallMaterialFetch {
+  (input: {
+    readonly sourceSessionId: string;
+    readonly materialId: string;
+    readonly targetSessionId: string;
+    readonly abortSignal?: AbortSignal;
+  }): Promise<RecallMaterialFetchResult>;
+}
+
+export type RecallMaterialFetchResult =
+  | { readonly ok: true; readonly content: unknown }
+  | { readonly ok: false; readonly reason: 'not_found' | 'unsupported'; readonly message: string };
+
+export interface RecallMaterialRequest {
+  readonly sessionId: string;
+  readonly materialId: string;
+}
+
+/**
+ * Brings one material named by a passage into the asking Session.
+ *
+ * The Session check is the point of this function, not a formality: without it
+ * the tool would be a way to read any artifact by id, including from the
+ * Sessions recall itself refuses to surface — incognito, retired simulator
+ * transcripts, whatever a future rule excludes. A material is retrievable
+ * exactly when recall could have shown you the Session it sits in.
+ */
+export async function fetchRecallMaterial(
+  request: unknown,
+  deps: RecallDeps,
+  options: RecallOptions = {},
+): Promise<{ readonly ok: true; readonly content: unknown } | RecallFailure> {
+  if (options.abortSignal?.aborted) return aborted();
+  if (!deps.fetchMaterial) {
+    return { ok: false, reason: 'not_found', message: 'Materials are unavailable here.' };
+  }
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+    return { ok: false, reason: 'invalid_query', message: 'Material request must be an object.' };
+  }
+  const record = request as Record<string, unknown>;
+  const sessionId = optionalString(record.sessionId);
+  const materialId = optionalString(record.materialId);
+  if (!sessionId || !materialId) {
+    return {
+      ok: false,
+      reason: 'invalid_query',
+      message: 'A material is named by its Session and its material id.',
+    };
+  }
+  if (!options.activeSessionId) {
+    return { ok: false, reason: 'not_found', message: 'Materials need an active Session.' };
+  }
+
+  const privacyPayload = await deps.getPrivacyContext();
+  if (options.abortSignal?.aborted) return aborted();
+  const privacy = validateWorkspacePrivacyContext(privacyPayload);
+  if (!privacy.ok || privacy.value.incognitoActive) {
+    return {
+      ok: false,
+      reason: 'incognito_active',
+      message: 'Recall is unavailable while incognito is active.',
+    };
+  }
+
+  const sessions = eligibleSessions(
+    collapseSessionRevisions(await deps.listSessions(), options.activeSessionId),
+    { sessionId, includeArchived: options.includeArchived === true },
+  );
+  if (options.abortSignal?.aborted) return aborted();
+  if (!sessions.some((candidate) => candidate.id === sessionId)) {
+    return { ok: false, reason: 'not_found', message: 'That material was not found.' };
+  }
+
+  const fetched = await deps.fetchMaterial({
+    sourceSessionId: sessionId,
+    materialId,
+    targetSessionId: options.activeSessionId,
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+  });
+  if (options.abortSignal?.aborted) return aborted();
+  if (!fetched.ok) {
+    return {
+      ok: false,
+      reason: fetched.reason === 'unsupported' ? 'invalid_query' : 'not_found',
+      message: fetched.message,
+    };
+  }
+  return { ok: true, content: fetched.content };
 }
 
 function normalizeSpan(value: unknown): number | undefined {
@@ -1281,6 +1414,10 @@ function projectPassageMessage(
     name: redactSecrets(material.name),
   }));
   if (text.length === 0 && materials.length === 0) return undefined;
+  // A material carries an address or a location, never both: the address says
+  // "read this now", the location says "ask for it and it will be brought
+  // here". Offering an address `Read` would refuse is the mistake this split
+  // exists to prevent.
   const reachable = sessionId !== undefined && sessionId === activeSessionId;
   return {
     messageId: message.id,
@@ -1290,12 +1427,17 @@ function projectPassageMessage(
     timestamp: message.ts,
     isAnchor,
     ...(materials.length > 0
-      ? {
-          materials: reachable
-            ? materials
-            : materials.map(({ resource: _resource, ...rest }) => rest),
-        }
+      ? { materials: materials.map((material) => addressOrLocation(material, reachable)) }
       : {}),
+  };
+}
+
+function addressOrLocation(material: RecallMaterial, reachable: boolean): RecallMaterial {
+  const { resource, sourceSessionId, materialId, ...named } = material;
+  if (reachable && resource) return { ...named, resource };
+  return {
+    ...named,
+    ...(sourceSessionId && materialId ? { sourceSessionId, materialId } : {}),
   };
 }
 

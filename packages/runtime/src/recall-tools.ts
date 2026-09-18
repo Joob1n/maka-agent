@@ -19,6 +19,7 @@
 
 import {
   expandRecallPassage,
+  fetchRecallMaterial,
   RECALL_EXPAND_MAX_NEIGHBOURS,
   RECALL_ID_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
@@ -35,6 +36,7 @@ import type { MakaTool } from './tool-runtime.js';
 
 export const RECALL_TOOL_NAME = 'Recall';
 export const RECALL_MORE_TOOL_NAME = 'RecallMore';
+export const RECALL_MATERIAL_TOOL_NAME = 'RecallMaterial';
 
 export type RecallToolDeps = RecallDeps;
 
@@ -44,7 +46,10 @@ export type RecallToolDeps = RecallDeps;
  * of its exchange than the envelope carried.
  */
 export function buildRecallTools(deps: RecallToolDeps): readonly MakaTool[] {
-  return [buildRecallTool(deps), buildRecallMoreTool(deps)];
+  const tools = [buildRecallTool(deps), buildRecallMoreTool(deps)];
+  // A host with no artifact store cannot fetch anything, and a tool that can
+  // only refuse is worse than one the model never sees.
+  return deps.fetchMaterial ? [...tools, buildRecallMaterialTool(deps)] : tools;
 }
 
 export function buildRecallTool(deps: RecallToolDeps): MakaTool {
@@ -60,8 +65,8 @@ export function buildRecallTool(deps: RecallToolDeps): MakaTool {
       'that already carry the surrounding exchange, and a note on what the search did not reach. ' +
       'A message that carried files lists them under materials, matched by file name. A material carrying a resource ' +
       'address can be opened with Read, which answers an image with the image and any other file with its text; a ' +
-      'material without one cannot be read from here, either because it lives in another Session or because Read ' +
-      'cannot decode it. ' +
+      'material without one carries source_session_id and material_id instead: pass those to RecallMaterial to ' +
+      'bring the file here. A material with neither cannot be retrieved at all. ' +
       'One Recall call usually suffices; use RecallMore only when a passage is cut short.',
     parameters: z
       .object({
@@ -140,6 +145,46 @@ export function buildRecallTool(deps: RecallToolDeps): MakaTool {
         // can decide whether to widen its terms.
         searched_every_session: result.scannedFully,
       };
+    },
+  };
+}
+
+export function buildRecallMaterialTool(deps: RecallToolDeps): MakaTool {
+  return {
+    name: RECALL_MATERIAL_TOOL_NAME,
+    displayName: 'Open a recalled file',
+    activityKind: 'read',
+    categoryHint: 'read',
+    description:
+      'Open a file a Recall passage named but could not hand you directly, using its source_session_id ' +
+      'and material_id. The file is brought into this Session and returned the way Read returns one ' +
+      'stored here, so it stays readable afterwards. Only files a person attached are retrievable, and ' +
+      'only from Sessions Recall can already see. A material that came back with a resource address ' +
+      'needs no retrieval — read that address instead.',
+    parameters: z
+      .object({
+        session_id: z
+          .string()
+          .trim()
+          .min(1)
+          .max(RECALL_ID_MAX_CHARS)
+          .describe('The material source_session_id from a Recall passage.'),
+        material_id: z
+          .string()
+          .trim()
+          .min(1)
+          .max(RECALL_ID_MAX_CHARS)
+          .describe('The material_id from a Recall passage.'),
+      })
+      .strict(),
+    impl: async ({ session_id: sessionId, material_id: materialId }, context) => {
+      const result = await fetchRecallMaterial({ sessionId, materialId }, deps, {
+        activeSessionId: context.sessionId,
+        includeArchived: true,
+        abortSignal: context.abortSignal,
+      });
+      if (!result.ok) return recallError(result);
+      return result.content;
     },
   };
 }
@@ -248,6 +293,12 @@ function projectPassage(passage: RecallPassage, activeSessionId: string) {
               mime_type: material.mimeType,
               bytes: material.bytes,
               ...(material.resource ? { resource: material.resource } : {}),
+              ...(material.sourceSessionId && material.materialId
+                ? {
+                    source_session_id: material.sourceSessionId,
+                    material_id: material.materialId,
+                  }
+                : {}),
             })),
           }
         : {}),

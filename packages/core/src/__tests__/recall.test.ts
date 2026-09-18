@@ -23,6 +23,7 @@ import type { SessionSummary, StoredMessage } from '../session.js';
 import { foldForMatch } from '../thread-search.js';
 import {
   expandRecallPassage,
+  fetchRecallMaterial,
   recallSearchableText,
   runRecall,
   type RecallDeps,
@@ -1165,6 +1166,149 @@ test('a credential-shaped file name is redacted on the way out', async () => {
   });
   assert.ok(probe.ok);
   assert.equal(probe.passages.length, 0);
+});
+
+/**
+ * A material outside the asking Session is named with where it lives, so the
+ * model has something to ask for. Inside the asking Session it is named with
+ * an address instead — asking to fetch what is already here would only copy
+ * it onto itself.
+ */
+test('a material carries an address or a location, never both', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [userMessageWithFiles('u1', 'ts', '看这个', [attachment('trace.png')])],
+    },
+  ]);
+  const here = await runRecall({ terms: ['trace'] }, scanDeps(data), { activeSessionId: 's-shot' });
+  assert.ok(here.ok);
+  const local = here.passages[0]?.messages[0]?.materials?.[0];
+  assert.ok(local?.resource);
+  assert.equal(local?.sourceSessionId, undefined);
+  assert.equal(local?.materialId, undefined);
+
+  const elsewhere = await runRecall({ terms: ['trace'] }, scanDeps(data), {
+    activeSessionId: 's-other',
+  });
+  assert.ok(elsewhere.ok);
+  const remote = elsewhere.passages[0]?.messages[0]?.materials?.[0];
+  assert.equal(remote?.resource, undefined);
+  assert.equal(remote?.sourceSessionId, 's-shot');
+  assert.equal(remote?.materialId, 'art_01HQ8Z3K4M5N6P7Q8R9S0T1V2W');
+});
+
+test('a material with no durable locator is named without one', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        userMessageWithFiles('u1', 'ts', '本地文件', [
+          attachment('notes.md', {
+            kind: 'doc',
+            mimeType: 'text/markdown',
+            ref: { kind: 'external_file', absolutePath: '/tmp/notes.md' },
+          }),
+        ]),
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['notes.md'] }, scanDeps(data), {
+    activeSessionId: 's-other',
+  });
+  assert.ok(result.ok);
+  const material = result.passages[0]?.messages[0]?.materials?.[0];
+  assert.equal(material?.name, 'notes.md');
+  assert.equal(material?.sourceSessionId, undefined);
+  assert.equal(material?.materialId, undefined);
+});
+
+/**
+ * The Session check is the point of the retrieval tool. Without it a material
+ * id would be enough to read any artifact in the workspace, including from the
+ * Sessions recall itself refuses to surface.
+ */
+test('a material is fetched only from a Session recall can see', async () => {
+  const data = corpus([
+    { session: session('s-shot', 'screenshots'), messages: [userMessage('u1', 'ts', '看这个')] },
+    {
+      session: session('s-fake', 'simulator', { backend: 'fake' } as Partial<SessionSummary>),
+      messages: [userMessage('f1', 'tf', '模拟')],
+    },
+  ]);
+  const asked: string[] = [];
+  const deps = scanDeps(data, {
+    fetchMaterial: async ({ sourceSessionId }) => {
+      asked.push(sourceSessionId);
+      return { ok: true, content: { kind: 'text', text: 'bytes' } };
+    },
+  });
+
+  const allowed = await fetchRecallMaterial({ sessionId: 's-shot', materialId: 'art_1' }, deps, {
+    activeSessionId: 's-active',
+  });
+  assert.ok(allowed.ok);
+  assert.deepEqual(allowed.content, { kind: 'text', text: 'bytes' });
+
+  for (const sessionId of ['s-fake', 's-missing']) {
+    const refused = await fetchRecallMaterial({ sessionId, materialId: 'art_1' }, deps, {
+      activeSessionId: 's-active',
+    });
+    assert.ok(!refused.ok && refused.reason === 'not_found', sessionId);
+  }
+  assert.deepEqual(asked, ['s-shot'], 'only an eligible Session may be fetched from');
+});
+
+test('material retrieval is closed while incognito is active', async () => {
+  const data = corpus([
+    { session: session('s-shot', 'screenshots'), messages: [userMessage('u1', 'ts', '看这个')] },
+  ]);
+  let asked = 0;
+  const result = await fetchRecallMaterial(
+    { sessionId: 's-shot', materialId: 'art_1' },
+    scanDeps(data, {
+      getPrivacyContext: async () => ({ incognitoActive: true }),
+      fetchMaterial: async () => {
+        asked += 1;
+        return { ok: true, content: {} };
+      },
+    }),
+    { activeSessionId: 's-active' },
+  );
+  assert.ok(!result.ok && result.reason === 'incognito_active');
+  assert.equal(asked, 0, 'the store must not be reached at all');
+});
+
+test('a host that cannot fetch materials refuses rather than pretending', async () => {
+  const data = corpus([
+    { session: session('s-shot', 'screenshots'), messages: [userMessage('u1', 'ts', '看这个')] },
+  ]);
+  const result = await fetchRecallMaterial(
+    { sessionId: 's-shot', materialId: 'art_1' },
+    scanDeps(data),
+    { activeSessionId: 's-active' },
+  );
+  assert.ok(!result.ok && result.reason === 'not_found');
+});
+
+test('a malformed material request is refused with a typed reason', async () => {
+  const data = corpus([
+    { session: session('s-shot', 'screenshots'), messages: [userMessage('u1', 'ts', '看这个')] },
+  ]);
+  const deps = scanDeps(data, { fetchMaterial: async () => ({ ok: true, content: {} }) });
+  for (const request of [null, [], 'x', {}, { sessionId: 's-shot' }, { materialId: 'art_1' }]) {
+    const result = await fetchRecallMaterial(request, deps, { activeSessionId: 's-active' });
+    assert.ok(!result.ok && result.reason === 'invalid_query', JSON.stringify(request));
+  }
+  // An unsupported material is the caller's problem to fix, not a missing one.
+  const unsupported = await fetchRecallMaterial(
+    { sessionId: 's-shot', materialId: 'art_1' },
+    scanDeps(data, {
+      fetchMaterial: async () => ({ ok: false, reason: 'unsupported', message: 'PDF' }),
+    }),
+    { activeSessionId: 's-active' },
+  );
+  assert.ok(!unsupported.ok && unsupported.reason === 'invalid_query');
 });
 
 test('a Session the source names but recall did not ask about is not read', async () => {
