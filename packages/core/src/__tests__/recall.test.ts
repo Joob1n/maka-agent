@@ -955,6 +955,83 @@ test('a message whose whole content was a file is still a passage', async () => 
  * can only fail on — the same reason a material in another Session carries
  * none. The file stays named and matchable either way.
  */
+/**
+ * Reachability is a fact about where the material is stored, not about the
+ * passage that mentioned it. A ref pointing elsewhere gets a location even
+ * when the passage itself is local — keying it on the passage would hand out
+ * an address the calling Session can only refuse.
+ */
+test('a foreign ref inside a local passage is named by location, not address', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        userMessageWithFiles('u1', 'ts', '转发过来的', [
+          attachment('from-elsewhere.png', {
+            ref: {
+              kind: 'session_file',
+              sessionId: 's-other',
+              relativePath: 'art_01HQ8Z3K4M5N6P7Q8R9S0T1V2X',
+            },
+          }),
+        ]),
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['from-elsewhere'] }, scanDeps(data), {
+    activeSessionId: 's-shot',
+  });
+  assert.ok(result.ok);
+  const material = result.passages[0]?.messages[0]?.materials?.[0];
+  assert.equal(material?.resource, undefined, 'a foreign ref must not carry a local address');
+  assert.equal(material?.sourceSessionId, 's-other');
+  assert.equal(material?.materialId, 'art_01HQ8Z3K4M5N6P7Q8R9S0T1V2X');
+});
+
+/**
+ * A location is a thing to ask for, so it is only worth carrying when asking
+ * could succeed. Retrieval refuses a PDF wherever it is stored.
+ */
+test('a remote PDF is named without a location to ask for', async () => {
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [
+        userMessageWithFiles('u1', 'ts', '看这份', [
+          attachment('contract.pdf', { kind: 'pdf', mimeType: 'application/pdf' }),
+        ]),
+      ],
+    },
+  ]);
+  const result = await runRecall({ terms: ['contract'] }, scanDeps(data), {
+    activeSessionId: 's-other',
+  });
+  assert.ok(result.ok);
+  const material = result.passages[0]?.messages[0]?.materials?.[0];
+  assert.equal(material?.name, 'contract.pdf');
+  assert.equal(material?.resource, undefined);
+  assert.equal(material?.sourceSessionId, undefined);
+  assert.equal(material?.materialId, undefined);
+});
+
+test('a message carrying more files than the cap names the first of them', async () => {
+  const many = Array.from({ length: 12 }, (_, index) => attachment(`shot-${index}.png`));
+  const data = corpus([
+    {
+      session: session('s-shot', 'screenshots'),
+      messages: [userMessageWithFiles('u1', 'ts', '一堆图', many)],
+    },
+  ]);
+  const result = await runRecall({ terms: ['一堆图'] }, scanDeps(data), {
+    activeSessionId: 's-shot',
+  });
+  assert.ok(result.ok);
+  assert.deepEqual(
+    result.passages[0]?.messages[0]?.materials?.map((material) => material.name),
+    Array.from({ length: 8 }, (_, index) => `shot-${index}.png`),
+  );
+});
+
 test('a material Read cannot decode is named without an address', async () => {
   const data = corpus([
     {

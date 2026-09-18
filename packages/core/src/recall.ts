@@ -1272,7 +1272,7 @@ function buildPassage(
 
   const render = (message: StoredMessage, isAnchor: boolean): void => {
     if (rendered.has(message.id)) return;
-    const projected = projectPassageMessage(message, isAnchor, activeSessionId, anchor.sessionId);
+    const projected = projectPassageMessage(message, isAnchor, activeSessionId);
     if (!projected) return;
     const overhead = Buffer.byteLength(JSON.stringify({ ...projected, text: '' }), 'utf8');
     if (remaining <= overhead) {
@@ -1399,7 +1399,6 @@ function projectPassageMessage(
   message: StoredMessage,
   isAnchor: boolean,
   activeSessionId?: string,
-  sessionId?: string,
 ): RecallPassageMessage | undefined {
   const raw = recallSearchableText(message);
   const text = raw === undefined ? '' : redactSecrets(raw).trim();
@@ -1418,7 +1417,6 @@ function projectPassageMessage(
   // "read this now", the location says "ask for it and it will be brought
   // here". Offering an address `Read` would refuse is the mistake this split
   // exists to prevent.
-  const reachable = sessionId !== undefined && sessionId === activeSessionId;
   return {
     messageId: message.id,
     role: passageRole(message),
@@ -1427,17 +1425,32 @@ function projectPassageMessage(
     timestamp: message.ts,
     isAnchor,
     ...(materials.length > 0
-      ? { materials: materials.map((material) => addressOrLocation(material, reachable)) }
+      ? { materials: materials.map((material) => addressOrLocation(material, activeSessionId)) }
       : {}),
   };
 }
 
-function addressOrLocation(material: RecallMaterial, reachable: boolean): RecallMaterial {
+/**
+ * Reachability is a fact about where the material itself is stored, not about
+ * the passage that mentioned it. Keying it on the passage would offer an
+ * address for a ref pointing into another Session — the doomed address this
+ * split exists to prevent, with the polarity inverted.
+ */
+function addressOrLocation(
+  material: RecallMaterial,
+  activeSessionId: string | undefined,
+): RecallMaterial {
   const { resource, sourceSessionId, materialId, ...named } = material;
-  if (reachable && resource) return { ...named, resource };
+  if (resource && sourceSessionId !== undefined && sourceSessionId === activeSessionId) {
+    return { ...named, resource };
+  }
+  // A location is a thing to ask for, so it is only worth carrying when
+  // asking could succeed. A PDF is refused wherever it is stored.
   return {
     ...named,
-    ...(sourceSessionId && materialId ? { sourceSessionId, materialId } : {}),
+    ...(sourceSessionId && materialId && named.kind !== 'pdf'
+      ? { sourceSessionId, materialId }
+      : {}),
   };
 }
 

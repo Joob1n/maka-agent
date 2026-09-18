@@ -157,10 +157,10 @@ export function buildRecallMaterialTool(deps: RecallToolDeps): MakaTool {
     categoryHint: 'read',
     description:
       'Open a file a Recall passage named but could not hand you directly, using its source_session_id ' +
-      'and material_id. The file is brought into this Session and returned the way Read returns one ' +
-      'stored here, so it stays readable afterwards. Only files a person attached are retrievable, and ' +
-      'only from Sessions Recall can already see. A material that came back with a resource address ' +
-      'needs no retrieval — read that address instead.',
+      'and material_id. The file is copied into this Session and returned the way Read returns one ' +
+      'stored here, so it stays readable afterwards; opening the same material again reuses that copy. ' +
+      'Only files a person attached are retrievable, and only from Sessions Recall can already see. ' +
+      'A material that came back with a resource address needs no retrieval — read that address instead.',
     parameters: z
       .object({
         session_id: z

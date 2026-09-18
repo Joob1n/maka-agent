@@ -55,7 +55,7 @@ import {
 import { buildToolsForAgentDefinition } from '@maka/runtime/agent-catalog';
 import { buildRecallTools } from '@maka/runtime/recall-tools';
 import { RECALL_SYNTHETIC_TEXT_PATTERNS } from '@maka/runtime/recall-candidates';
-import { MAX_ATTACHMENT_BYTES } from '@maka/core/attachments';
+import { createRecallMaterialFetch } from './recall-material-fetch.js';
 import { buildBuiltinTools } from '@maka/runtime/builtin-tools';
 import { createLocalContinuationSafetyInspector } from '@maka/runtime/continuation-safety';
 import { createConfiguredSubagentCatalog } from '@maka/runtime/configured-subagent-catalog';
@@ -712,73 +712,10 @@ export async function createExecutionRuntimeHostComposition(
           .countRecallSearchableMessages(sessionIds)
           .catch(() => undefined)) ?? null,
       syntheticTextPatterns: RECALL_SYNTHETIC_TEXT_PATTERNS,
-      // Recall has already decided the Session may be seen; this decides the
-      // artifact inside it may be taken. Only a file a person attached, and
-      // only one `Read` can answer — a copy of anything else would be a file
-      // the model cannot use, bought at the cost of storing it twice.
-      fetchMaterial: async ({ sourceSessionId, materialId, targetSessionId, abortSignal }) => {
-        if (abortSignal?.aborted) {
-          return { ok: false as const, reason: 'not_found' as const, message: 'Aborted.' };
-        }
-        const entry = await openedArtifactStore
-          .getInSession(sourceSessionId, materialId)
-          .catch(() => undefined);
-        const record = entry?.record;
-        if (!record || record.source !== 'user_upload') {
-          return {
-            ok: false as const,
-            reason: 'not_found' as const,
-            message: 'That material was not found.',
-          };
-        }
-        if (record.kind === 'pdf') {
-          return {
-            ok: false as const,
-            reason: 'unsupported' as const,
-            message: 'PDF materials cannot be decoded.',
-          };
-        }
-        if (record.sizeBytes > MAX_ATTACHMENT_BYTES) {
-          return {
-            ok: false as const,
-            reason: 'unsupported' as const,
-            message: 'That material is too large to bring into this Session.',
-          };
-        }
-        // Already here: answer it without making a second copy of itself.
-        if (sourceSessionId === targetSessionId) {
-          const content = await attachmentResources.readAttachmentResource(
-            targetSessionId,
-            materialId,
-            abortSignal ?? new AbortController().signal,
-          );
-          return { ok: true as const, content };
-        }
-        // The copy id is derived from the two Sessions and the source id, so
-        // opening the same material again reuses the copy rather than adding
-        // one. `reuse_verified` is what lets the second open succeed.
-        const copied = await openedArtifactStore.copyConversationArtifacts({
-          sourceSessionId,
-          targetSessionId,
-          turnIds: [],
-          includeArtifactIds: [materialId],
-          existingTarget: 'reuse_verified',
-        });
-        const copiedId = copied.artifactIds.get(materialId);
-        if (!copiedId) {
-          return {
-            ok: false as const,
-            reason: 'not_found' as const,
-            message: 'That material could not be brought into this Session.',
-          };
-        }
-        const content = await attachmentResources.readAttachmentResource(
-          targetSessionId,
-          copiedId,
-          abortSignal ?? new AbortController().signal,
-        );
-        return { ok: true as const, content };
-      },
+      fetchMaterial: createRecallMaterialFetch({
+        artifacts: openedArtifactStore,
+        attachments: attachmentResources,
+      }),
       searchFacts: async ({ sessionId, terms, limit }) => {
         const workspaceKey = sessionId
           ? await stores.sessionStore
