@@ -18,7 +18,7 @@
  */
 
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
-import { ICON_SIZE, Ban, ChevronRight, GitBranch, Pencil, RefreshCcw, Timer } from './icons.js';
+import { ICON_SIZE, Ban, ChevronRight, GitBranch, Maximize2, Minimize2, Pencil, RefreshCcw, Timer } from './icons.js';
 import { useClipboardCopyFeedback } from './clipboard-feedback.js';
 import { Markdown } from './markdown.js';
 import { formatTurnDuration, turnAbortStatusLabel } from './chat-display-helpers.js';
@@ -1454,6 +1454,19 @@ function TurnTimelineEntry(props: {
   );
 }
 
+/**
+ * The turn's whole execution process (reasoning, intermediate commentary, tool
+ * activity) as ONE bounded, scrollable card: a titled header row and, when
+ * open, a body that grows with its content up to a cap and then scrolls. The
+ * container's border is the card's frame, so a collapsed box keeps its outline
+ * and shows only the title row.
+ *
+ * The body owns its own scroll, not the transcript: a turn with hundreds of
+ * steps scrolls here instead of becoming an unreadable wall the reader has to
+ * traverse. While the body overflows, its top and/or bottom edge fades the
+ * content out, so the clipped rows read as "more above/below" rather than
+ * abruptly cut off.
+ */
 export function ProcessingBlock(props: {
   activityObserved?: boolean;
   entries: FoldedTimelineChild[];
@@ -1471,11 +1484,47 @@ export function ProcessingBlock(props: {
   // A failed tool is an ordinary row: no label and no reveal of its own.
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const open = props.running || manualOpen === true;
-  // The summary names WHAT the disclosure holds. The elapsed clock and the
-  // settled duration live on the turn's footer row (`TurnStatusLine`), the one
-  // place under the answer that a growing reply cannot scroll out of view;
-  // restating them here said the same thing twice, once where it gets lost.
+  // The title names WHAT the box holds. The elapsed clock and the settled
+  // duration live on the turn's footer row (`TurnStatusLine`), the one place
+  // under the answer that a growing reply cannot scroll out of view; restating
+  // them here said the same thing twice, once where it gets lost.
   const label = copy.processDetails;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState({ top: false, bottom: false });
+  // The whole box's height switch: false keeps the reading cap (the default
+  // frame), true drops it so the process lists in full — the reader's "show me
+  // everything at once" for a turn they want to read end to end.
+  const [unclamped, setUnclamped] = useState(false);
+  // Re-measure whenever the box can change height: opening, entries streaming
+  // in, the reader dropping the cap, and their own scrolling. Only re-set state
+  // when an edge flag actually flips, so a live turn does not re-render each
+  // frame. An unclamped body has no clipped edge, so it measures no fade.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !open || unclamped) {
+      setOverflow((previous) =>
+        previous.top || previous.bottom ? { top: false, bottom: false } : previous,
+      );
+      return;
+    }
+    const measure = () => {
+      const top = body.scrollTop > 0;
+      const bottom = body.scrollTop + body.clientHeight < body.scrollHeight - 1;
+      setOverflow((previous) =>
+        previous.top === top && previous.bottom === bottom ? previous : { top, bottom },
+      );
+    };
+    measure();
+    body.addEventListener('scroll', measure, { passive: true });
+    // Absent in the SSR/test DOM: appended entries and the reader's own scroll
+    // still re-measure there, so the fade simply stays off.
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(body);
+    return () => {
+      body.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+  }, [open, props.entries.length, unclamped]);
   return (
     <details
       className="maka-processing-sequence"
@@ -1497,30 +1546,64 @@ export function ProcessingBlock(props: {
           The cue belongs on the turn's footer row (see `TurnStatusLine`), the
           one place under the answer that a growing reply cannot push away. The
           exception is the WAITING state: a turn the transcript does not contain
-          yet has no footer, and this empty disclosure is what stands in for it —
-          there the cue is the only thing to show, so it renders here.
+          yet has no footer, and this box is what stands in for it — there the
+          cue is the only thing to show, so it renders here.
         */}
         {props.activity ? (
           <TurnRunningStatus
             startedAt={props.activity.startedAt}
             activityLabel={props.activity.label}
           />
-        ) : <span>{label}</span>}
+        ) : (
+          <span className="maka-processing-title">{label}</span>
+        )}
         {!props.running && <ChevronRight size={ICON_SIZE.meta} aria-hidden="true" />}
       </summary>
-      <div className="maka-processing-clip"><div className="maka-processing-content">
-        {props.entries.map((entry, index) => (
-          <TurnTimelineEntry
-            key={timelineEntryKey(entry, index)}
-            activityObserved={open && props.activityObserved !== false}
-            item={entry}
-            onStreamingSettled={props.onStreamingSettled}
-            onOpenLinkedSession={props.onOpenLinkedSession}
-            onSwitchToBypassAndRetry={props.onSwitchToBypassAndRetry}
-            initialLiveContent={props.initialLiveContent}
-          />
-        ))}
-      </div></div>
+      <div
+        className="maka-processing-body"
+        ref={bodyRef}
+        data-unclamped={unclamped ? 'true' : undefined}
+        data-overflow-top={overflow.top ? 'true' : undefined}
+        data-overflow-bottom={overflow.bottom ? 'true' : undefined}
+      >
+        <div className="maka-processing-content">
+          {props.entries.map((entry, index) => (
+            <TurnTimelineEntry
+              key={timelineEntryKey(entry, index)}
+              activityObserved={open && props.activityObserved !== false}
+              item={entry}
+              onStreamingSettled={props.onStreamingSettled}
+              onOpenLinkedSession={props.onOpenLinkedSession}
+              onSwitchToBypassAndRetry={props.onSwitchToBypassAndRetry}
+              initialLiveContent={props.initialLiveContent}
+            />
+          ))}
+        </div>
+        {/* The zoom switch sits at the body's bottom-right corner, not in the
+            header: it is about how the body is shown, so it belongs with the
+            body. The two diagonal-out arrows mean "preview this at full size"
+            (drop the reading cap and list everything); the two diagonal-in ones
+            mean "take back the reading cap". It is a real button, not a
+            disclosure control, so activating it never toggles the frame — a
+            folded box stays folded, and reopening keeps whichever height the
+            reader last chose. */}
+        {props.entries.some((entry) => entry.kind === 'thinking' || entry.kind === 'tools') && (
+          <button
+            type="button"
+            className="maka-processing-expand"
+            aria-pressed={unclamped}
+            aria-label={unclamped ? copy.processRestore : copy.processExpandAll}
+            title={unclamped ? copy.processRestore : copy.processExpandAll}
+            onClick={() => setUnclamped((previous) => !previous)}
+          >
+            <Icon
+              icon={unclamped ? Minimize2 : Maximize2}
+              size="sm"
+              aria-hidden="true"
+            />
+          </button>
+        )}
+      </div>
     </details>
   );
 }
