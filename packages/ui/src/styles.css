@@ -349,11 +349,14 @@
    to the transcript, so reaching the top/bottom of the box scrolls the page
    instead of dead-stopping. `contain` would make the transcript authority treat
    the box as a dead end and hand off nothing. */
+/* The viewport's overflow is owned by Astryx's `useScrollableArea` (applied
+   through the class that carries `--x-overflow*`): product CSS here only states
+   the cap, the radius and the scrollbar width. Do NOT restate `overflow-y`
+   — it would override the primitive and make `stickyContainment` inert. */
 .maka-processing-body {
   --maka-process-cap: min(50vh, 360px);
   max-height: var(--maka-process-cap);
   min-height: 0;
-  overflow-y: auto;
   border-radius: 0 0 calc(var(--radius-surface) - 1px) calc(var(--radius-surface) - 1px);
   scrollbar-width: thin;
 }

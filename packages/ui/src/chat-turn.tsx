@@ -1559,8 +1559,11 @@ export function ProcessingBlock(props: {
           only when the body actually overflows (nothing to unclamp otherwise),
           and stays put while magnified so the reader can take the cap back. */}
       <div
-        {...scrollable.getViewportProps<HTMLDivElement>({ xstyle: undefined })}
-        className="maka-processing-body"
+        // The class goes INTO the getter, not after the spread: the returned
+        // props already carry the primitive's overflow class, and a later
+        // `className` would replace it (keeping only the inline vars) and leave
+        // the overflow — including `stickyContainment` — up to product CSS.
+        {...scrollable.getViewportProps<HTMLDivElement>({ className: 'maka-processing-body' })}
         data-unclamped={unclamped ? 'true' : undefined}
       >
         <div {...scrollable.getContentProps<HTMLDivElement>()} className="maka-processing-content">
