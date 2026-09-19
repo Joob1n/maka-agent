@@ -379,28 +379,18 @@
 .maka-processing-body[data-overflow-top='true'][data-overflow-bottom='true'] {
   mask-image: linear-gradient(transparent, black var(--space-6), black calc(100% - var(--space-6)), transparent);
 }
-/* The zoom switch: the body is a positioned context, and the button sits in
-   its bottom-right corner, floating over the rows so it never takes flow space
-   (which would otherwise change the content's height and the overflow measure).
-   It rides the body's scrollbox (absolute, not fixed), so it stays in the
-   corner while the rows scroll underneath it. */
+/* The zoom switch: the body is a positioned context, and Astryx's icon button
+   sits in its bottom-right corner, floating over the rows so it never takes
+   flow space (which would otherwise change the content's height and the
+   overflow measure). It rides the body's scrollbox (absolute, not fixed), so it
+   stays in the corner while the rows scroll underneath it. Only placement is
+   product CSS: Astryx owns the button's chrome, hover, and focus ring. */
 .maka-processing-expand {
   position: absolute;
   right: var(--space-2);
   bottom: var(--space-2);
   z-index: 1;
-  box-sizing: border-box;
-  width: var(--h-control-sm);
-  height: var(--h-control-sm);
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--background-elevated);
-  color: var(--muted-foreground);
-  align-items: center;
-  justify-content: center;
 }
-.maka-processing-expand:hover { color: var(--foreground); }
 /* The reader dropped the cap: the process lists in full with no inner scroll,
    back to the uncapped reading it had before the frame, so a reader who wants
    the whole thing at once can have it. `overflow` stays clipping — the body

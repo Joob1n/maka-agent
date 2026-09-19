@@ -1583,25 +1583,21 @@ export function ProcessingBlock(props: {
             header: it is about how the body is shown, so it belongs with the
             body. The two diagonal-out arrows mean "preview this at full size"
             (drop the reading cap and list everything); the two diagonal-in ones
-            mean "take back the reading cap". It is a real button, not a
+            mean "take back the reading cap". It is Astryx's `IconButton`, not a
             disclosure control, so activating it never toggles the frame — a
             folded box stays folded, and reopening keeps whichever height the
             reader last chose. */}
         {props.entries.some((entry) => entry.kind === 'thinking' || entry.kind === 'tools') && (
-          <button
-            type="button"
+          <UiIconButton
             className="maka-processing-expand"
+            label={unclamped ? copy.processRestore : copy.processExpandAll}
+            tooltip={unclamped ? copy.processRestore : copy.processExpandAll}
+            icon={<Icon icon={unclamped ? Minimize2 : Maximize2} size="sm" aria-hidden="true" />}
+            variant="ghost"
+            size="sm"
             aria-pressed={unclamped}
-            aria-label={unclamped ? copy.processRestore : copy.processExpandAll}
-            title={unclamped ? copy.processRestore : copy.processExpandAll}
             onClick={() => setUnclamped((previous) => !previous)}
-          >
-            <Icon
-              icon={unclamped ? Minimize2 : Maximize2}
-              size="sm"
-              aria-hidden="true"
-            />
-          </button>
+          />
         )}
       </div>
     </details>
