@@ -309,6 +309,7 @@
    then scrolls inside the frame. Keep children mounted so tool disclosures and
    streamed text retain their identities. */
 .maka-processing-sequence {
+  position: relative;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
@@ -379,21 +380,29 @@
 .maka-processing-body[data-overflow-top='true'][data-overflow-bottom='true'] {
   mask-image: linear-gradient(transparent, black var(--space-6), black calc(100% - var(--space-6)), transparent);
 }
-/* The zoom switch's wrapper: a zero-height sticky row inside the scroller, so
-   the switch rides the VISIBLE bottom edge while rows pass under it. It takes
-   no flow space (height 0), which would otherwise change the content's height
-   and the overflow measure. Only placement is product CSS: Astryx owns the
-   button's chrome, hover, and focus ring. The wrapper itself ignores pointer
-   events so a click on the gap still reaches the rows; the button does not. */
+/* The zoom switch's wrapper. Zero-height sticky inside the body in the capped
+   state, so the switch rides the VISIBLE bottom edge as rows pass under it and
+   never takes flow space (which would change the content's height and the
+   overflow measure). Unclamped, the body grows to its full height, so the
+   wrapper sticks to the frame's bottom directly — which is the viewport's
+   bottom while the reader scrolls the long list, keeping the way back visible.
+   Only placement is product CSS: Astryx owns the button's chrome, hover, and
+   focus ring. The gap ignores pointer events so a click there still reaches
+   the rows; the button does not. */
 .maka-processing-zoom {
   position: sticky;
-  bottom: 0;
   z-index: 1;
   height: 0;
   display: flex;
   align-items: flex-end;
   justify-content: flex-end;
   pointer-events: none;
+}
+.maka-processing-body:not([data-unclamped='true']) .maka-processing-zoom {
+  bottom: var(--space-2);
+}
+.maka-processing-body[data-unclamped='true'] .maka-processing-zoom {
+  bottom: calc(-1 * var(--space-2));
 }
 .maka-processing-zoom > * {
   pointer-events: auto;

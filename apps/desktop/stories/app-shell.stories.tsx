@@ -3977,36 +3977,54 @@ export const CompletedProcessZoomThenFold: Story = {
   render: () => <ComposedShell motionEnabled sidebarCollapsed chat={{ messages: oversizedTurn, scrollBehavior: 'auto' }} />,
   play: async ({ canvasElement }) => {
     await waitFor(() => {
-      const root = canvasElement.querySelector('.maka-processing-sequence');
-      expect(root).not.toBeNull();
+      expect(canvasElement.querySelector('.maka-processing-sequence')).not.toBeNull();
     });
     const process = canvasElement.querySelector<HTMLDetailsElement>('.maka-processing-sequence')!;
     const body = process.querySelector<HTMLElement>('.maka-processing-body')!;
-    if (!process.open) process.querySelector('summary')!.click();
-    await waitFor(() => expect(process.open).toBe(true));
+    const scroll = canvasElement.querySelector<HTMLElement>('[data-chat-scroll-container]')!;
+    // Bring the box to the top of the transcript first: the state under test is
+    // the reader IN a long process, so the frame must be on screen to mean
+    // anything (measuring it off-screen is what let the old [P2] through).
+    const arrange = async () => {
+      if (!process.open) process.querySelector('summary')!.click();
+      await waitFor(() => expect(process.open).toBe(true));
+      scroll.scrollTop += process.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+      await waitFor(() => {
+        const frame = process.getBoundingClientRect();
+        const viewport = scroll.getBoundingClientRect();
+        expect(frame.top).toBeGreaterThanOrEqual(viewport.top - 2);
+        expect(frame.top).toBeLessThanOrEqual(viewport.top + 2);
+      });
+    };
+    await arrange();
     const corner = body.querySelector<HTMLElement>('.maka-processing-zoom')!;
     await expect(corner).toBeVisible();
     const toggle = corner.querySelector<HTMLButtonElement>('button')!;
+    const switchRect = () => toggle.getBoundingClientRect();
+    const insideBody = () => {
+      const b = body.getBoundingClientRect();
+      const t = switchRect();
+      return t.top >= b.top - 1 && t.bottom <= b.bottom + 1;
+    };
     // Scroll the body to its end: the switch must ride the visible bottom edge,
-    // still inside the body's box, not travel out of view with the content.
+    // still inside the body's box, not travel up and out with the content.
     body.scrollTop = body.scrollHeight;
     await waitFor(() => {
-      const bodyRect = body.getBoundingClientRect();
-      const switchRect = toggle.getBoundingClientRect();
-      expect(switchRect.bottom).toBeGreaterThan(bodyRect.top);
-      expect(switchRect.top).toBeLessThan(bodyRect.bottom);
+      expect(insideBody()).toBe(true);
+      expect(switchRect().top).toBeGreaterThanOrEqual(0);
+      expect(switchRect().bottom).toBeLessThanOrEqual(window.innerHeight);
     });
     toggle.click();
     await waitFor(() => expect(body.getAttribute('data-unclamped')).toBe('true'));
     await expect(toggle).toHaveAttribute('aria-label', '恢复固定高度');
-    // Dropping the cap is a height change, not a scroll-mode trick: the body no
-    // longer clips its own content.
+    // Dropping the cap is a height change, not a scroll-mode trick.
     await expect(getComputedStyle(body).maxHeight).toBe('none');
-    // The switch stays reachable while unclamped so the reader can take the cap
-    // back — it must still be on screen, not at the end of a 7000px list.
-    const unclampedRect = toggle.getBoundingClientRect();
-    await expect(unclampedRect.top).toBeGreaterThanOrEqual(0);
-    await expect(unclampedRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    // The switch stays reachable while unclamped — on screen, not stranded at
+    // the far end of an ~8000px list — so the reader can take the cap back.
+    await waitFor(() => {
+      expect(switchRect().top).toBeGreaterThanOrEqual(0);
+      expect(switchRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+    });
     // Fold still collapses everything while unclamped — the regression guard.
     const summary = process.querySelector('summary')!;
     summary.click();

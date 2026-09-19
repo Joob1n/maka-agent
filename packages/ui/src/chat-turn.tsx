@@ -1567,6 +1567,20 @@ export function ProcessingBlock(props: {
         )}
         {!props.running && <ChevronRight size={ICON_SIZE.meta} aria-hidden="true" />}
       </summary>
+      {/* One element closes the frame and holds the switch, so the body can be
+          sticky against the FRAME (below) while the frame is the scroller's
+          positioned context (relative). The switch is a real Astryx
+          `IconButton`, not a disclosure control, so activating it never toggles
+          the frame — a folded box stays folded, and reopening keeps whichever
+          height the reader last chose.
+          While CAPPED the wrapper is zero-height and sticky inside the body, so
+          the switch rides the visible bottom edge as rows pass under it — and
+          sits at the frame's bottom when the content does not fill it. While
+          UNCLAMPED the wrapper is sticky at the frame's bottom, which is the
+          viewport's bottom too (the frame then spans the viewport): the reader
+          keeps the way back to the capped view as they scroll the long list.
+          Either way the switch NEVER takes flow space (height 0 or sticky), so
+          it cannot change the content's height or the overflow measure. */}
       <div
         className="maka-processing-body"
         ref={bodyRef}
@@ -1587,21 +1601,6 @@ export function ProcessingBlock(props: {
             />
           ))}
         </div>
-        {/* The zoom switch sits in the body's bottom-right corner, not in the
-            header: it is about how the body is shown, so it belongs with the
-            body. The two diagonal-out arrows mean "preview this at full size"
-            (drop the reading cap and list everything); the two diagonal-in ones
-            mean "take back the reading cap". It is Astryx's `IconButton`, not a
-            disclosure control, so activating it never toggles the frame — a
-            folded box stays folded, and reopening keeps whichever height the
-            reader last chose.
-            The wrapper is a zero-height sticky row inside the scroller, so the
-            switch rides the VISIBLE bottom edge as rows scroll under it: an
-            absolutely positioned control would instead be part of the scrolled
-            content and drift away (and land off-screen once the cap is
-            dropped). It appears only when the body actually overflows — a box
-            that fits has nothing to unclamp — and stays put while unclamped so
-            the reader can take the cap back. */}
         {(overflows || unclamped) && (
           <div className="maka-processing-zoom">
             <UiIconButton
