@@ -309,7 +309,6 @@
    then scrolls inside the frame. Keep children mounted so tool disclosures and
    streamed text retain their identities. */
 .maka-processing-sequence {
-  position: relative;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
@@ -351,8 +350,8 @@
    instead of dead-stopping. `contain` would make the transcript authority treat
    the box as a dead end and hand off nothing. */
 .maka-processing-body {
-  position: relative;
-  max-height: min(50vh, 360px);
+  --maka-process-cap: min(50vh, 360px);
+  max-height: var(--maka-process-cap);
   min-height: 0;
   overflow-y: auto;
   border-radius: 0 0 calc(var(--radius-surface) - 1px) calc(var(--radius-surface) - 1px);
@@ -380,17 +379,17 @@
 .maka-processing-body[data-overflow-top='true'][data-overflow-bottom='true'] {
   mask-image: linear-gradient(transparent, black var(--space-6), black calc(100% - var(--space-6)), transparent);
 }
-/* The zoom switch's wrapper. Zero-height sticky inside the body in the capped
-   state, so the switch rides the VISIBLE bottom edge as rows pass under it and
-   never takes flow space (which would change the content's height and the
-   overflow measure). Unclamped, the body grows to its full height, so the
-   wrapper sticks to the frame's bottom directly — which is the viewport's
-   bottom while the reader scrolls the long list, keeping the way back visible.
-   Only placement is product CSS: Astryx owns the button's chrome, hover, and
-   focus ring. The gap ignores pointer events so a click there still reaches
-   the rows; the button does not. */
+/* The zoom switch's wrapper: zero-height and sticky inside the body, so the
+   switch rides the body's VISIBLE bottom edge as rows pass under it, and never
+   takes flow space (which would change the content's height and the overflow
+   measure). It works in both states because the body is a scroll container in
+   both: capped at the reading cap, or at the taller magnified cap. Only
+   placement is product CSS: Astryx owns the button's chrome, hover, and focus
+   ring. The gap ignores pointer events so a click there still reaches the rows;
+   the button does not. */
 .maka-processing-zoom {
   position: sticky;
+  bottom: var(--space-2);
   z-index: 1;
   height: 0;
   display: flex;
@@ -398,28 +397,18 @@
   justify-content: flex-end;
   pointer-events: none;
 }
-.maka-processing-body:not([data-unclamped='true']) .maka-processing-zoom {
-  bottom: var(--space-2);
-}
-.maka-processing-body[data-unclamped='true'] .maka-processing-zoom {
-  bottom: calc(-1 * var(--space-2));
-}
 .maka-processing-zoom > * {
   pointer-events: auto;
   margin-inline-end: var(--space-2);
   margin-block-end: var(--space-2);
 }
-/* The reader dropped the cap: the process lists in full with no inner scroll,
-   back to the uncapped reading it had before the frame, so a reader who wants
-   the whole thing at once can have it. `overflow: clip` (not `visible`) keeps
-   the body clipping its own overflow, which the frame's fold needs to collapse
-   it; but unlike `hidden` it is NOT a scroll container, so the zoom switch's
-   sticky wrapper falls through to the transcript scroller and rides the
-   viewport edge while the reader scrolls the long process — instead of being
-   stranded at the far end of the content. */
+/* The reader took the cap off: the process gets the full available height and
+   scrolls inside it, so they can read the whole thing in one tall frame. It is
+   NOT unbounded — a body that never scrolls stops being the switch's scrollport
+   and the corner control drifts to the end of the content (the [P2] the review
+   caught). A taller cap keeps the switch pinned to the visible bottom edge. */
 .maka-processing-body[data-unclamped='true'] {
-  max-height: none;
-  overflow: clip;
+  --maka-process-cap: 80vh;
 }
 /* Match Astryx ChatToolCalls' grid disclosure motion. The native details
    content remains rendered through exit, without a second open state or timer.

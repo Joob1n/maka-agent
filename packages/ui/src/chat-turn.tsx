@@ -1567,20 +1567,19 @@ export function ProcessingBlock(props: {
         )}
         {!props.running && <ChevronRight size={ICON_SIZE.meta} aria-hidden="true" />}
       </summary>
-      {/* One element closes the frame and holds the switch, so the body can be
-          sticky against the FRAME (below) while the frame is the scroller's
-          positioned context (relative). The switch is a real Astryx
-          `IconButton`, not a disclosure control, so activating it never toggles
-          the frame — a folded box stays folded, and reopening keeps whichever
-          height the reader last chose.
-          While CAPPED the wrapper is zero-height and sticky inside the body, so
-          the switch rides the visible bottom edge as rows pass under it — and
-          sits at the frame's bottom when the content does not fill it. While
-          UNCLAMPED the wrapper is sticky at the frame's bottom, which is the
-          viewport's bottom too (the frame then spans the viewport): the reader
-          keeps the way back to the capped view as they scroll the long list.
-          Either way the switch NEVER takes flow space (height 0 or sticky), so
-          it cannot change the content's height or the overflow measure. */}
+      {/* The body owns its own scroll, capped at a reading height, and carries
+          the zoom switch in a zero-height sticky wrapper pinned to its visible
+          bottom edge — inside the body, not floating, so it never drifts with
+          the content and never takes flow space (which would change the
+          content's height and the overflow measure). The body is a scroll
+          container in BOTH states (capped, or a taller magnified cap), which is
+          what the sticky wrapper needs to resolve to; an unbounded body would
+          stop being one and the switch would strand at the end of the content.
+          The switch is a real Astryx `IconButton`, not a disclosure control, so
+          activating it never toggles the frame — a folded box stays folded, and
+          reopening keeps whichever height the reader last chose. It appears
+          only when the body actually overflows (nothing to unclamp otherwise),
+          and stays put while magnified so the reader can take the cap back. */}
       <div
         className="maka-processing-body"
         ref={bodyRef}

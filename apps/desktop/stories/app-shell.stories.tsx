@@ -3981,50 +3981,47 @@ export const CompletedProcessZoomThenFold: Story = {
     });
     const process = canvasElement.querySelector<HTMLDetailsElement>('.maka-processing-sequence')!;
     const body = process.querySelector<HTMLElement>('.maka-processing-body')!;
-    const scroll = canvasElement.querySelector<HTMLElement>('[data-chat-scroll-container]')!;
-    // Bring the box to the top of the transcript first: the state under test is
-    // the reader IN a long process, so the frame must be on screen to mean
-    // anything (measuring it off-screen is what let the old [P2] through).
-    const arrange = async () => {
-      if (!process.open) process.querySelector('summary')!.click();
-      await waitFor(() => expect(process.open).toBe(true));
-      scroll.scrollTop += process.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
-      await waitFor(() => {
-        const frame = process.getBoundingClientRect();
-        const viewport = scroll.getBoundingClientRect();
-        expect(frame.top).toBeGreaterThanOrEqual(viewport.top - 2);
-        expect(frame.top).toBeLessThanOrEqual(viewport.top + 2);
-      });
-    };
-    await arrange();
+    if (!process.open) process.querySelector('summary')!.click();
+    await waitFor(() => expect(process.open).toBe(true));
     const corner = body.querySelector<HTMLElement>('.maka-processing-zoom')!;
     await expect(corner).toBeVisible();
     const toggle = corner.querySelector<HTMLButtonElement>('button')!;
-    const switchRect = () => toggle.getBoundingClientRect();
-    const insideBody = () => {
-      const b = body.getBoundingClientRect();
-      const t = switchRect();
-      return t.top >= b.top - 1 && t.bottom <= b.bottom + 1;
-    };
+    // Where the switch sits relative to the body's own box. This is independent
+    // of where the transcript happens to be scrolled: a switch that has drifted
+    // into the scrolled content reports ~contentHeight (the [P2] bug), while a
+    // switch that stays with the reading edge reports at most the visible box.
+    const switchOffsetInBody = () =>
+      toggle.getBoundingClientRect().top - body.getBoundingClientRect().top;
     // Scroll the body to its end: the switch must ride the visible bottom edge,
-    // still inside the body's box, not travel up and out with the content.
+    // not travel up and out with the content.
     body.scrollTop = body.scrollHeight;
     await waitFor(() => {
-      expect(insideBody()).toBe(true);
-      expect(switchRect().top).toBeGreaterThanOrEqual(0);
-      expect(switchRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(body.scrollTop).toBeGreaterThan(0);
+      expect(switchOffsetInBody()).toBeGreaterThanOrEqual(-1);
+      expect(switchOffsetInBody()).toBeLessThanOrEqual(body.clientHeight);
     });
+    const cappedHeight = body.clientHeight;
     toggle.click();
     await waitFor(() => expect(body.getAttribute('data-unclamped')).toBe('true'));
     await expect(toggle).toHaveAttribute('aria-label', '恢复固定高度');
-    // Dropping the cap is a height change, not a scroll-mode trick.
-    await expect(getComputedStyle(body).maxHeight).toBe('none');
-    // The switch stays reachable while unclamped — on screen, not stranded at
-    // the far end of an ~8000px list — so the reader can take the cap back.
+    // Taking the cap off gives the body a taller frame (not an unbounded one):
+    // it stays a scroller so the corner switch keeps a scrollport to stick to.
+    await expect(body.clientHeight).toBeGreaterThan(cappedHeight);
+    await expect(getComputedStyle(body).overflowY).toBe('auto');
+    // Unclamped the switch must not be stranded at the end of the ~8000px list;
+    // it stays within a viewport of the frame's top. (If the box is on screen,
+    // also assert it is actually on screen — the reader's real condition.)
     await waitFor(() => {
-      expect(switchRect().top).toBeGreaterThanOrEqual(0);
-      expect(switchRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(switchOffsetInBody()).toBeLessThan(window.innerHeight);
     });
+    const scroll = canvasElement.querySelector<HTMLElement>('[data-chat-scroll-container]')!;
+    const viewport = scroll.getBoundingClientRect();
+    const frame = process.getBoundingClientRect();
+    if (frame.bottom > viewport.top && frame.top < viewport.bottom) {
+      const rect = toggle.getBoundingClientRect();
+      expect(rect.bottom).toBeGreaterThan(viewport.top);
+      expect(rect.top).toBeLessThan(viewport.bottom);
+    }
     // Fold still collapses everything while unclamped — the regression guard.
     const summary = process.querySelector('summary')!;
     summary.click();
