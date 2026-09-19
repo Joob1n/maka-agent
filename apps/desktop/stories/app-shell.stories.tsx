@@ -3983,7 +3983,14 @@ export const CompletedProcessZoomThenFold: Story = {
     const body = process.querySelector<HTMLElement>('.maka-processing-body')!;
     if (!process.open) process.querySelector('summary')!.click();
     await waitFor(() => expect(process.open).toBe(true));
-    const corner = body.querySelector<HTMLElement>('.maka-processing-zoom')!;
+    // The body's scrollability is measured a frame after mount (Astryx's
+    // `useScrollableArea` schedules its first measure on an animation frame),
+    // and the switch renders once it knows the body overflows.
+    const corner = await waitFor(() => {
+      const found = body.querySelector<HTMLElement>('.maka-processing-zoom');
+      expect(found).not.toBeNull();
+      return found!;
+    });
     await expect(corner).toBeVisible();
     const toggle = corner.querySelector<HTMLButtonElement>('button')!;
     // Where the switch sits relative to the body's own box. This is independent
