@@ -1491,25 +1491,29 @@ export function ProcessingBlock(props: {
   const label = copy.processDetails;
   const bodyRef = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState({ top: false, bottom: false });
+  const [overflows, setOverflows] = useState(false);
   // The whole box's height switch: false keeps the reading cap (the default
   // frame), true drops it so the process lists in full — the reader's "show me
   // everything at once" for a turn they want to read end to end.
   const [unclamped, setUnclamped] = useState(false);
   // Re-measure whenever the box can change height: opening, entries streaming
   // in, the reader dropping the cap, and their own scrolling. Only re-set state
-  // when an edge flag actually flips, so a live turn does not re-render each
-  // frame. An unclamped body has no clipped edge, so it measures no fade.
+  // when a flag actually flips, so a live turn does not re-render each frame.
+  // An unclamped body has no clipped edge, so it measures no fade.
   useEffect(() => {
     const body = bodyRef.current;
-    if (!body || !open || unclamped) {
+    if (!body || !open) {
       setOverflow((previous) =>
         previous.top || previous.bottom ? { top: false, bottom: false } : previous,
       );
       return;
     }
     const measure = () => {
-      const top = body.scrollTop > 0;
-      const bottom = body.scrollTop + body.clientHeight < body.scrollHeight - 1;
+      // Whether the body is taller than it shows — the real condition for
+      // offering the height switch, independent of what KIND of entries fill it.
+      setOverflows(body.scrollHeight > body.clientHeight + 1);
+      const top = !unclamped && body.scrollTop > 0;
+      const bottom = !unclamped && body.scrollTop + body.clientHeight < body.scrollHeight - 1;
       setOverflow((previous) =>
         previous.top === top && previous.bottom === bottom ? previous : { top, bottom },
       );
@@ -1519,7 +1523,11 @@ export function ProcessingBlock(props: {
     // Absent in the SSR/test DOM: appended entries and the reader's own scroll
     // still re-measure there, so the fade simply stays off.
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
-    observer?.observe(body);
+    // Observe the CONTENT, not the body: at the cap the body stops resizing,
+    // but content keeps growing inside an existing entry (streaming reasoning, a
+    // tool gaining output). The content's box is what actually changes height.
+    const content = body.querySelector('.maka-processing-content');
+    observer?.observe(content ?? body);
     return () => {
       body.removeEventListener('scroll', measure);
       observer?.disconnect();
@@ -1579,25 +1587,33 @@ export function ProcessingBlock(props: {
             />
           ))}
         </div>
-        {/* The zoom switch sits at the body's bottom-right corner, not in the
+        {/* The zoom switch sits in the body's bottom-right corner, not in the
             header: it is about how the body is shown, so it belongs with the
             body. The two diagonal-out arrows mean "preview this at full size"
             (drop the reading cap and list everything); the two diagonal-in ones
             mean "take back the reading cap". It is Astryx's `IconButton`, not a
             disclosure control, so activating it never toggles the frame — a
             folded box stays folded, and reopening keeps whichever height the
-            reader last chose. */}
-        {props.entries.some((entry) => entry.kind === 'thinking' || entry.kind === 'tools') && (
-          <UiIconButton
-            className="maka-processing-expand"
-            label={unclamped ? copy.processRestore : copy.processExpandAll}
-            tooltip={unclamped ? copy.processRestore : copy.processExpandAll}
-            icon={<Icon icon={unclamped ? Minimize2 : Maximize2} size="sm" aria-hidden="true" />}
-            variant="ghost"
-            size="sm"
-            aria-pressed={unclamped}
-            onClick={() => setUnclamped((previous) => !previous)}
-          />
+            reader last chose.
+            The wrapper is a zero-height sticky row inside the scroller, so the
+            switch rides the VISIBLE bottom edge as rows scroll under it: an
+            absolutely positioned control would instead be part of the scrolled
+            content and drift away (and land off-screen once the cap is
+            dropped). It appears only when the body actually overflows — a box
+            that fits has nothing to unclamp — and stays put while unclamped so
+            the reader can take the cap back. */}
+        {(overflows || unclamped) && (
+          <div className="maka-processing-zoom">
+            <UiIconButton
+              label={unclamped ? copy.processRestore : copy.processExpandAll}
+              tooltip={unclamped ? copy.processRestore : copy.processExpandAll}
+              icon={<Icon icon={unclamped ? Minimize2 : Maximize2} size="sm" aria-hidden="true" />}
+              variant="secondary"
+              size="sm"
+              aria-pressed={unclamped}
+              onClick={() => setUnclamped((previous) => !previous)}
+            />
+          </div>
         )}
       </div>
     </details>

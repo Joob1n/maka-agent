@@ -3968,31 +3968,50 @@ export const CompletedProcessExpanded: Story = {
 
 // Real path: the reader zooms the process out to its full, uncapped height and
 // then folds it. Folding is the priority action — it must collapse the whole
-// frame even while unclamped, and reopening must keep the zoom they chose.
+// frame even while unclamped, and reopening must keep the zoom they chose. The
+// overflow fixture is what reaches the state (a body past the 360px cap) where
+// the switch must exist at all; the capped reading also pins the switch to the
+// VISIBLE bottom edge as the rows scroll under it (the [P2] the review caught:
+// an absolutely positioned control drifted up and out with the content).
 export const CompletedProcessZoomThenFold: Story = {
-  render: () => <ComposedShell motionEnabled sidebarCollapsed chat={{ messages: processDisclosureMessages, scrollBehavior: 'auto' }} />,
+  render: () => <ComposedShell motionEnabled sidebarCollapsed chat={{ messages: oversizedTurn, scrollBehavior: 'auto' }} />,
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await canvas.findByText('已修复登录状态恢复。');
+    await waitFor(() => {
+      const root = canvasElement.querySelector('.maka-processing-sequence');
+      expect(root).not.toBeNull();
+    });
     const process = canvasElement.querySelector<HTMLDetailsElement>('.maka-processing-sequence')!;
-    const summary = process.querySelector('summary')!;
     const body = process.querySelector<HTMLElement>('.maka-processing-body')!;
-    summary.click();
+    if (!process.open) process.querySelector('summary')!.click();
     await waitFor(() => expect(process.open).toBe(true));
-    // The zoom switch rides the body's bottom-right corner, not the header.
-    await expect(summary.querySelector('.maka-processing-expand')).toBeNull();
-    const toggle = body.querySelector<HTMLButtonElement>('.maka-processing-expand')!;
-    await expect(toggle).toBeVisible();
+    const corner = body.querySelector<HTMLElement>('.maka-processing-zoom')!;
+    await expect(corner).toBeVisible();
+    const toggle = corner.querySelector<HTMLButtonElement>('button')!;
+    // Scroll the body to its end: the switch must ride the visible bottom edge,
+    // still inside the body's box, not travel out of view with the content.
+    body.scrollTop = body.scrollHeight;
+    await waitFor(() => {
+      const bodyRect = body.getBoundingClientRect();
+      const switchRect = toggle.getBoundingClientRect();
+      expect(switchRect.bottom).toBeGreaterThan(bodyRect.top);
+      expect(switchRect.top).toBeLessThan(bodyRect.bottom);
+    });
     toggle.click();
     await waitFor(() => expect(body.getAttribute('data-unclamped')).toBe('true'));
     await expect(toggle).toHaveAttribute('aria-label', '恢复固定高度');
-    // Full list: the body is no longer an inner scroller.
-    await expect(getComputedStyle(body).overflowY).toBe('hidden');
+    // Dropping the cap is a height change, not a scroll-mode trick: the body no
+    // longer clips its own content.
+    await expect(getComputedStyle(body).maxHeight).toBe('none');
+    // The switch stays reachable while unclamped so the reader can take the cap
+    // back — it must still be on screen, not at the end of a 7000px list.
+    const unclampedRect = toggle.getBoundingClientRect();
+    await expect(unclampedRect.top).toBeGreaterThanOrEqual(0);
+    await expect(unclampedRect.bottom).toBeLessThanOrEqual(window.innerHeight);
     // Fold still collapses everything while unclamped — the regression guard.
+    const summary = process.querySelector('summary')!;
     summary.click();
     await waitFor(() => expect(process.open).toBe(false));
     await waitFor(() => expect(process.getBoundingClientRect().height).toBeLessThanOrEqual(summary.getBoundingClientRect().height + 2));
-    // Reopening keeps the reader's zoom.
     summary.click();
     await waitFor(() => expect(process.open).toBe(true));
     await expect(body.getAttribute('data-unclamped')).toBe('true');

@@ -835,7 +835,16 @@ test('uses a generic process label when no duration is recorded, and localizes t
   );
 });
 
-test('the zoom switch unclamps the body, lives in the body, and survives folding', async () => {
+/** jsdom has no layout: give the body the two numbers the overflow gate reads. */
+function giveBodyGeometry(body: Element, scrollHeight: number, clientHeight: number) {
+  Object.defineProperty(body, 'scrollHeight', { configurable: true, value: scrollHeight });
+  Object.defineProperty(body, 'clientHeight', { configurable: true, value: clientHeight });
+}
+
+const clickOn = (element: Element) =>
+  act(() => { element.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true })); });
+
+test('the zoom switch unclamps the body, rides the body corner, and survives folding', async () => {
   const { container, root } = domRoot();
   const thinking: TurnTimelineItem = {
     kind: 'thinking',
@@ -849,35 +858,50 @@ test('the zoom switch unclamps the body, lives in the body, and survives folding
   assert.ok(process);
   const summary = process.querySelector('summary')!;
   const body = process.querySelector('.maka-processing-body')!;
-  const click = (element: Element) => act(() => { element.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true })); });
-  await click(summary);
+  // Overflowing content: the switch is offered only when there is something to
+  // unclamp.
+  giveBodyGeometry(body, 720, 360);
+  await clickOn(summary);
   assert.equal(process.hasAttribute('open'), true);
   // Default: the reading cap is on, so no unclamped flag.
   assert.equal(body.getAttribute('data-unclamped'), null);
-  // The zoom switch lives in the body's corner, never in the header.
-  assert.equal(summary.querySelector('.maka-processing-expand'), null);
-  const toggle = body.querySelector('.maka-processing-expand');
-  assert.ok(toggle, 'the zoom switch sits in the body');
+  // The switch rides the body's corner, never the header.
+  assert.equal(summary.querySelector('.maka-processing-zoom'), null);
+  const corner = body.querySelector('.maka-processing-zoom');
+  assert.ok(corner, 'the zoom switch sits in the body');
+  const toggle = corner.querySelector('button')!;
   assert.equal(toggle.getAttribute('aria-label'), 'Show the full process');
   assert.equal(toggle.getAttribute('aria-pressed'), 'false');
-  await click(toggle);
+  await clickOn(toggle);
   // Unclamped: the body lists in full and the switch now offers the reverse.
   assert.equal(body.getAttribute('data-unclamped'), 'true');
   assert.equal(toggle.getAttribute('aria-label'), 'Restore the capped view');
   assert.equal(toggle.getAttribute('aria-pressed'), 'true');
-  // Fold priority: folding still collapses the whole frame while unclamped,
-  // and reopening keeps the zoom the reader chose (the two are independent).
-  await click(summary);
+  // Fold priority: folding still collapses the whole frame while unclamped, and
+  // reopening keeps the zoom the reader chose (the two are independent).
+  await clickOn(summary);
   assert.equal(process.hasAttribute('open'), false);
-  await click(summary);
+  await clickOn(summary);
   assert.equal(process.hasAttribute('open'), true);
   assert.equal(body.getAttribute('data-unclamped'), 'true');
 });
 
-test('a text-only process offers no zoom switch', async () => {
-  const { container, root } = domRoot();
-  await renderTurn(root, turnWith([PROCESS_TEXT, { ...ANSWER, live: false }]));
-  const process = container.querySelector('details.maka-processing-sequence');
-  assert.ok(process);
-  assert.equal(process.querySelector('.maka-processing-expand'), null);
+test('the zoom switch follows overflow, not entry kind', async () => {
+  const rendered = () => turnWith([PROCESS_TEXT, { ...ANSWER, live: false }]);
+  // A process that fits under the cap offers nothing to unclamp.
+  const fits = domRoot();
+  await renderTurn(fits.root, { ...rendered(), status: 'completed' as const });
+  const fitsProcess = fits.container.querySelector('details.maka-processing-sequence')!;
+  giveBodyGeometry(fitsProcess.querySelector('.maka-processing-body')!, 280, 360);
+  await clickOn(fitsProcess.querySelector('summary')!);
+  assert.equal(fitsProcess.querySelector('.maka-processing-zoom'), null);
+
+  // ...even a text-only process that DOES overflow gets the way out, because the
+  // cap it escapes is about height, not about which kinds of entries fill it.
+  const over = domRoot();
+  await renderTurn(over.root, { ...rendered(), status: 'completed' as const });
+  const overProcess = over.container.querySelector('details.maka-processing-sequence')!;
+  giveBodyGeometry(overProcess.querySelector('.maka-processing-body')!, 900, 360);
+  await clickOn(overProcess.querySelector('summary')!);
+  assert.ok(overProcess.querySelector('.maka-processing-zoom button'));
 });

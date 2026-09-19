@@ -75,8 +75,6 @@ export {
   ChevronLeft,
   ChevronRight,
   ChevronRightIcon,
-  ChevronsDownUp,
-  ChevronsUpDown,
   CircleCheckBig,
   CircleGauge,
   Clipboard,

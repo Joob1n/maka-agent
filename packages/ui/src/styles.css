@@ -379,27 +379,38 @@
 .maka-processing-body[data-overflow-top='true'][data-overflow-bottom='true'] {
   mask-image: linear-gradient(transparent, black var(--space-6), black calc(100% - var(--space-6)), transparent);
 }
-/* The zoom switch: the body is a positioned context, and Astryx's icon button
-   sits in its bottom-right corner, floating over the rows so it never takes
-   flow space (which would otherwise change the content's height and the
-   overflow measure). It rides the body's scrollbox (absolute, not fixed), so it
-   stays in the corner while the rows scroll underneath it. Only placement is
-   product CSS: Astryx owns the button's chrome, hover, and focus ring. */
-.maka-processing-expand {
-  position: absolute;
-  right: var(--space-2);
-  bottom: var(--space-2);
+/* The zoom switch's wrapper: a zero-height sticky row inside the scroller, so
+   the switch rides the VISIBLE bottom edge while rows pass under it. It takes
+   no flow space (height 0), which would otherwise change the content's height
+   and the overflow measure. Only placement is product CSS: Astryx owns the
+   button's chrome, hover, and focus ring. The wrapper itself ignores pointer
+   events so a click on the gap still reaches the rows; the button does not. */
+.maka-processing-zoom {
+  position: sticky;
+  bottom: 0;
   z-index: 1;
+  height: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.maka-processing-zoom > * {
+  pointer-events: auto;
+  margin-inline-end: var(--space-2);
+  margin-block-end: var(--space-2);
 }
 /* The reader dropped the cap: the process lists in full with no inner scroll,
    back to the uncapped reading it had before the frame, so a reader who wants
-   the whole thing at once can have it. `overflow` stays clipping — the body
-   must still clip its own overflow for the frame's fold to collapse it; a
-   `visible` body would let the unclamped content spill past the 0-height row
-   and the frame would refuse to fold. */
+   the whole thing at once can have it. `overflow: clip` (not `visible`) keeps
+   the body clipping its own overflow, which the frame's fold needs to collapse
+   it; but unlike `hidden` it is NOT a scroll container, so the zoom switch's
+   sticky wrapper falls through to the transcript scroller and rides the
+   viewport edge while the reader scrolls the long process — instead of being
+   stranded at the far end of the content. */
 .maka-processing-body[data-unclamped='true'] {
   max-height: none;
-  overflow-y: hidden;
+  overflow: clip;
 }
 /* Match Astryx ChatToolCalls' grid disclosure motion. The native details
    content remains rendered through exit, without a second open state or timer.
