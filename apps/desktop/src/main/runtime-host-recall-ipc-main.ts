@@ -73,14 +73,33 @@ export function registerRuntimeHostRecallIpc(deps: RuntimeHostRecallIpcDeps): vo
       event.sender?.once('destroyed', abort);
       // Crash recovery reloads the same WebContents without destroying it.
       event.sender?.once('render-process-gone', abort);
+      // Cancellation must end this call, not merely mark a boolean. The Host
+      // owns the scan and may take as long as it likes to answer; without
+      // racing it, a cancelled search would hold the IPC channel open until
+      // the Host replied to a question nobody is waiting for.
+      const cancelled = new Promise<{ ok: false; reason: string; message: string }>((resolve) => {
+        const settle = () =>
+          resolve({ ok: false, reason: 'aborted', message: 'History search was aborted.' });
+        if (controller.signal.aborted) settle();
+        else controller.signal.addEventListener('abort', settle, { once: true });
+      });
       try {
         // The payload crossed an IPC boundary, so it is untrusted in shape;
         // the Host decodes it and answers with a typed refusal rather than
         // trusting anything the renderer sent.
-        const result = await readWithFallback(
+        //
+        // The read keeps its own failure semantics: `readWithFallback` answers
+        // `null` for an ordinary Host failure and rethrows a failure the
+        // reconnect policy owns. Racing it against cancellation must not
+        // hide that, so the rejection is re-raised after the race.
+        const read = readWithFallback(
           () => deps.client.queryRecall(request as never),
           null,
         );
+        // A rejection leaving the race unobserved would surface as an
+        // unhandled rejection; attach a no-op handler purely to mark it seen.
+        read.catch(() => undefined);
+        const result = await Promise.race([read, cancelled]);
         if (controller.signal.aborted) {
           return { ok: false, reason: 'aborted', message: 'History search was aborted.' };
         }
@@ -92,11 +111,6 @@ export function registerRuntimeHostRecallIpc(deps: RuntimeHostRecallIpcDeps): vo
           };
         }
         return result;
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return { ok: false, reason: 'aborted', message: 'History search was aborted.' };
-        }
-        throw error;
       } finally {
         controller.signal.removeEventListener('abort', release);
         release();
