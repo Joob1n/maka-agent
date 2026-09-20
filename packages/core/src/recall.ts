@@ -62,7 +62,7 @@ import { redactSecrets } from './redaction.js';
 import { SEARCH_QUERY_MAX_CHARS } from './search.js';
 import { collapseSessionRevisions } from './session-revisions.js';
 import type { SessionSummary, StoredMessage } from './session.js';
-import { foldForMatch, MAX_SESSIONS_SCANNED, threadSearchMatchKind } from './thread-search.js';
+import { foldForMatch, MAX_SESSIONS_SCANNED, threadSearchMatchKind } from './transcript-search.js';
 
 /** Okapi BM25 term-frequency saturation, Lucene's default. */
 export const RECALL_BM25_K1 = 1.2;

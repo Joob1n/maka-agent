@@ -60,9 +60,15 @@
 import { validateWorkspacePrivacyContext } from './incognito.js';
 import { redactSecrets } from './redaction.js';
 import { normalizeSearchLimit, normalizeSearchQuery } from './search.js';
-import type { SearchErrorReason, SearchResult, ThreadSearchMatchKind } from './search.js';
+import type { SearchErrorReason, SearchResult } from './search.js';
 import { collapseSessionRevisions } from './session-revisions.js';
 import type { SessionSummary, StoredMessage } from './session.js';
+import { foldForMatch, MAX_SESSIONS_SCANNED, threadSearchMatchKind } from './transcript-search.js';
+
+// Re-exported so this module keeps its published surface; the definitions now
+// live in `transcript-search.ts` because recall and the Agent's global history
+// search share them.
+export { foldForMatch, MAX_SESSIONS_SCANNED, threadSearchMatchKind };
 
 /** Max scan bytes per ToolResultMessage.content (JSON-serialized). */
 export const TOOL_RESULT_SCAN_CAP_BYTES = 10_240;
@@ -75,9 +81,6 @@ export const SNIPPET_CONTEXT_HALF = 80;
 
 /** Cap on total snippet bytes (UTF-8) summed across all results. */
 export const TOTAL_PAYLOAD_CAP_BYTES = 64 * 1024;
-
-/** Max sessions scanned per query (newest first by lastMessageAt). */
-export const MAX_SESSIONS_SCANNED = 200;
 
 /** Max encoded bytes accepted for an opaque thread-search continuation. */
 export const THREAD_SEARCH_CURSOR_MAX_CHARS = 2_048;
@@ -451,26 +454,9 @@ function sessionIsAfterCursor(session: SessionSummary, cursor: ThreadSearchCurso
   );
 }
 
-/** Stable result classification shared by Desktop navigation and Agent tools. */
-export function threadSearchMatchKind(message: StoredMessage): ThreadSearchMatchKind {
-  switch (message.type) {
-    case 'user':
-      return 'user_message';
-    case 'assistant':
-      return 'assistant_message';
-    case 'tool_call':
-      return 'tool_intent';
-    case 'tool_result':
-      return 'tool_result';
-    case 'permission_decision':
-    case 'token_usage':
-    case 'turn_state':
-    case 'workhub_coordination':
-    case 'system_note':
-      throw new Error(`Message type ${message.type} is not searchable`);
-  }
-}
-
+/**
+ * Human-facing label for a matched message kind, shown beside a search result.
+ */
 export function formatSearchResultSummary(message: StoredMessage): string {
   switch (message.type) {
     case 'user':
@@ -553,16 +539,6 @@ export function collectSearchableText(message: StoredMessage): string | undefine
       // The remaining cases are not user-typed / not user-visible content.
       return undefined;
   }
-}
-
-/**
- * NFC + lowercase canonicalization for substring match. NOT a security
- * boundary — purely for case-insensitive + composed-form matching.
- *
- * Public for tests; production callers use `runThreadSearch` only.
- */
-export function foldForMatch(value: string): string {
-  return value.normalize('NFC').toLowerCase();
 }
 
 /**
