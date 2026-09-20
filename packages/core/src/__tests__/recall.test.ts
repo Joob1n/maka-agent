@@ -20,7 +20,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SessionSummary, StoredMessage } from '../session.js';
-import { foldForMatch } from '../thread-search.js';
+import { foldForMatch } from '../transcript-search.js';
 import {
   expandRecallPassage,
   fetchRecallMaterial,

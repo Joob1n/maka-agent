@@ -130,7 +130,6 @@
     "./session-name": "./dist/session-name.js",
     "./recall": "./dist/recall.js",
     "./transcript-search": "./dist/transcript-search.js",
-    "./thread-search": "./dist/thread-search.js",
     "./agent-graph-timeline": "./dist/agent-graph-timeline.js",
     "./agent-swarm": "./dist/agent-swarm.js",
     "./bot-chat-settings": "./dist/bot-chat-settings.js",

@@ -362,7 +362,7 @@ export interface RecallPassage {
   readonly anchorMessageId: string;
   /**
    * Zero-based index of the anchor message within its Session transcript, the
-   * same coordinate `runThreadSearch` reports as `SearchResultTarget.sequence`.
+   * same coordinate a transcript reader scrolls by.
    *
    * A UI that navigates into a Session needs a position, not just an identity:
    * the transcript reader scrolls by sequence, and a message id alone would

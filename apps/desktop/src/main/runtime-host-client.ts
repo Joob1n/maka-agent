@@ -719,6 +719,17 @@ export class DesktopRuntimeHostClient {
     }
   }
 
+  /**
+   * Recall over this Host's own corpus.
+   *
+   * Recall runs inside the Host — the Session manager, fact store, and
+   * material fetch are all Host-owned — so this is a request, not a scan.
+   * Desktop issues one per Host and merges; it never reads the transcripts.
+   */
+  queryRecall(input: OperationInput<'recall.query'>): Promise<OperationOutput<'recall.query'>> {
+    return this.request('recall.query', input);
+  }
+
   async listSessions(): Promise<SessionCatalogProjection[]> {
     this.#assertOpen();
     try {
