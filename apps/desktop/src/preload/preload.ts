@@ -89,11 +89,6 @@ import type {
 } from './bridge-contract.js';
 import type { ExternalSessionImportIpcResult } from './external-session-import-result.js';
 import type { RuntimeHostObservationIpcResult } from '../shared/runtime-host-observation-ipc.js';
-import type {
-  DesktopCommandCodeLoginResult,
-  DesktopCommandCodeLoginStartInput,
-  DesktopCommandCodeLoginStartResult,
-} from './bridge-contract.js';
 import {
   projectDesktopExternalSessionCatalogItem,
   type DesktopExternalSessionCatalogItem,
@@ -3052,9 +3047,6 @@ const makaBridge = {
     hasSecret(connection: import('../shared/desktop-connection-snapshot.js').DesktopConnectionIdentity, host?: DesktopRuntimeHostRef): Promise<boolean> {
       return invokeSelectedRuntimeHost(host, 'connections:hasSecret', connection);
     },
-    usage(connection: import('../shared/desktop-connection-snapshot.js').DesktopConnectionIdentity, host?: DesktopRuntimeHostRef): Promise<import('@maka/runtime-host/protocol').ConnectionUsageReadResult> {
-      return invokeSelectedRuntimeHost(host, 'connections:usage', connection);
-    },
     getRequestHeaders(connection: import('../shared/desktop-connection-snapshot.js').DesktopConnectionIdentity, host?: DesktopRuntimeHostRef): Promise<import('@maka/core/llm-connections').SavedRequestHeaders> {
       return invokeSelectedRuntimeHost(host, 'connections:getRequestHeaders', connection);
     },
@@ -3338,17 +3330,6 @@ const makaBridge = {
     },
     logout(host: DesktopRuntimeHostRef | undefined, connectionId: string): Promise<SubscriptionActionResult> {
       return invokeSelectedRuntimeHost(host, 'xai-oauth:logout', connectionId);
-    },
-  },
-  commandCodeLogin: {
-    start(input: DesktopCommandCodeLoginStartInput): Promise<DesktopCommandCodeLoginStartResult> {
-      return ipcRenderer.invoke('commandcode-login:start', input);
-    },
-    complete(attemptId: string): Promise<DesktopCommandCodeLoginResult> {
-      return ipcRenderer.invoke('commandcode-login:complete', attemptId);
-    },
-    cancel(attemptId: string): Promise<void> {
-      return ipcRenderer.invoke('commandcode-login:cancel', attemptId);
     },
   },
   githubCopilotSubscription: {
