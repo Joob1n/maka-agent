@@ -558,20 +558,34 @@ export class DesktopSessionLocalService {
         result: { disposition: 'followup', skillInvocation: EMPTY_SKILL_INVOCATION },
         error: undefined,
       });
-    } else {
-      // No receipt, steering proof, tombstone, or admission names this
-      // identity, so the lost epoch never admitted it and it can never execute.
-      // Record that as an explicit non-delivery: it releases the Session's
-      // ordering and gives the user a removable local copy.
+    } else if (resolution?.state === 'cancelled' || resolution?.state === 'not_admitted') {
+      // The Host answered positively that this identity is settled: either it
+      // carries a cancellation tombstone, or it has no durable record at all
+      // and no in-flight submit, so no epoch ever admitted it and it can never
+      // execute. Record that as an explicit non-delivery: it releases the
+      // Session's ordering and gives the user a removable local copy.
       this.store.update({
         ...current,
         state: 'failed',
         error:
-          resolution?.state === 'cancelled'
+          resolution.state === 'cancelled'
             ? 'The Host cancelled this message; the local copy is retained.'
             : 'The Host never admitted this message; the local copy is retained.',
         result: undefined,
       });
+    } else {
+      // The Host omitted the identity: it cannot yet assert anything about it
+      // (`recovering`). Keep the copy unresolved rather than guess — a wrong
+      // "never delivered" would let the user resend a Message the Host may
+      // already own.
+      this.store.update({
+        ...current,
+        state: 'unknown',
+        error: 'Host outcome is unknown; the running Host has not confirmed the original message.',
+      });
+      if (!this.#closed && !this.#retries.has(key)) this.#scheduleRetry(key);
+      this.deps.changed(target.scope, record.sessionId);
+      return;
     }
     const timer = this.#retries.get(key);
     if (timer) {

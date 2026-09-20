@@ -510,10 +510,14 @@ test('a stale-epoch Message the Host never admitted is retired so later sends pr
     scope: { hostId: 'root', targetEpoch: 'target-1' },
     client: {
       ...client('epoch-2'),
-      async queryMessageExecutions() {
+      async queryMessageExecutions(input) {
         // The Host holds no receipt, steering proof, tombstone, or admission
-        // for this identity, so it reports no resolution at all.
-        return { resolutions: [] };
+        // for this identity, so it reports that absence positively.
+        return {
+          resolutions: input.messageIds.map(
+            (messageId) => ({ messageId, state: 'not_admitted' as const }),
+          ),
+        };
       },
     },
     submit: async (input) => {
@@ -572,6 +576,40 @@ test('a running Host that cannot yet resolve a stale Message leaves the copy unr
   await nextTurn();
   // Guessing "never delivered" here would let the user resend a Message the
   // Host may already own, so the copy stays unresolved instead.
+  assert.equal(store.get('authority', 'message-1')?.state, 'unknown');
+});
+
+test('an omitted resolution leaves the stale copy unresolved rather than failed', async (t) => {
+  const { store, beforeClose } = await database(t);
+  const target: DesktopSessionLocalTarget = {
+    partition: 'authority',
+    profileId: 'profile',
+    scope: { hostId: 'root', targetEpoch: 'target-1' },
+    client: {
+      ...client('epoch-2'),
+      // The Host answered successfully but could not assert anything about the
+      // identity, so it omitted it. That is "cannot say yet", not "not admitted".
+      async queryMessageExecutions() {
+        return { resolutions: [] };
+      },
+    },
+    submit: async () => accepted,
+  };
+  const service = new DesktopSessionLocalService(store, {
+    targets: () => [target],
+    changed() {},
+    onError: (error) => assert.fail(String(error)),
+  });
+  beforeClose.push(() => service.close());
+  const dispatched = store.enqueue('authority', intent());
+  store.update({
+    ...dispatched,
+    state: 'unknown',
+    intent: { ...dispatched.intent, originHostEpoch: 'epoch-1' },
+  });
+  service.wake();
+  await waitFor(() => store.get('authority', 'message-1')?.state === 'unknown');
+  // Only a positive `not_admitted` may retire the copy; silence must not.
   assert.equal(store.get('authority', 'message-1')?.state, 'unknown');
 });
 
