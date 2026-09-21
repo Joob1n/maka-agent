@@ -1489,6 +1489,27 @@ const providerRegistry = {
     signupUrl: 'https://commandcode.ai/docs/plans/goat',
     catalogOrder: 41.5,
   },
+  // Retired rather than removed: an existing connection must stay identifiable
+  // and must answer `provider_retired` at readiness. Removing the entry would
+  // leave it *unknown*, which `isConnectionReady` does not reject, so a send
+  // would be admitted and only fail deep in model construction. Its transport
+  // presented the official CLI's identity to a private endpoint, which is why
+  // nothing can send through it any more.
+  'commandcode-go': {
+    label: 'Command Code GO',
+    baseUrl: 'https://api.commandcode.ai',
+    authKind: 'api_key',
+    fallbackModels: [],
+    status: 'phase3-experimental',
+    runtimeAdapter: { kind: 'unavailable' },
+    retired: true,
+    modelDiscovery: {
+      kind: 'fallback',
+      reason: 'The GO plan was reached through the official CLI\u2019s private transport.',
+    },
+    category: 'overseas',
+    catalogGroup: 'plans',
+  },
   'cloudflare-workers-ai': {
     label: cloudflareWorkersAi.name,
     baseUrl: '',
