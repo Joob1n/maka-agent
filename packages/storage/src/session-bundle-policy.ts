@@ -481,17 +481,10 @@ async function filterBackedUpDatabase(
 ): Promise<void> {
   const runtimeStore = createSqliteRuntimeStore(destinationPath);
   try {
-    // Most exported Sessions have no unsettled tools. Rebuild only candidate
-    // Sessions so a portable snapshot can classify terminal-but-unsettled
-    // operations without interpreting unrelated legacy RuntimeEvent ledgers.
-    const sessionsWithUnsettledOperations = new Set(
-      (await runtimeStore.listUnsettledToolOperations(sessionIds)).map(
-        (operation) => operation.sessionId,
-      ),
-    );
-    for (const sessionId of sessionsWithUnsettledOperations) {
-      await runtimeStore.rebuildToolProjectionsForSession(sessionId);
-    }
+    // Repair only terminal facts for currently unsettled tools. A full
+    // projection rebuild decodes every RuntimeEvent in the Session, including
+    // legacy payloads that this build must preserve opaquely in the bundle.
+    await runtimeStore.rebuildTerminalToolProjectionsForSessions(sessionIds);
   } finally {
     runtimeStore.close();
   }

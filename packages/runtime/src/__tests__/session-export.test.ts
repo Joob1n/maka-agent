@@ -1122,6 +1122,93 @@ test(
 );
 
 test(
+  'round-trips opaque legacy RuntimeEvents beside a terminal unsettled tool',
+  withRoot('maka-session-export-opaque-legacy-event', async (root, workspaceRoot) => {
+    const sessionId = await createSession(workspaceRoot);
+    await addPendingToolOperation(workspaceRoot, sessionId, {
+      toolName: 'AskUserQuestion',
+      terminalStatus: 'aborted',
+    });
+
+    const runtime = createSqliteRuntimeStore(join(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME));
+    try {
+      await runtime.appendRuntimeEvent(sessionId, 'legacy-run', {
+        id: 'legacy-event',
+        sessionId,
+        invocationId: 'legacy-invocation',
+        runId: 'legacy-run',
+        turnId: 'legacy-turn',
+        ts: 4,
+        partial: false,
+        role: 'system',
+        author: 'system',
+        status: 'completed',
+        actions: { endInvocation: true },
+        content: { kind: 'text', text: 'preserve this historical payload' },
+      });
+    } finally {
+      runtime.close();
+    }
+
+    // Simulate an event imported from a version with an extra field unknown to
+    // this build. Its exact bytes must survive export/import without the
+    // export repair path trying to decode it.
+    const legacyPayload =
+      '{ "id":"legacy-event", "invocationId":"legacy-invocation", "runId":"legacy-run",' +
+      ' "sessionId":"' +
+      sessionId +
+      '", "turnId":"legacy-turn", "ts":4, "partial":false, "role":"system",' +
+      ' "author":"system", "status":"completed", "actions":{"endInvocation":true},' +
+      ' "content":{"kind":"text","text":"preserve this historical payload"},' +
+      ' "legacyBytePreserved":{"source":"older-build"} }';
+    const source = openDatabase(workspaceRoot);
+    try {
+      source
+        .prepare('UPDATE runtime_events SET payload_json = ? WHERE event_id = ?')
+        .run(legacyPayload, 'legacy-event');
+    } finally {
+      source.close();
+    }
+
+    const destination = join(root, 'bundle.maka-session');
+    await exportOk(workspaceRoot, sessionId, destination);
+    const hydration = await hydrateExport(destination, sessionId, join(root, 'hydrated'));
+    const exportedRuntime = createSqliteRuntimeStore(
+      join(hydration.stateRoot, OPERATIONAL_STATE_DATABASE_NAME),
+      { readOnly: true },
+    );
+    try {
+      assert.equal(
+        (await exportedRuntime.readToolOperation('operation-1'))?.currentState,
+        'abandoned',
+      );
+      assert.deepEqual(
+        (await exportedRuntime.readToolJournal('operation-1')).map(({ state, runtimeEventId }) => ({
+          state,
+          runtimeEventId,
+        })),
+        [
+          { state: 'prepared', runtimeEventId: 'dispatch-event' },
+          { state: 'abandoned', runtimeEventId: 'terminal-event' },
+        ],
+      );
+    } finally {
+      exportedRuntime.close();
+    }
+
+    const hydratedDatabase = openExported(hydration);
+    try {
+      const stored = hydratedDatabase
+        .prepare('SELECT payload_json FROM runtime_events WHERE event_id = ?')
+        .get('legacy-event') as { payload_json: string } | undefined;
+      assert.equal(stored?.payload_json, legacyPayload);
+    } finally {
+      hydratedDatabase.close();
+    }
+  }),
+);
+
+test(
   'still refuses an unanswered question from a live invocation',
   withRoot('maka-session-export-live-question', async (root, workspaceRoot) => {
     const sessionId = await createSession(workspaceRoot);

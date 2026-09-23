@@ -3565,6 +3565,81 @@ export class SqliteRuntimeStore
     await this.transaction(() => this.rebuildToolProjectionsFromRuntimeEventsSync(sessionId));
   }
 
+  /**
+   * Repair terminal projections for unsettled tools without decoding the
+   * Session's full RuntimeEvent history. Bundle export is a compatibility
+   * boundary: unrelated historical payloads may be byte-preserved and newer
+   * or older than the RuntimeEvent schema understood by this build.
+   */
+  async rebuildTerminalToolProjectionsForSessions(sessionIds: readonly string[]): Promise<void> {
+    const operations = await this.listUnsettledToolOperations(sessionIds);
+    if (operations.length === 0) return;
+
+    this.transaction(() => {
+      const dispatchSequence = this.db.prepare(`
+        SELECT event_seq
+        FROM runtime_events
+        WHERE event_id = ? AND session_id = ? AND invocation_id = ?
+      `);
+      const firstTerminal = this.db.prepare(`
+        SELECT event_id, event_seq, committed_at
+        FROM runtime_events
+        WHERE session_id = ? AND invocation_id = ?
+          AND ${TERMINAL_RUNTIME_EVENT_SQL}
+        ORDER BY event_seq ASC, event_id ASC
+        LIMIT 1
+      `);
+      const insertJournal = this.db.prepare(`
+        INSERT INTO tool_journal_events (
+          journal_event_id, operation_id, invocation_id, run_id, turn_id, state,
+          runtime_event_id, canonical_args_hash, recovery_mode, committed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const updateOperation = this.db.prepare(`
+        UPDATE tool_operations
+        SET current_state = ?, version = version + 1
+        WHERE operation_id = ? AND current_state = 'prepared' AND result_event_id IS NULL
+      `);
+
+      for (const operation of operations) {
+        if (!operation.dispatchEventId) continue;
+        const dispatch = dispatchSequence.get(
+          operation.dispatchEventId,
+          operation.sessionId,
+          operation.invocationId,
+        ) as { event_seq: number } | undefined;
+        if (!dispatch) continue;
+        const terminal = firstTerminal.get(operation.sessionId, operation.invocationId) as
+          | { event_id: string; event_seq: number; committed_at: number }
+          | undefined;
+        if (!terminal || terminal.event_seq <= dispatch.event_seq) continue;
+
+        const state =
+          operation.toolName === 'AskUserQuestion' && operation.recoveryMode === 'never_auto_retry'
+            ? 'abandoned'
+            : 'interrupted_unknown';
+        insertJournal.run(
+          journalEventIdFor(operation.operationId, terminal.event_id, state),
+          operation.operationId,
+          operation.invocationId,
+          operation.runId,
+          operation.turnId,
+          state,
+          terminal.event_id,
+          operation.canonicalArgsHash,
+          operation.recoveryMode,
+          terminal.committed_at,
+        );
+        const updated = updateOperation.run(state, operation.operationId);
+        if (updated.changes !== 1) {
+          throw new Error(
+            `Tool operation projection changed during export: ${operation.operationId}`,
+          );
+        }
+      }
+    });
+  }
+
   private rebuildToolProjectionsFromRuntimeEventsSync(
     sessionId?: string,
   ): ToolProjectionRebuildResult {
@@ -3765,7 +3840,7 @@ export class SqliteRuntimeStore
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `)
           .run(
-            journalEventIdFor(dispatch.operationId, item.event, item.state),
+            journalEventIdFor(dispatch.operationId, item.event.id, item.state),
             dispatch.operationId,
             item.event.invocationId,
             item.event.runId,
@@ -5280,10 +5355,12 @@ function requireRuntimeEventOrder(
 
 function journalEventIdFor(
   operationId: string,
-  event: RuntimeEvent,
+  eventId: string,
   state: Exclude<ToolJournalState, 'prepared'>,
 ): string {
-  return state === 'outcome_committed' ? `${operationId}_outcome` : `${event.id}_journal`;
+  return state === 'outcome_committed'
+    ? `${operationId}_outcome`
+    : `${operationId}_${eventId}_journal`;
 }
 
 function assertRecoveryAuthorityCapability(db: DatabaseSync): void {
