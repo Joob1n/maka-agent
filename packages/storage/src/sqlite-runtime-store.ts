@@ -5358,9 +5358,14 @@ function journalEventIdFor(
   eventId: string,
   state: Exclude<ToolJournalState, 'prepared'>,
 ): string {
-  return state === 'outcome_committed'
-    ? `${operationId}_outcome`
-    : `${operationId}_${eventId}_journal`;
+  if (state === 'outcome_committed') return `${operationId}_outcome`;
+  if (state === 'abandoned' || state === 'interrupted_unknown') {
+    // One invocation terminal can close multiple tool operations. Its journal
+    // fact is therefore unique per operation, unlike per-operation recovery
+    // events whose RuntimeEvent ids are already distinct.
+    return `${operationId}_${eventId}_journal`;
+  }
+  return `${eventId}_journal`;
 }
 
 function assertRecoveryAuthorityCapability(db: DatabaseSync): void {
