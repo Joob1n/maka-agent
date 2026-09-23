@@ -70,7 +70,8 @@ export interface ToolOperationRecord {
     | 'outcome_committed'
     | 'recovery_completed'
     | 'recovery_parked'
-    | 'abandoned';
+    | 'abandoned'
+    | 'interrupted_unknown';
   callEventId: string;
   dispatchEventId?: string;
   resultEventId?: string;

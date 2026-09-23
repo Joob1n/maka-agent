@@ -155,15 +155,24 @@ async function addPendingToolOperation(
       committedAt: 2,
     });
     if (input.terminalStatus) {
-      await runtime.appendRuntimeEvent(sessionId, runId, {
-        id: 'terminal-event',
-        ...identity,
-        ts: 3,
-        partial: false,
-        role: 'system',
-        author: 'system',
-        status: input.terminalStatus,
-        actions: { endInvocation: true },
+      // Build an already-persisted legacy transcript. New writes reject this
+      // terminal gap; imports must still retain old history so projection
+      // recovery can classify it without rewriting immutable events.
+      await runtime.importRuntimeEventsBatch({
+        sessionId,
+        runId,
+        events: [
+          {
+            id: 'terminal-event',
+            ...identity,
+            ts: 3,
+            partial: false,
+            role: 'system',
+            author: 'system',
+            status: input.terminalStatus,
+            actions: { endInvocation: true },
+          },
+        ],
       });
     }
   } finally {
@@ -1127,15 +1136,95 @@ test(
 );
 
 test(
-  'refuses a Session holding a tool operation that never settled',
-  withRoot('maka-session-export-unsettled-tool', async (root, workspaceRoot) => {
+  'exports an interrupted tool with unknown side effects as an explicit terminal state',
+  withRoot('maka-session-export-interrupted-unknown', async (root, workspaceRoot) => {
     const sessionId = await createSession(workspaceRoot);
-    // Unlike an unanswered question, a dispatched Bash operation may have
-    // side effects. A terminal invocation alone is not enough to settle it.
+    // A terminal invocation closes this operation, but cannot prove whether
+    // the external effect happened. Export must preserve that uncertainty.
     await addPendingToolOperation(workspaceRoot, sessionId, {
       toolName: 'Bash',
       terminalStatus: 'failed',
     });
+
+    const destination = join(root, 'bundle.maka-session');
+    await exportOk(workspaceRoot, sessionId, destination);
+    const hydration = await hydrateExport(destination, sessionId, join(root, 'hydrated'));
+    const exportedRuntime = createSqliteRuntimeStore(
+      join(hydration.stateRoot, OPERATIONAL_STATE_DATABASE_NAME),
+    );
+    try {
+      assert.equal(
+        (await exportedRuntime.readToolOperation('operation-1'))?.currentState,
+        'interrupted_unknown',
+      );
+      assert.deepEqual(
+        (await exportedRuntime.readToolJournal('operation-1')).map((event) => event.state),
+        ['prepared', 'interrupted_unknown'],
+      );
+      assert.equal((await exportedRuntime.listUnsettledToolOperations(sessionId)).length, 0);
+
+      const runtimeEvents = await exportedRuntime.readRuntimeEvents(sessionId, 'run-1');
+      const { buildResumePlanFromRuntimeEvents } = await import('../runtime-resume.js');
+      const resumePlan = buildResumePlanFromRuntimeEvents(runtimeEvents);
+      assert.equal(resumePlan.disposition, 'blocked');
+      assert.equal(resumePlan.requiresVerification, true);
+      assert.match(resumePlan.directive ?? '', /Do not retry the tool call immediately/);
+      assert.equal(
+        resumePlan.replayRuntimeEvents.some((event) => event.content?.kind === 'function_call'),
+        false,
+      );
+
+      await exportedRuntime.rebuildToolProjectionsFromRuntimeEvents();
+      assert.equal(
+        (await exportedRuntime.readToolOperation('operation-1'))?.currentState,
+        'interrupted_unknown',
+      );
+    } finally {
+      exportedRuntime.close();
+    }
+  }),
+);
+
+test(
+  'does not write a terminal event while any dispatched tool is still prepared',
+  withRoot('maka-session-terminal-unsettled-tool', async (_root, workspaceRoot) => {
+    const sessionId = await createSession(workspaceRoot);
+    await addPendingToolOperation(workspaceRoot, sessionId, { toolName: 'Bash' });
+    const runtime = createSqliteRuntimeStore(join(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME));
+    try {
+      await assert.rejects(
+        runtime.appendRuntimeEvent(sessionId, 'run-1', {
+          id: 'terminal-event',
+          sessionId,
+          invocationId: 'invocation-1',
+          runId: 'run-1',
+          turnId: 'turn-1',
+          ts: 3,
+          partial: false,
+          role: 'system',
+          author: 'system',
+          status: 'aborted',
+          actions: { endInvocation: true },
+        }),
+        /Cannot terminalize invocation.*unsettled tool operation operation-1/,
+      );
+      assert.equal(
+        (await runtime.readRuntimeEvents(sessionId, 'run-1')).some(
+          (event) => event.status === 'aborted',
+        ),
+        false,
+      );
+    } finally {
+      runtime.close();
+    }
+  }),
+);
+
+test(
+  'still refuses export while a dispatched tool belongs to an open invocation',
+  withRoot('maka-session-export-live-tool', async (root, workspaceRoot) => {
+    const sessionId = await createSession(workspaceRoot);
+    await addPendingToolOperation(workspaceRoot, sessionId, { toolName: 'Bash' });
 
     const destination = join(root, 'bundle.maka-session');
     const result = await exportSessionBundle({ workspaceRoot, sessionId, destination });

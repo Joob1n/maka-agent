@@ -481,20 +481,15 @@ async function filterBackedUpDatabase(
 ): Promise<void> {
   const runtimeStore = createSqliteRuntimeStore(destinationPath);
   try {
-    // Most exported Sessions have no unsettled tools. Avoid interpreting their
-    // full RuntimeEvent ledger just to rebuild disposable projections: older
-    // events may not satisfy the current schema, and quiescence can be checked
-    // directly from the frozen copy without rewriting those rows.
-    const sessionsWithAbandonedQuestionCandidates = new Set(
-      (await runtimeStore.listUnsettledToolOperations(sessionIds))
-        .filter(
-          (operation) =>
-            operation.toolName === 'AskUserQuestion' &&
-            operation.recoveryMode === 'never_auto_retry',
-        )
-        .map((operation) => operation.sessionId),
+    // Most exported Sessions have no unsettled tools. Rebuild only candidate
+    // Sessions so a portable snapshot can classify terminal-but-unsettled
+    // operations without interpreting unrelated legacy RuntimeEvent ledgers.
+    const sessionsWithUnsettledOperations = new Set(
+      (await runtimeStore.listUnsettledToolOperations(sessionIds)).map(
+        (operation) => operation.sessionId,
+      ),
     );
-    for (const sessionId of sessionsWithAbandonedQuestionCandidates) {
+    for (const sessionId of sessionsWithUnsettledOperations) {
       await runtimeStore.rebuildToolProjectionsForSession(sessionId);
     }
   } finally {

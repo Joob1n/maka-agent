@@ -808,6 +808,41 @@ describe('SqliteRuntimeStore', () => {
     });
   });
 
+  it('rebuilds a legacy terminal-without-tool-result gap as interrupted_unknown', async () => {
+    await withStore(async (store) => {
+      await commitPreparedInvocation(store, 0);
+      const identity = cacheInvocationIdentity(0);
+      await store.importRuntimeEventsBatch({
+        sessionId: identity.sessionId,
+        runId: identity.runId,
+        events: [
+          {
+            id: 'cache-terminal-0',
+            ...identity,
+            ts: 4,
+            partial: false,
+            role: 'system',
+            author: 'system',
+            status: 'failed',
+            actions: { endInvocation: true },
+          },
+        ],
+      });
+
+      await store.rebuildToolProjectionsFromRuntimeEvents();
+
+      assert.equal(
+        (await store.readToolOperation('cache-operation-0'))?.currentState,
+        'interrupted_unknown',
+      );
+      assert.deepEqual(
+        (await store.readToolJournal('cache-operation-0')).map((event) => event.state),
+        ['prepared', 'interrupted_unknown'],
+      );
+      assert.equal((await store.listUnsettledToolOperations(identity.sessionId)).length, 0);
+    });
+  });
+
   // These two pin the ERROR CLASS, not the message. AgentRun exempts exactly
   // one class from the store-unavailable latch (`ToolLedgerRejectionError`), so
   // the class is a behavioural contract between storage and runtime — and both
@@ -1456,6 +1491,7 @@ describe('SqliteRuntimeStore', () => {
   it('evicts a cached tool reducer when its invocation is sealed', async () => {
     await withStore(async (store) => {
       await commitPreparedInvocation(store, 0);
+      await commitOutcomeInvocation(store, 0);
       assert.equal(toolLedgerCacheSnapshot(store).entries, 1);
 
       const identity = cacheInvocationIdentity(0);
@@ -1481,6 +1517,7 @@ describe('SqliteRuntimeStore', () => {
   it('evicts a cached reducer after confirming a sibling terminal write', async () => {
     await withStore(async (store, dbPath) => {
       await commitPreparedInvocation(store, 0);
+      await commitOutcomeInvocation(store, 0);
       assert.equal(toolLedgerCacheSnapshot(store).entries, 1);
 
       const identity = cacheInvocationIdentity(0);
