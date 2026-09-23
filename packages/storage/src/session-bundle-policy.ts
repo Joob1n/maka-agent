@@ -481,7 +481,20 @@ async function filterBackedUpDatabase(
 ): Promise<void> {
   const runtimeStore = createSqliteRuntimeStore(destinationPath);
   try {
-    for (const sessionId of sessionIds) {
+    // Most exported Sessions have no unsettled tools. Avoid interpreting their
+    // full RuntimeEvent ledger just to rebuild disposable projections: older
+    // events may not satisfy the current schema, and quiescence can be checked
+    // directly from the frozen copy without rewriting those rows.
+    const sessionsWithAbandonedQuestionCandidates = new Set(
+      (await runtimeStore.listUnsettledToolOperations(sessionIds))
+        .filter(
+          (operation) =>
+            operation.toolName === 'AskUserQuestion' &&
+            operation.recoveryMode === 'never_auto_retry',
+        )
+        .map((operation) => operation.sessionId),
+    );
+    for (const sessionId of sessionsWithAbandonedQuestionCandidates) {
       await runtimeStore.rebuildToolProjectionsForSession(sessionId);
     }
   } finally {
