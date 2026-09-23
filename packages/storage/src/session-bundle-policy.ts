@@ -86,6 +86,7 @@ import {
 } from './operational-state-store.js';
 import { TERMINAL_RUNTIME_EVENT_SQL } from './runtime-transcript-query.js';
 import { isSafeStorageId } from './storage-id.js';
+import { createSqliteRuntimeStore } from './sqlite-runtime-store.js';
 
 export const SESSION_BUNDLE_STATE_ENTRIES = [
   'artifacts',
@@ -478,6 +479,15 @@ async function filterBackedUpDatabase(
   sessionIds: readonly string[],
   options: { omitDiagnostics: boolean; requireQuiescent: boolean },
 ): Promise<void> {
+  const runtimeStore = createSqliteRuntimeStore(destinationPath);
+  try {
+    for (const sessionId of sessionIds) {
+      await runtimeStore.rebuildToolProjectionsForSession(sessionId);
+    }
+  } finally {
+    runtimeStore.close();
+  }
+
   const database = new DatabaseSync(destinationPath);
   try {
     // Quiescence is asserted here, on the copy, not on the live database.

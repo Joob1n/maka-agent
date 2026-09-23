@@ -2476,10 +2476,12 @@ export async function createExecutionRuntimeHostComposition(
       lease: context.owner.lease,
       fenceSubtree: (sessionId, operation) =>
         requireSessionManager(manager).runSessionSubtreeQuiescentMutation(sessionId, operation),
-      recoverInterruptedSessions: (sessionIds) =>
-        requireSessionManager(manager)
-          .recoverInterruptedSessionsForSessions(sessionIds)
-          .then(() => undefined),
+      recoverInterruptedSessions: async (sessionIds) => {
+        await requireSessionManager(manager).recoverInterruptedSessionsForSessions(sessionIds);
+        for (const sessionId of sessionIds) {
+          await stores.runtimeEventStore.rebuildToolProjectionsForSession?.(sessionId);
+        }
+      },
       onImported: (sessionId) => hostChanges.publishSessionCatalog(sessionId),
     });
     const externalSessions = new HostExternalSessionCoordinator({

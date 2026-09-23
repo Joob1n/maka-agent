@@ -65,7 +65,12 @@ export interface ToolOperationRecord {
   toolName: string;
   canonicalArgsHash: string;
   recoveryMode: ToolRecoveryMode;
-  currentState: 'prepared' | 'outcome_committed' | 'recovery_completed' | 'recovery_parked';
+  currentState:
+    | 'prepared'
+    | 'outcome_committed'
+    | 'recovery_completed'
+    | 'recovery_parked'
+    | 'abandoned';
   callEventId: string;
   dispatchEventId?: string;
   resultEventId?: string;

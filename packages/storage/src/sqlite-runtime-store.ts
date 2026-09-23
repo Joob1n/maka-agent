@@ -268,7 +268,8 @@ export type ToolJournalState =
   | 'reconcile_observed'
   | 'outcome_committed'
   | 'recovery_completed'
-  | 'recovery_parked';
+  | 'recovery_parked'
+  | 'abandoned';
 
 export type SqliteRuntimeStoreFailpoint =
   | 'after_runtime_event_insert'
@@ -3554,6 +3555,11 @@ export class SqliteRuntimeStore
     return this.transaction(() => this.rebuildToolProjectionsFromRuntimeEventsSync());
   }
 
+  /** Rebuild one Session's disposable tool projections while its owner holds a fence. */
+  async rebuildToolProjectionsForSession(sessionId: string): Promise<void> {
+    await this.transaction(() => this.rebuildToolProjectionsFromRuntimeEventsSync(sessionId));
+  }
+
   private rebuildToolProjectionsFromRuntimeEventsSync(
     sessionId?: string,
   ): ToolProjectionRebuildResult {
@@ -3571,6 +3577,18 @@ export class SqliteRuntimeStore
     >;
     const events = rows.map(decodeRuntimeEventStorageRow);
     const eventOrder = new Map(events.map((event, index) => [event.id, index] as const));
+    const runtimeInvocationKey = (event: RuntimeEvent): string =>
+      JSON.stringify([event.sessionId, event.invocationId]);
+    const interruptedTerminalsByInvocation = new Map<string, RuntimeEvent>();
+    for (const event of events) {
+      if (
+        (event.status === 'failed' || event.status === 'aborted' || event.status === 'cancelled') &&
+        isTerminalRuntimeEvent(event) &&
+        !interruptedTerminalsByInvocation.has(runtimeInvocationKey(event))
+      ) {
+        interruptedTerminalsByInvocation.set(runtimeInvocationKey(event), event);
+      }
+    }
     const committedAt = new Map(
       rows.map((row, index) => [events[index]!.id, row.committed_at] as const),
     );
@@ -3634,6 +3652,16 @@ export class SqliteRuntimeStore
       }
       const reconcileEvent = recovery.kind === 'valid' ? recovery.reconcileEvent : undefined;
       const decisionEvent = recovery.kind === 'valid' ? recovery.decisionEvent : undefined;
+      const decision = recovery.kind === 'valid' ? recovery.decision : undefined;
+      const terminalEvent = interruptedTerminalsByInvocation.get(runtimeInvocationKey(event));
+      const abandoned =
+        !decision &&
+        !operation.responseEvent &&
+        dispatch.toolName === 'AskUserQuestion' &&
+        dispatch.recoveryMode === 'never_auto_retry' &&
+        terminalEvent !== undefined &&
+        requireRuntimeEventOrder(eventOrder, terminalEvent.id) >
+          requireRuntimeEventOrder(eventOrder, event.id);
 
       this.db
         .prepare(`
@@ -3655,14 +3683,15 @@ export class SqliteRuntimeStore
         );
       journalEvents += 1;
       const response = operation.responseEvent;
-      const decision = recovery.kind === 'valid' ? recovery.decision : undefined;
       const currentState = decision
         ? decision.disposition === 'completed'
           ? 'recovery_completed'
           : 'recovery_parked'
         : response
           ? 'outcome_committed'
-          : 'prepared';
+          : abandoned
+            ? 'abandoned'
+            : 'prepared';
       const tail = [
         ...(reconcileEvent
           ? [{ event: reconcileEvent, state: 'reconcile_observed' as const }]
@@ -3678,6 +3707,9 @@ export class SqliteRuntimeStore
                     : ('recovery_completed' as const),
               },
             ]
+          : []),
+        ...(abandoned && terminalEvent
+          ? [{ event: terminalEvent, state: 'abandoned' as const }]
           : []),
       ].sort(
         (a, b) =>
@@ -5048,7 +5080,12 @@ interface ToolOperationRow {
   tool_name: string;
   canonical_args_hash: string;
   recovery_mode: ToolRecoveryMode;
-  current_state: 'prepared' | 'outcome_committed' | 'recovery_completed' | 'recovery_parked';
+  current_state:
+    | 'prepared'
+    | 'outcome_committed'
+    | 'recovery_completed'
+    | 'recovery_parked'
+    | 'abandoned';
   call_event_id: string;
   dispatch_event_id: string | null;
   result_event_id: string | null;

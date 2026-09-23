@@ -175,6 +175,8 @@ export type ExecutionRuntimeEventWriter = DurableRuntimeEventStore &
     listUnsettledToolOperations(
       sessionIds: string | readonly string[],
     ): Promise<UnsettledToolOperationRecord[]>;
+    /** Rebuild one Session's disposable tool projections from its immutable events. */
+    rebuildToolProjectionsForSession?(sessionId: string): Promise<void>;
     appendRuntimePartialBatch(
       sessionId: string,
       runId: string,

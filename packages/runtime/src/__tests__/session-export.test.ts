@@ -23,13 +23,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
 import {
   OPERATIONAL_STATE_DATABASE_NAME,
   OPERATIONAL_STATE_SCHEMA_VERSION,
 } from '@maka/storage/operational-state-store';
 import { createSessionBundleFileService } from '@maka/storage/session-bundle-file-service';
 import type { SessionBundleHydration } from '@maka/storage/session-bundle-contract';
-import { SQLITE_RUNTIME_SCHEMA_VERSION } from '@maka/storage/sqlite-runtime-store';
+import {
+  createSqliteRuntimeStore,
+  SQLITE_RUNTIME_SCHEMA_VERSION,
+} from '@maka/storage/sqlite-runtime-store';
 import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from '@maka/storage/sqlite-session-metadata-store';
 import { createSessionStore } from '@maka/storage/session-store';
 import {
@@ -91,6 +95,80 @@ function openDatabase(workspaceRoot: string, readOnly = false): DatabaseSync {
   return new DatabaseSync(join(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME), {
     ...(readOnly ? { readOnly: true } : {}),
   });
+}
+
+async function addPendingToolOperation(
+  workspaceRoot: string,
+  sessionId: string,
+  input: { toolName: 'AskUserQuestion' | 'Bash'; terminalStatus?: 'aborted' | 'failed' },
+): Promise<void> {
+  const runtime = createSqliteRuntimeStore(join(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME));
+  const operationId = 'operation-1';
+  const providerToolCallId = 'provider-call-1';
+  const invocationId = 'invocation-1';
+  const runId = 'run-1';
+  const turnId = 'turn-1';
+  const args = input.toolName === 'AskUserQuestion' ? { questions: [] } : { command: 'true' };
+  const canonicalArgsHash = canonicalToolArgsHash(input.toolName, args);
+  const identity = { sessionId, invocationId, runId, turnId };
+  try {
+    await runtime.commitToolPrepared({
+      operationId,
+      journalEventId: `${operationId}_prepared`,
+      runtimeEvent: {
+        id: 'call-event',
+        ...identity,
+        ts: 1,
+        partial: false,
+        role: 'model',
+        author: 'agent',
+        content: {
+          kind: 'function_call',
+          id: providerToolCallId,
+          name: input.toolName,
+          args,
+        },
+      },
+      dispatchRuntimeEvent: {
+        id: 'dispatch-event',
+        ...identity,
+        ts: 2,
+        partial: false,
+        role: 'system',
+        author: 'system',
+        actions: {
+          toolDispatch: {
+            protocol: 't1_after_preflight_v1',
+            operationId,
+            providerToolCallId,
+            toolName: input.toolName,
+            canonicalArgsHash,
+            recoveryMode: 'never_auto_retry',
+          },
+        },
+        refs: { operationId, toolCallId: providerToolCallId },
+      },
+      providerToolCallId,
+      toolName: input.toolName,
+      canonicalArgsHash,
+      recoveryMode: 'never_auto_retry',
+      committedAt: 2,
+    });
+    if (input.terminalStatus) {
+      await runtime.appendRuntimeEvent(sessionId, runId, {
+        id: 'terminal-event',
+        ...identity,
+        ts: 3,
+        partial: false,
+        role: 'system',
+        author: 'system',
+        status: input.terminalStatus,
+        actions: { endInvocation: true },
+      });
+    }
+  } finally {
+    runtime.close();
+  }
 }
 
 /**
@@ -959,33 +1037,105 @@ test(
 );
 
 test(
+  'rebuilds a terminal unanswered question as abandoned',
+  withRoot('maka-session-abandoned-question-rebuild', async (_root, workspaceRoot) => {
+    const sessionId = await createSession(workspaceRoot);
+    await addPendingToolOperation(workspaceRoot, sessionId, {
+      toolName: 'AskUserQuestion',
+      terminalStatus: 'aborted',
+    });
+
+    const runtime = createSqliteRuntimeStore(join(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME));
+    try {
+      assert.equal((await runtime.readToolOperation('operation-1'))?.currentState, 'prepared');
+      await runtime.rebuildToolProjectionsForSession(sessionId);
+      assert.equal((await runtime.readToolOperation('operation-1'))?.currentState, 'abandoned');
+      assert.equal((await runtime.listUnsettledToolOperations(sessionId)).length, 0);
+      assert.deepEqual(
+        (await runtime.readToolJournal('operation-1')).map(({ state }) => state),
+        ['prepared', 'abandoned'],
+      );
+    } finally {
+      runtime.close();
+    }
+  }),
+);
+
+test(
+  'exports an unanswered question as abandoned when its invocation is terminal',
+  withRoot('maka-session-export-abandoned-question', async (root, workspaceRoot) => {
+    const sessionId = await createSession(workspaceRoot);
+    await addPendingToolOperation(workspaceRoot, sessionId, {
+      toolName: 'AskUserQuestion',
+      terminalStatus: 'aborted',
+    });
+
+    const destination = join(root, 'bundle.maka-session');
+    await exportOk(workspaceRoot, sessionId, destination);
+    assert.ok((await stat(destination)).isFile());
+
+    const hydration = await hydrateExport(destination, sessionId, join(root, 'hydrated'));
+    const exportedRuntime = createSqliteRuntimeStore(
+      join(hydration.stateRoot, OPERATIONAL_STATE_DATABASE_NAME),
+    );
+    try {
+      const operation = await exportedRuntime.readToolOperation('operation-1');
+      assert.equal(operation?.currentState, 'abandoned');
+      assert.equal(operation?.resultEventId, undefined);
+      assert.deepEqual(
+        (await exportedRuntime.readToolJournal('operation-1')).map((event) => ({
+          state: event.state,
+          runtimeEventId: event.runtimeEventId,
+        })),
+        [
+          { state: 'prepared', runtimeEventId: 'dispatch-event' },
+          { state: 'abandoned', runtimeEventId: 'terminal-event' },
+        ],
+      );
+
+      // The new terminal projection is reconstructible, and no fake tool result
+      // is introduced into the immutable conversation history.
+      await exportedRuntime.rebuildToolProjectionsFromRuntimeEvents();
+      assert.equal(
+        (await exportedRuntime.readToolOperation('operation-1'))?.currentState,
+        'abandoned',
+      );
+      assert.equal(
+        (await exportedRuntime.readRuntimeEvents(sessionId, 'run-1')).filter(
+          (event) => event.content?.kind === 'function_response',
+        ).length,
+        0,
+      );
+    } finally {
+      exportedRuntime.close();
+    }
+  }),
+);
+
+test(
+  'still refuses an unanswered question from a live invocation',
+  withRoot('maka-session-export-live-question', async (root, workspaceRoot) => {
+    const sessionId = await createSession(workspaceRoot);
+    await addPendingToolOperation(workspaceRoot, sessionId, { toolName: 'AskUserQuestion' });
+
+    const destination = join(root, 'bundle.maka-session');
+    const result = await exportSessionBundle({ workspaceRoot, sessionId, destination });
+    assert.equal(result.ok, false);
+    assert.equal(result.ok === false && result.reason.kind, 'session_active');
+    await assert.rejects(stat(destination));
+  }),
+);
+
+test(
   'refuses a Session holding a tool operation that never settled',
   withRoot('maka-session-export-unsettled-tool', async (root, workspaceRoot) => {
     const sessionId = await createSession(workspaceRoot);
-    const db = openDatabase(workspaceRoot);
-    try {
-      // The invocation reached a terminal event -- the run failed -- while the
-      // operation itself is still prepared. An invocation check does not see it.
-      db.exec(`
-        INSERT INTO runtime_events(
-          session_id, run_id, invocation_id, turn_id, event_id, event_seq,
-          event_kind, committed_at, payload_json
-        )
-        VALUES ('${sessionId}', 'run-1', 'invocation-1', 'turn-1', 'call-event', 1,
-          'function_call', 1, '{}'),
-          ('${sessionId}', 'run-1', 'invocation-1', 'turn-1', 'terminal-event', 2,
-            'failed', 2, '{"status":"failed"}');
-        INSERT INTO tool_operations(
-          operation_id, invocation_id, run_id, turn_id, provider_tool_call_id,
-          tool_name, canonical_args_hash, recovery_mode, current_state,
-          call_event_id, result_event_id, version, dispatch_event_id
-        )
-        VALUES ('op-1', 'invocation-1', 'run-1', 'turn-1', 'call-1', 'Bash', 'hash',
-          'never_auto_retry', 'prepared', 'call-event', NULL, 1, 'call-event');
-      `);
-    } finally {
-      db.close();
-    }
+    // Unlike an unanswered question, a dispatched Bash operation may have
+    // side effects. A terminal invocation alone is not enough to settle it.
+    await addPendingToolOperation(workspaceRoot, sessionId, {
+      toolName: 'Bash',
+      terminalStatus: 'failed',
+    });
 
     const destination = join(root, 'bundle.maka-session');
     const result = await exportSessionBundle({ workspaceRoot, sessionId, destination });
