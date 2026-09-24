@@ -2478,13 +2478,7 @@ export async function createExecutionRuntimeHostComposition(
         requireSessionManager(manager).runSessionSubtreeQuiescentMutation(sessionId, operation),
       recoverInterruptedSessions: async (sessionIds) => {
         await requireSessionManager(manager).recoverInterruptedSessionsForSessions(sessionIds);
-        const unresolved = await stores.runtimeEventStore.listUnsettledToolOperations(sessionIds);
-        const sessionsWithUnresolvedOperations = new Set(
-          unresolved.map((operation) => operation.sessionId),
-        );
-        for (const sessionId of sessionsWithUnresolvedOperations) {
-          await stores.runtimeEventStore.rebuildToolProjectionsForSession?.(sessionId);
-        }
+        await stores.runtimeEventStore.rebuildTerminalToolProjectionsForSessions(sessionIds);
       },
       onImported: (sessionId) => hostChanges.publishSessionCatalog(sessionId),
     });
